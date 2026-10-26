@@ -13,12 +13,14 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.test.espresso.Espresso.pressBack
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.GlassAppearance
@@ -46,6 +48,28 @@ class ComponentBehaviorTest {
                     },
                 )
             }
+        }
+    }
+
+    @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            rule.waitUntil(30_000) {
+                rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty()
+            }
+            val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+            rule.onNode(tab and hasContentDescription("材质")).performClick()
+            rule.onNodeWithText("Regular Small").assertIsDisplayed()
+            rule.onNode(tab and hasContentDescription("关于")).performClick().assertIsSelected()
+            rule.onNodeWithText("Apache License 2.0").assertIsDisplayed()
+            scenario.recreate()
+            rule.waitUntil(30_000) {
+                rule.onAllNodesWithText("Apache License 2.0").fetchSemanticsNodes().isNotEmpty()
+            }
+            rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
+            rule.onNodeWithContentDescription("搜索").performClick()
+            rule.onNodeWithText("Search Components").assertIsDisplayed()
+            pressBack()
+            rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
         }
     }
 

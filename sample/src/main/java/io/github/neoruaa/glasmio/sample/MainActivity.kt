@@ -3,8 +3,10 @@ package io.github.neoruaa.glasmio.sample
 import android.os.Bundle
 import android.graphics.Typeface
 import android.graphics.BitmapFactory
+import android.graphics.fonts.Font as NativeFont
+import android.graphics.fonts.FontFamily as NativeFontFamily
 import android.content.pm.PackageManager
-import android.content.res.AssetManager
+import android.content.Context
 import android.content.res.Configuration
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -50,7 +52,9 @@ import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.AndroidFont
+import androidx.compose.ui.text.font.FontLoadingStrategy
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
@@ -77,6 +81,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import java.io.IOException
 
 private data class SampleAssets(
     val symbolTypeface: Typeface?,
@@ -84,6 +89,27 @@ private data class SampleAssets(
     val lightWallpaper: ImageBitmap,
     val darkWallpaper: ImageBitmap,
 )
+
+/** Process-owned immutable assets; no Activity, View, or Context is retained. */
+private object SampleAssetCache {
+    private var assets: SampleAssets? = null
+
+    @Synchronized
+    fun load(applicationContext: Context): SampleAssets {
+        assets?.let { return it }
+        val baseFont = try {
+            NativeFont.Builder(applicationContext.assets, "glasmio_symbols.ttf").build()
+        } catch (_: IOException) {
+            null
+        }
+        return SampleAssets(
+            symbolTypeface = baseFont?.let(::sampleTypeface),
+            typography = baseFont?.let(::sampleTypography) ?: glasmioTypography(),
+            lightWallpaper = requireNotNull(BitmapFactory.decodeResource(applicationContext.resources, R.drawable.ios27_wallpaper_light)).apply { prepareToDraw() }.asImageBitmap(),
+            darkWallpaper = requireNotNull(BitmapFactory.decodeResource(applicationContext.resources, R.drawable.ios27_wallpaper_dark)).apply { prepareToDraw() }.asImageBitmap(),
+        ).also { assets = it }
+    }
+}
 
 private val LocalSampleAssets = staticCompositionLocalOf<SampleAssets> { error("Sample assets are not loaded") }
 private val topLevelRoutes = setOf("Home", "MaterialTab", "About")
@@ -107,8 +133,8 @@ class MainActivity : ComponentActivity() {
             val fontResolver = LocalFontFamilyResolver.current
             val assets by produceState<SampleAssets?>(null, context, fontResolver) {
                 value = withContext(Dispatchers.IO) {
-                    val symbolTypeface = runCatching { Typeface.createFromAsset(context.assets, "glasmio_symbols.ttf") }.getOrNull()
-                    val typography = if (symbolTypeface != null) sampleTypography(context.assets) else glasmioTypography()
+                    val cachedAssets = SampleAssetCache.load(context)
+                    val typography = cachedAssets.typography
                     listOf(
                         typography.displayLarge, typography.displayMedium, typography.displaySmall,
                         typography.headlineLarge, typography.headlineMedium, typography.headlineSmall,
@@ -116,12 +142,7 @@ class MainActivity : ComponentActivity() {
                         typography.bodyLarge, typography.bodyMedium, typography.bodySmall,
                         typography.labelLarge, typography.labelMedium, typography.labelSmall,
                     ).mapNotNull { it.fontFamily }.distinct().forEach { fontResolver.preload(it) }
-                    SampleAssets(
-                        symbolTypeface = symbolTypeface,
-                        typography = typography,
-                        lightWallpaper = requireNotNull(BitmapFactory.decodeResource(context.resources, R.drawable.ios27_wallpaper_light)).apply { prepareToDraw() }.asImageBitmap(),
-                        darkWallpaper = requireNotNull(BitmapFactory.decodeResource(context.resources, R.drawable.ios27_wallpaper_dark)).apply { prepareToDraw() }.asImageBitmap(),
-                    )
+                    cachedAssets
                 }
             }
             val darkAppearance = dark
@@ -155,24 +176,44 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Match each Compose weight request to the SF Pro variable font instead of a fixed Typeface. */
-private fun sampleTypography(assetManager: AssetManager): Typography {
+/** Every variation retains the same native font buffer; the asset is read only once. */
+private fun sampleTypeface(font: NativeFont): Typeface =
+    Typeface.CustomFallbackBuilder(NativeFontFamily.Builder(font).build()).setStyle(font.style).build()
+
+private class SampleFont(
+    override val weight: FontWeight,
+    val typeface: Typeface,
+) : AndroidFont(
+    loadingStrategy = FontLoadingStrategy.Blocking,
+    typefaceLoader = SampleFontLoader,
+    variationSettings = FontVariation.Settings(),
+) {
+    override val style: FontStyle = FontStyle.Normal
+}
+
+private object SampleFontLoader : AndroidFont.TypefaceLoader {
+    override fun loadBlocking(context: Context, font: AndroidFont): Typeface = (font as SampleFont).typeface
+    override suspend fun awaitLoad(context: Context, font: AndroidFont): Typeface = loadBlocking(context, font)
+}
+
+/** Compose sees real weight entries; their Typefaces clone the shared native Font data. */
+private fun sampleTypography(baseFont: NativeFont): Typography {
     val base = glasmioTypography()
     val families = mutableMapOf<Float, FontFamily>()
+    val typefaces = mutableMapOf<Pair<Int, Float>, Typeface>()
     val weights = listOf(400 to 400, 500 to 510, 510 to 510, 590 to 590, 600 to 590, 700 to 700)
     fun resolve(style: TextStyle): TextStyle {
         val opticalSize = style.fontSize.value.coerceIn(17f, 28f)
         val family = families.getOrPut(opticalSize) {
             FontFamily(weights.map { (request, axis) ->
-                Font(
-                    path = "glasmio_symbols.ttf",
-                    assetManager = assetManager,
-                    weight = FontWeight(request),
-                    variationSettings = FontVariation.Settings(
-                        FontVariation.weight(axis),
-                        FontVariation.Setting("opsz", opticalSize),
-                    ),
-                )
+                val typeface = typefaces.getOrPut(axis to opticalSize) {
+                    val variation = NativeFont.Builder(baseFont)
+                        .setWeight(axis)
+                        .setFontVariationSettings("'wght' $axis, 'opsz' $opticalSize")
+                        .build()
+                    sampleTypeface(variation)
+                }
+                SampleFont(FontWeight(request), typeface)
             })
         }
         return style.copy(fontFamily = family)
