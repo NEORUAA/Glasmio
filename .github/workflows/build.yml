@@ -1,0 +1,59 @@
+name: Build
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager 'platforms;android-37' 'ndk;27.1.12297006' 'cmake;3.22.1'
+      - name: Enforce independent library boundary
+        run: '! rg "com\.ljyh\.mei" glasmio-*/src'
+      - run: ./gradlew testDebugUnitTest lintDebug :sample:assembleDebug :sample:assembleDebugAndroidTest publishAllPublicationsToStagingRepository --console=plain
+      - name: Verify published dependency graph in a fresh consumer
+        run: python3 scripts/verify_consumer.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports-and-sample
+          path: |
+            **/build/reports/
+            sample/build/outputs/apk/debug/*.apk
+  device:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - run: sdkmanager 'platforms;android-37' 'ndk;27.1.12297006' 'cmake;3.22.1'
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: ./gradlew :sample:connectedDebugAndroidTest :glasmio-ui:connectedDebugAndroidTest --console=plain
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: device-tests
+          path: sample/build/reports/androidTests/

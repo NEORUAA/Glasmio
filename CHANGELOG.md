@@ -1,0 +1,20 @@
+# Changelog
+
+## 0.1.0 — In development
+
+Initial Android Compose framework extraction from MeiloX.
+
+- Introduce Core, Glass, UI, Scaffold, Preference, and Icons modules with one-way dependencies.
+- Add light/dark themes, host-configurable colors and typography, and continuous rounded shapes across the component system.
+- Preserve backdrop sampling, liquid refraction, press highlights, shadows, navigation contact effects, and menu morph rendering.
+- Provide buttons, switches, sliders, segmented controls, text/search fields, steppers, cards, lists, toolbars, navigation bars, menus, alerts, sheets, a color picker, and reorderable groups.
+- Add collapsing large-title pages, lazy content, overscroll, pull-refresh rebound, insets, and generic anchor-based sheet state.
+- Separate preference presentation from persistence and symbol rendering from application resources.
+- Provide one root-level SF symbol font provider, a replaceable icon resolver, and a local debug font option for the sample.
+- Add an independent interactive sample and documentation for component use, backdrop hosting, and migration.
+- Configure versioned Maven artifacts, source publication, and release tooling. Maven Central publication is pending.
+
+MeiloX remains responsible for music playback, product navigation, application settings, and player-specific rendering.
+
+- Apache-2.0 license with third-party notices included in every published module.
+- Plain theme background throughout the catalog; sampling gradients are limited to Materials.

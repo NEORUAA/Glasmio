@@ -1,0 +1,211 @@
+# Components
+
+Glasmio uses state-hoisted Compose APIs: pass a value and handle its change callback. Menus, dialogs, and modal sheets remain present only while the host includes them in composition. Components use the current `GlasmioTheme` and require the backdrop host described in [Backdrop hosting](backdrop.md).
+
+## API catalog
+
+| Area | Public entry points |
+| --- | --- |
+| Theme | `GlasmioTheme`, `glasmioColorScheme`, `glasmioTypography`, `GlassAppearance`, `GlassColors`, `GlassDimensions`, `GlasmioShapes`, `GlasmioSpacing`, `GlasmioMotion` |
+| Glass | `GlasmioBackdropHost`, `GlasmioBackdropProvider`, `GlassSurface`, `GlassSurfaceStyle`, `GlassEmphasis`, `rememberCrossWindowBackdrop`, `rememberSharedGlassBackdrop`, `rememberRasterizedBackdrop` |
+| Buttons | `GlasmioButton`, `GlasmioIconButton`, `GlasmioButtonSize`, `GlasmioButtonDefaults` |
+| Controls | `GlasmioSwitch`, `GlasmioSlider`, `GlasmioStepper`, `GlasmioSegmentedControl`, `GlasmioScrollableTabRow`, `GlasmioColorPicker` |
+| Input | `GlasmioTextField`, `GlasmioSearchBar`, `GlasmioSearchToolbar` |
+| Lists | `GlasmioCard`, `GlasmioGroupedList`, `GlasmioListRow`, `GlasmioReorderableGroup` |
+| Toolbars | `GlasmioTopBar`, `GlasmioTopBarStyle`, `GlasmioToolbarActionGroup`, `GlasmioToolbarActionStyle`, `GlasmioBottomToolbar`, `GlasmioSheetTopToolbar`, `GlasmioSheetToolbarButton`, `GlasmioSheetButton` |
+| Navigation | `GlasmioNavigationBar`, `GlasmioTabItem` |
+| Menus | `GlasmioMenu`, `GlasmioMenuItem`, `GlasmioContextMenu`, `GlasmioCascadingMenu`, `GlasmioCascadingMenuItem`, `GlasmioPopUpButton`, `rememberGlasmioMenuAnchorState`, `Modifier.glasmioMenuAnchor` |
+| Alerts | `GlasmioAlertDialog`, `GlasmioAlertButtonSpec`, `GlasmioAlertButtonRole`, `GlasmioAlertButtonLayout`, `GlasmioAlertSurface`, `GlasmioAlertButton`, `GlasmioAlertFieldGroup`, `GlasmioAlertTextField` |
+| Sheets and overlays | `GlasmioBottomSheet`, `GlasmioSheetSurface`, `GlasmioActionSheet`, `GlasmioActionSheetContent`, `GlasmioModalOverlay` |
+| Pages | `GlasmioScaffold`, `GlasmioListPage`, `GlasmioPinnedListPage`, `GlasmioPinnedPage`, `rememberGlasmioGridCollapseProgress`, `GlasmioOverscrollHost`, `Modifier.pullToRefreshRebound`, `rememberGlasmioAppBarScrollBehavior` |
+| Sheet motion | `GlasmioBottomSheetState`, `rememberGlasmioBottomSheetState`, `GlasmioSheetDefaults` |
+| Preferences | `GlasmioPreferenceEntry`, `GlasmioSwitchPreference`, `GlasmioEditTextPreference`, `GlasmioListPreference`, `GlasmioEnumListPreference`, `GlasmioPreferenceGroupTitle` |
+| Icons | `SfIcon`, `SfSymbol`, `SfSymbolCatalog`, `GlasmioIcon`, `GlasmioIconProvider`, `GlasmioIconResolver` |
+
+Button naming follows Apple's Liquid Glass vocabulary through regular/prominent emphasis and Small/Medium/Large sizes. Other component names retain the `Glasmio` prefix while using familiar terms such as Toolbar, Pop-up Button, Alert, Sheet, Stepper, and Segmented Control.
+
+## Example host
+
+The examples below share this host and imports. Copy them into an Android Compose source file and call the desired screen from `setContent`. Install `GlasmioIconProvider` above these screens to use the application's SF symbol font globally.
+
+```kotlin
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.dp
+import io.github.neoruaa.glasmio.core.*
+import io.github.neoruaa.glasmio.glass.*
+import io.github.neoruaa.glasmio.icons.*
+import io.github.neoruaa.glasmio.preference.*
+import io.github.neoruaa.glasmio.scaffold.*
+import io.github.neoruaa.glasmio.ui.*
+
+@Composable
+fun ExampleHost(content: @Composable () -> Unit) {
+    GlasmioTheme {
+        val colors = GlasmioTheme.colors
+        GlasmioBackdropHost(
+            modifier = Modifier.fillMaxSize(),
+            sampledContent = {
+                Box(Modifier.fillMaxSize().background(colors.groupedBackground))
+            },
+            overlayContent = { content() },
+        )
+    }
+}
+```
+
+## Controls and input
+
+Values belong to the caller. `GlasmioSlider` also accepts `onValueChangeFinished` for committing a drag or accessibility adjustment. `GlasmioStepper` disables actions at the ends of its range. Search takes `TextFieldValue` so selection and composition are preserved.
+
+```kotlin
+@Composable
+fun ControlsScreen() = ExampleHost {
+    var enabled by remember { mutableStateOf(true) }
+    var level by remember { mutableFloatStateOf(0.5f) }
+    var count by remember { mutableIntStateOf(1) }
+    var name by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf(TextFieldValue()) }
+    var searching by remember { mutableStateOf(false) }
+
+    Column(
+        Modifier.safeDrawingPadding().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        GlasmioSwitch(checked = enabled, onCheckedChange = { enabled = it })
+        GlasmioSlider(value = level, onValueChange = { level = it }, enabled = enabled)
+        GlasmioStepper(value = count, onValueChange = { count = it }, range = 0..10)
+        GlasmioTextField(value = name, onValueChange = { name = it }, placeholder = "Name")
+        GlasmioSearchBar(
+            query = query,
+            onQueryChange = { query = it },
+            active = searching,
+            onActiveChange = { searching = it },
+            onClose = { searching = false },
+            placeholder = "Search",
+            closeContentDescription = "Close search",
+        )
+        GlasmioButton(onClick = { count = 0 }, size = GlasmioButtonSize.Medium) {
+            Text("Reset")
+        }
+    }
+}
+```
+
+Supply localized descriptions for icon-only actions and Stepper controls. Use `enabled = false` for disabled controls. Slider values and range endpoints must be finite, with an increasing range.
+
+## Lists, insets, and preferences
+
+`GlasmioPinnedListPage` owns a collapsing large title and its fixed toolbar. Its content uses `LazyListScope`, so item keys and lazy content remain under application control. The page owns its top inset; `bottomPadding` can include the space occupied by an application bottom bar.
+
+```kotlin
+@Composable
+fun PreferencesScreen() = ExampleHost {
+    var notifications by remember { mutableStateOf(true) }
+    var displayName by remember { mutableStateOf("Guest") }
+
+    GlasmioPinnedListPage(title = "Preferences") {
+        item {
+            GlasmioPreferenceGroupTitle("General")
+            GlasmioGroupedList {
+                GlasmioSwitchPreference(
+                    title = { Text("Notifications") },
+                    checked = notifications,
+                    onCheckedChange = { notifications = it },
+                )
+                GlasmioEditTextPreference(
+                    title = { Text("Display name") },
+                    value = displayName,
+                    onValueChange = { displayName = it },
+                    isInputValid = { it.isNotBlank() },
+                )
+            }
+        }
+    }
+}
+```
+
+For independently measured bars, use `GlasmioScaffold` and pass its `PaddingValues` to `GlasmioListPage(contentPadding = padding)`. The list applies and consumes that padding once. Use `GlasmioPinnedPage` with `rememberGlasmioGridCollapseProgress` when the body is a lazy grid rather than a list.
+
+The sample's Lists page switches between a lazy list and an adaptive grid while preserving each scroll state. Its toolbar refresh and pull gesture share one caller-owned callback, rotating the visible items after a short refresh. `Modifier.pullToRefreshRebound` animates only the body; the refresh indicator sits below the fixed toolbar, and both layouts apply the pinned page's content padding once.
+
+Preferences present values and report edits. The host chooses DataStore, database, network, or in-memory storage.
+
+## Menus
+
+The menu owns its popup lifecycle while the application owns `expanded`. Render actions through `GlasmioMenuItem` and invoke the supplied `close` callback after choosing an action. Nested actions can use `GlasmioCascadingMenuItem.children`.
+
+```kotlin
+@Composable
+fun MenuScreen() = ExampleHost {
+    var expanded by remember { mutableStateOf(false) }
+    var favorite by remember { mutableStateOf(false) }
+
+    Box(Modifier.safeDrawingPadding().padding(24.dp)) {
+        GlasmioMenu(
+            expanded = expanded,
+            onExpandedChange = { expanded = it },
+            itemCount = 2,
+            anchor = { open ->
+                GlasmioIconButton(onClick = open) { SfIcon("ellipsis", "Actions") }
+            },
+        ) { backdrop, close ->
+            GlasmioMenuItem("Favorite", { favorite = !favorite; close() },
+                systemName = "heart", backdrop = backdrop)
+            GlasmioMenuItem("Delete", { close() },
+                systemName = "trash", destructive = true, backdrop = backdrop)
+        }
+    }
+}
+```
+
+## Alerts and sheets
+
+`GlasmioAlertButtonSpec` carries the action, role, and enabled state. `GlasmioBottomSheet` uses Material3's `SheetState`; the separate `GlasmioBottomSheetState` in Scaffold provides anchor-based motion for custom containers.
+
+```kotlin
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ModalScreen() = ExampleHost {
+    var alert by remember { mutableStateOf(false) }
+    var sheet by remember { mutableStateOf(false) }
+
+    Column(Modifier.safeDrawingPadding().padding(24.dp)) {
+        GlasmioButton(onClick = { alert = true }) { Text("Show alert") }
+        Spacer(Modifier.height(16.dp))
+        GlasmioButton(onClick = { sheet = true }) { Text("Show sheet") }
+    }
+    if (alert) {
+        GlasmioAlertDialog(
+            title = "Save changes?",
+            onDismissRequest = { alert = false },
+            buttons = listOf(
+                GlasmioAlertButtonSpec("Cancel", { alert = false }, role = GlasmioAlertButtonRole.Cancel),
+                GlasmioAlertButtonSpec("Save", { alert = false }),
+            ),
+        )
+    }
+    if (sheet) {
+        GlasmioBottomSheet(onDismissRequest = { sheet = false }) {
+            GlasmioSheetTopToolbar(title = "Details")
+            Text("Sheet content", Modifier.padding(24.dp))
+        }
+    }
+}
+```
+
+`GlasmioActionSheet` is a surface/content primitive. Place it in a modal container when dismissal and window behavior are needed. `GlasmioColorPicker` already manages its sheet presentation and accepts localized `GlasmioColorPickerLabels`.
+
+## Navigation and reorderable content
+
+`GlasmioNavigationBar` takes caller-owned `GlasmioTabItem<T>` keys, selection, compact progress, and an expand callback. It does not define destinations or install a navigation runtime. The compact progress is `State<Float>` in `0f..1f`; use a stable state object for live transitions.
+
+`GlasmioReorderableGroup` reports the complete reordered list through `onReorder`. Its grabber owns the drag target, leaving the rest of the row available for vertical scrolling. Supply localized drag, move-up, and move-down labels for accessibility actions.
+
+The [sample source](../sample/src/main/java/io/github/neoruaa/glasmio/sample/MainActivity.kt) contains complete navigation, color-picker, reorder, toolbar, and menu examples.
