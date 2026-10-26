@@ -36,6 +36,8 @@ enum class SfSymbol(
 ) {
     House("house", 0x10039E),
     HouseFilled("house.fill", 0x10039F),
+    Layers("square.3.layers.3d", 0x100BF0),
+    InfoCircle("info.circle", 0x100174),
     Sparkles("sparkles", 0x1001BF),
     MusicNote("music.note", 0x10046A),
     MusicNoteSquareStackFilled("music.note.square.stack.fill", 0x10343A),

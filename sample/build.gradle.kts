@@ -36,6 +36,8 @@ dependencies {
     implementation(project(":glasmio-scaffold"))
     implementation(project(":glasmio-preference"))
     implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.navigation3:navigation3-runtime:1.2.0")
+    implementation("top.yukonga.miuix.kmp:miuix-navigation3-ui-android:0.9.3")
     androidTestImplementation(platform("androidx.compose:compose-bom:2026.09.00"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
