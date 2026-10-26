@@ -36,4 +36,4 @@ For a local signed publication, provide the same names as environment variables,
 python3 scripts/release_bundle.py --upload
 ```
 
-After publication, confirm each artifact resolves from Maven Central in a clean consumer, update the release status in README and CHANGELOG, and update MeiloX with the fixed version. CI should use published coordinates. Developers can explicitly opt into the local composite build for ongoing work.
+After publication, run `python3 scripts/verify_consumer.py --central` to build a clean consumer without the staging repository. Update the release status in README and CHANGELOG, and update MeiloX with the fixed version. CI should use published coordinates. Developers can explicitly opt into the local composite build for ongoing work.

@@ -12,9 +12,12 @@ Initial Android Compose framework extraction from MeiloX.
 - Separate preference presentation from persistence and symbol rendering from application resources.
 - Provide one root-level SF symbol font provider, a replaceable icon resolver, and a local debug font option for the sample.
 - Add an independent interactive sample and documentation for component use, backdrop hosting, and migration.
+- Unify standalone glass under the navigation renderer with Regular Small, Regular Medium, Regular Large, and Clear scene presets from Apple's Materials page.
+- Add a three-tab sample navigation bar with separate search, collapsing titles, progressive edge blur, and Miuix page transitions.
+- Use solid catalog backgrounds and the original light/dark iOS 27 wallpaper in glass demonstrations.
+- Match the reference text metrics, tracking, control label weights, and continuous corners.
 - Configure versioned Maven artifacts, source publication, and release tooling. Maven Central publication is pending.
 
 MeiloX remains responsible for music playback, product navigation, application settings, and player-specific rendering.
 
 - Apache-2.0 license with third-party notices included in every published module.
-- Plain theme background throughout the catalog; sampling gradients are limited to Materials.

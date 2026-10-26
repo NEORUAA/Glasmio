@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""Build a fresh app using only staged Maven coordinates and transitive dependencies."""
+"""Build a fresh app using Maven coordinates and transitive dependencies."""
 from pathlib import Path
+import argparse
 import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-folder = ROOT / 'build/consumer'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--central', action='store_true', help='Resolve published artifacts exclusively from Maven Central')
+args = parser.parse_args()
+folder = ROOT / ('build/consumer-central' if args.central else 'build/consumer')
 if folder.exists():
     shutil.rmtree(folder)
 folder.mkdir(parents=True)
 version = next(line.split('=', 1)[1] for line in (ROOT / 'gradle.properties').read_text().splitlines() if line.startswith('VERSION_NAME='))
-repository = (ROOT / 'build/maven').as_uri()
+repository = '' if args.central else 'maven { url = uri("' + (ROOT / 'build/maven').as_uri() + '") }; '
 (folder / 'settings.gradle.kts').write_text('''pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
 dependencyResolutionManagement {
-    repositories { maven { url = uri("''' + repository + '''") }; google(); mavenCentral() }
+    repositories { ''' + repository + '''google(); mavenCentral() }
 }
 rootProject.name = "GlasmioConsumer"
 ''')
@@ -77,5 +81,5 @@ class MainActivity : ComponentActivity() {
 if (ROOT / 'local.properties').is_file():
     shutil.copyfile(ROOT / 'local.properties', folder / 'local.properties')
 shutil.copyfile(ROOT / 'gradle.properties', folder / 'gradle.properties')
-subprocess.run([str(ROOT / 'gradlew'), '--project-dir', str(folder), 'assembleDebug', '--console=plain'], cwd=ROOT, check=True)
-print('Fresh Maven consumer built successfully.')
+subprocess.run([str(ROOT / 'gradlew'), '--project-dir', str(folder), 'assembleDebug', '--refresh-dependencies', '--console=plain'], cwd=ROOT, check=True)
+print('Fresh ' + ('Maven Central' if args.central else 'staged Maven') + ' consumer built successfully.')

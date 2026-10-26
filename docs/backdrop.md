@@ -21,6 +21,8 @@ GlasmioBackdropHost(
 
 Place glass outside the layer it samples. Recording a control into its own backdrop creates a feedback loop. For scrolling pages, `GlasmioPinnedListPage` already records the body separately from its fixed toolbar.
 
+Standalone surfaces use the shared navigation material. Choose the scene through `GlassSurface(material = NavigationGlassMaterial.RegularSmall)`: Small is suited to controls and bars, Medium to menus and alerts, and Large to sheets. `Clear` retains more of the background. The component defaults already select their scene; Switch, Slider and Segmented Control retain their internal lenses.
+
 ## Existing recorded sources
 
 Use `GlasmioBackdropProvider(backdrop) { ... }` when the application already owns a backdrop. Custom `LayerBackdrop` sources need both recording and position tracking:
