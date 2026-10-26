@@ -55,12 +55,11 @@ fun GlasmioPreferenceEntry(
                 enabled = isEnabled && onClick != null,
                 onClick = onClick ?: {}
             )
-            .alpha(if (isEnabled) 1f else 0.5f)
             .padding(horizontal = 16.dp)
     ) {
         if (icon != null) {
             Box(
-                modifier = Modifier.padding(horizontal = 4.dp)
+                modifier = Modifier.alpha(if (isEnabled) 1f else 0.5f).padding(horizontal = 4.dp)
             ) {
                 icon()
             }
@@ -76,6 +75,7 @@ fun GlasmioPreferenceEntry(
                         drawLine(colors.separator, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx())
                     }
                 }
+                .alpha(if (isEnabled) 1f else 0.5f)
                 .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

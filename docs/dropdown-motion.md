@@ -45,3 +45,10 @@ preview; a toolbar trigger retains its grouped source and tracking behavior. Row
 anchors record their foreground into a GPU layer, while glass anchors record only
 their foreground after the material passes. Explicit `morphFromAnchor = false`
 uses the separate compact-menu spring and fixed anchor.
+
+
+Plain Pop-up labels transfer only their foreground pixels. Their source shape is not
+included in the glass contour; the incoming menu material follows the native content
+progress, leaving no outline or shadow around the restored text. Glass buttons keep
+their source material. Selection changes refresh the retained foreground and retarget
+the closing source bounds without restarting the physical channels.

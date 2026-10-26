@@ -22,12 +22,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -113,13 +118,15 @@ fun GlasmioListRow(
             .fillMaxWidth()
             .height(if (subtitle == null) 52.dp else 68.dp)
             .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
-            .alpha(if (enabled) 1f else 0.4f)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        leading?.let { it(); Spacer(Modifier.width(8.dp)) }
+        leading?.let {
+            Box(Modifier.alpha(if (enabled) 1f else 0.4f)) { it() }
+            Spacer(Modifier.width(8.dp))
+        }
         systemName?.let {
-            SfIcon(it, null, size = 23.dp, tint = colors.accent)
+            SfIcon(it, null, modifier = Modifier.alpha(if (enabled) 1f else 0.4f), size = 23.dp, tint = colors.accent)
             Spacer(Modifier.width(12.dp))
         }
         Row(
@@ -127,7 +134,7 @@ fun GlasmioListRow(
                 if (showTopSeparator) {
                     drawLine(colors.separator, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx())
                 }
-            },
+            }.alpha(if (enabled) 1f else 0.4f),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -218,7 +225,7 @@ fun GlasmioListValuePill(
     }
 }
 
-/** Reveals caller-owned actions without deleting or mutating the row's data. */
+/** Reveals independent actions beside the row, on the system secondary background. */
 @Composable
 fun GlasmioListSwipeActions(
     revealed: Boolean,
@@ -249,11 +256,13 @@ fun GlasmioListSwipeActions(
             if (towardRight) distance else 0f,
         )
     }
-    Box(modifier.fillMaxWidth().clipToBounds()) {
+    val colors = LocalGlassColors.current
+    val background = if (colors.isDark) Color(0xFF1C1C1E) else Color(0xFFF2F2F7)
+    val rowBackground = if (colors.isDark) Color.Black else Color.White
+    Layout(modifier = modifier.fillMaxWidth().clipToBounds().background(background), content = {
         Row(
-            Modifier.align(if (actionsAtStart) Alignment.CenterStart else Alignment.CenterEnd)
-                .onSizeChanged { actionWidth = it.width }
-                .padding(horizontal = 16.dp)
+            Modifier.onSizeChanged { actionWidth = it.width }
+                .padding(start = if (actionsAtStart) 16.dp else 0.dp, end = if (actionsAtStart) 0.dp else 16.dp)
                 .alpha(if (visible) 1f else 0f)
                 .then(if (visible) Modifier else Modifier.clearAndSetSemantics {}),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -262,7 +271,7 @@ fun GlasmioListSwipeActions(
         )
         Box(
             Modifier.fillMaxWidth().absoluteOffset { IntOffset(offset.roundToInt(), 0) }
-                .clip(Capsule()).background(LocalGlassColors.current.elevatedBackground)
+                .clip(Capsule()).background(rowBackground)
                 .draggable(
                     state = dragState,
                     orientation = Orientation.Horizontal,
@@ -272,11 +281,29 @@ fun GlasmioListSwipeActions(
                         dragging = false
                     },
                 ),
+            propagateMinConstraints = true,
         ) { content() }
+    }) { measurables, constraints ->
+        val actionPlaceable = measurables[0].measure(constraints.copy(minWidth = 0, minHeight = 0))
+        val rowPlaceable = measurables[1].measure(
+            constraints.copy(minHeight = maxOf(constraints.minHeight, actionPlaceable.height)),
+        )
+        val width = constraints.constrainWidth(maxOf(actionPlaceable.width, rowPlaceable.width))
+        val height = constraints.constrainHeight(maxOf(actionPlaceable.height, rowPlaceable.height))
+        layout(width, height) {
+            actionPlaceable.placeRelative(
+                if (actionsAtStart) 0 else width - actionPlaceable.width,
+                (height - actionPlaceable.height) / 2,
+            )
+            rowPlaceable.placeRelative(0, 0)
+        }
     }
 }
 
-/** Apple's 60×44 symbol action and 84×44 inline symbol/label action. */
+/** Apple's symbol-only, inline-label and tall external-caption variants. */
+enum class GlasmioSwipeActionStyle { SymbolOnly, SymbolAndLabel, SymbolAndLabelTall }
+
+/** Figma 550:50318: a 60×38 symbol capsule with its label outside, in a 60×68 slot. */
 @Composable
 fun GlasmioListSwipeAction(
     systemName: String,
@@ -285,18 +312,75 @@ fun GlasmioListSwipeAction(
     modifier: Modifier = Modifier,
     label: String? = null,
     contentDescription: String? = label,
+    style: GlasmioSwipeActionStyle = if (label == null) GlasmioSwipeActionStyle.SymbolOnly
+        else GlasmioSwipeActionStyle.SymbolAndLabelTall,
 ) {
-    Row(
-        modifier.height(44.dp).widthIn(min = if (label == null) 60.dp else 84.dp)
-            .clip(Capsule()).background(containerColor)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        SfIcon(systemName, contentDescription, size = if (label == null) 17.dp else 16.dp, tint = Color.White)
-        label?.let {
-            Text(it, style = IosTypography.body.copy(fontSize = 13.sp, lineHeight = 15.sp), color = Color.White)
+    val colors = LocalGlassColors.current
+    val captionStyle = IosTypography.body.copy(
+        fontSize = 13.sp,
+        lineHeight = 15.sp,
+        letterSpacing = 0.sp,
+        fontWeight = if (style == GlasmioSwipeActionStyle.SymbolAndLabelTall) FontWeight(510) else FontWeight.Normal,
+    )
+    val captionColor = if (colors.isDark) Color(0xFFEBEBF5).copy(alpha = 0.7f)
+        else Color(0xFF3C3C43).copy(alpha = 0.6f)
+    val descriptionModifier = if (contentDescription != null) Modifier.semantics {
+        this.contentDescription = contentDescription
+    } else Modifier
+    val symbol: @Composable () -> Unit = {
+        CompositionLocalProvider(LocalSfToolbarSymbols provides true) {
+            SfIcon(
+                systemName,
+                contentDescription = null,
+                modifier = Modifier.size(
+                    width = if (style == GlasmioSwipeActionStyle.SymbolAndLabel) 15.dp else 44.dp,
+                    height = 20.dp,
+                ),
+                size = 20.dp,
+                fontSize = if (style == GlasmioSwipeActionStyle.SymbolAndLabel) 16.sp else 17.sp,
+                weight = FontWeight.Normal,
+                fontFeatureSettings = if (style == GlasmioSwipeActionStyle.SymbolAndLabel) "'ss15' 1" else "'ss16' 1",
+                tint = Color.White,
+            )
+        }
+    }
+    if (style == GlasmioSwipeActionStyle.SymbolAndLabelTall) {
+        Column(
+            modifier.width(60.dp).height(68.dp)
+                .clickable(role = Role.Button, onClick = onClick)
+                .then(descriptionModifier)
+                .padding(top = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Box(
+                Modifier.fillMaxWidth().height(38.dp).clip(Capsule()).background(containerColor),
+                contentAlignment = Alignment.Center,
+            ) { symbol() }
+            Text(
+                text = label.orEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+                style = captionStyle,
+                color = captionColor,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    } else {
+        Row(
+            modifier.height(44.dp).width(if (style == GlasmioSwipeActionStyle.SymbolOnly) 60.dp else 84.dp)
+                .clip(Capsule()).background(containerColor)
+                .clickable(role = Role.Button, onClick = onClick)
+                .then(descriptionModifier)
+                .padding(horizontal = if (style == GlasmioSwipeActionStyle.SymbolOnly) 8.dp else 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            symbol()
+            if (style == GlasmioSwipeActionStyle.SymbolAndLabel) {
+                Text(label.orEmpty(), style = captionStyle, color = Color.White, maxLines = 1)
+            }
         }
     }
 }

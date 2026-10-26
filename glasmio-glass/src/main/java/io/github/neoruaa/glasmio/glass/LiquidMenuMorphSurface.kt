@@ -31,6 +31,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -43,6 +45,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.LayerBackdrop
@@ -61,6 +64,7 @@ fun LiquidMenuMorphSurface(
     menuScale: () -> Float,
     transformOrigin: TransformOrigin,
     highlight: InteractiveHighlight,
+    sourceHasGlassBackground: Boolean = true,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     val colors = LocalGlassColors.current
@@ -83,6 +87,7 @@ fun LiquidMenuMorphSurface(
     val fieldTexture = remember { LiquidMenuFieldTexture() }
     val foreground = rememberGraphicsLayer()
     val sourceContents = rememberGraphicsLayer()
+    val materialPaint = remember { android.graphics.Paint() }
     val drawCache = remember(motion) { LiquidMenuDrawCache() }
     val menuLayerBlock: GraphicsLayerScope.() -> Unit = {
         this.transformOrigin = transformOrigin
@@ -90,6 +95,31 @@ fun LiquidMenuMorphSurface(
         val scale = menuScale()
         scaleX *= scale
         scaleY *= scale
+    }
+    fun DrawScope.drawSourceForeground(frame: LiquidMenuMorphFrame) {
+        val retainedPortal = sourcePortal ?: return
+        if (frame.sourceOpacity <= 0f) return
+        val target = frame.sourceLobe?.translate(-screenOrigin) ?: return
+        val crop = retainedPortal.currentSourceBounds
+        if (drawCache.recordedSource !== retainedPortal || drawCache.recordedSourceBounds != crop) {
+            sourceContents.clip = true
+            sourceContents.record(IntSize(ceil(crop.width).toInt(), ceil(crop.height).toInt())) {
+                withTransform({ translate(-crop.left, -crop.top) }) { drawLayer(retainedPortal.layer) }
+            }
+            drawCache.recordedSource = retainedPortal
+            drawCache.recordedSourceBounds = crop
+        }
+        sourceContents.renderEffect = if (frame.sourceBlur > 0.01f) RenderEffect.createBlurEffect(
+            frame.sourceBlur, frame.sourceBlur, Shader.TileMode.CLAMP,
+        ).asComposeRenderEffect() else null
+        sourceContents.alpha = frame.sourceOpacity
+        withTransform({
+            translate(target.center.x, target.center.y)
+            scale(target.width / crop.width * frame.sourceZoom, target.height / crop.height * frame.sourceZoom, Offset.Zero)
+            translate(-crop.width / 2f, -crop.height / 2f)
+        }) {
+            drawLayer(sourceContents)
+        }
     }
     var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     // A fixed capture band avoids changing the sampled background as the contour moves.
@@ -104,7 +134,9 @@ fun LiquidMenuMorphSurface(
                 val frame = motion.frame
                 val incoming = frame.bounds.translate(-screenOrigin)
                 if (incoming.isEmpty) return@drawWithContent
-                val outgoing = frame.sourceLobe?.translate(-screenOrigin)
+                // Only an actual glass source contributes a second material lobe.
+                // Plain controls still return their pixels through the source portal below.
+                val outgoing = frame.sourceLobe?.takeIf { sourceHasGlassBackground }?.translate(-screenOrigin)
                 val worldContour = LiquidMenuContour(
                     incoming, Offset(frame.radiusX, frame.radiusY), outgoing,
                     Offset(frame.sourceRadiusX, frame.sourceRadiusY), frame.smoothing,
@@ -153,30 +185,41 @@ fun LiquidMenuMorphSurface(
                     maxOf(required.right, previousCapture.right), maxOf(required.bottom, previousCapture.bottom),
                 ) else previousCapture
                 drawCache.viewport = capture
-                renderer.draw(
-                    scope = this,
-                    coordinates = host,
-                    viewport = capture,
-                    origin = origin,
-                    bounds = bounds,
-                    radius = minOf(frame.radiusX, frame.radiusY),
-                    cornerRadii = Offset(frame.radiusX, frame.radiusY),
-                    lensBounds = incoming,
-                    secondaryLensBounds = outgoing,
-                    secondaryLensRadii = Offset(frame.sourceRadiusX, frame.sourceRadiusY),
-                    lensSmoothing = frame.smoothing,
-                    menuField = fieldTexture,
-                    shape = shape,
-                    outlinePath = path,
-                    tint = colors.container,
-                    highlightAlpha = 0.5f * (0.54f + 0.38f * highlight.pressProgress),
-                    refractionHeight = frame.lensHeight.toDp(),
-                    refractionAmount = (-frame.lensAmount).toDp(),
-                    navigationMaterial = true,
-                    dropShadowAlpha = frame.contentProgress,
-                    isDark = colors.isDark,
-                    sampleScale = sampleScale,
-                )
+                // The native content channel dissolves the material when the destination
+                // is transparent. Keep the original Row foreground outside this opacity layer.
+                val canvas = drawContext.canvas.nativeCanvas
+                val materialLayer = if (!sourceHasGlassBackground && frame.contentProgress < 1f) {
+                    materialPaint.alpha = (255f * frame.contentProgress).roundToInt().coerceIn(0, 255)
+                    canvas.saveLayer(null, materialPaint)
+                } else -1
+                try {
+                    renderer.draw(
+                        scope = this,
+                        coordinates = host,
+                        viewport = capture,
+                        origin = origin,
+                        bounds = bounds,
+                        radius = minOf(frame.radiusX, frame.radiusY),
+                        cornerRadii = Offset(frame.radiusX, frame.radiusY),
+                        lensBounds = incoming,
+                        secondaryLensBounds = outgoing,
+                        secondaryLensRadii = Offset(frame.sourceRadiusX, frame.sourceRadiusY),
+                        lensSmoothing = frame.smoothing,
+                        menuField = fieldTexture,
+                        shape = shape,
+                        outlinePath = path,
+                        tint = colors.container,
+                        highlightAlpha = 0.5f * (0.54f + 0.38f * highlight.pressProgress),
+                        refractionHeight = frame.lensHeight.toDp(),
+                        refractionAmount = (-frame.lensAmount).toDp(),
+                        navigationMaterial = true,
+                        dropShadowAlpha = if (sourceHasGlassBackground) frame.contentProgress else 1f,
+                        isDark = colors.isDark,
+                        sampleScale = sampleScale,
+                    )
+                } finally {
+                    if (materialLayer >= 0) canvas.restoreToCount(materialLayer)
+                }
                 // Clip in physical surface space. Scaling a clipped full-size menu would
                 // squeeze its corners and make the initial capsule rectangular.
                 clipPath(path) {
@@ -231,36 +274,15 @@ fun LiquidMenuMorphSurface(
                         withTransform({ translate(capture.left, capture.top) }) { drawLayer(foreground) }
                     }
                 }
+                if (!sourceHasGlassBackground) drawSourceForeground(frame)
             }
-            // Draw the press light inside the same moving skin as both foreground
-            // portals. Only the renderer's exterior shadow remains outside this clip.
+            // Draw the press light with the moving surface. Plain source pixels
+            // return outside its contour without acquiring a glass background.
             .then(highlight.modifier),
     ) {
-        if (sourcePortal != null) {
+        if (sourceHasGlassBackground && sourcePortal != null) {
             Box(Modifier.fillMaxSize().drawWithContent {
-                val frame = motion.frame
-                if (frame.sourceOpacity <= 0f) return@drawWithContent
-                val target = frame.sourceLobe?.translate(-screenOrigin) ?: return@drawWithContent
-                val crop = sourcePortal.currentSourceBounds
-                if (drawCache.recordedSource !== sourcePortal || drawCache.recordedSourceBounds != crop) {
-                    sourceContents.clip = true
-                    sourceContents.record(IntSize(ceil(crop.width).toInt(), ceil(crop.height).toInt())) {
-                        withTransform({ translate(-crop.left, -crop.top) }) { drawLayer(sourcePortal.layer) }
-                    }
-                    drawCache.recordedSource = sourcePortal
-                    drawCache.recordedSourceBounds = crop
-                }
-                sourceContents.renderEffect = if (frame.sourceBlur > 0.01f) RenderEffect.createBlurEffect(
-                    frame.sourceBlur, frame.sourceBlur, Shader.TileMode.CLAMP,
-                ).asComposeRenderEffect() else null
-                sourceContents.alpha = frame.sourceOpacity
-                withTransform({
-                    translate(target.center.x, target.center.y)
-                    scale(target.width / crop.width * frame.sourceZoom, target.height / crop.height * frame.sourceZoom, Offset.Zero)
-                    translate(-crop.width / 2f, -crop.height / 2f)
-                }) {
-                    drawLayer(sourceContents)
-                }
+                drawSourceForeground(motion.frame)
             })
         }
         Column(

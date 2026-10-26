@@ -214,6 +214,7 @@ fun GlasmioContextMenu(
     morphMotion: LiquidMenuMorphMotion? = null,
     morphSourceAcquired: Boolean = true,
     morphSourcePortal: ToolbarMenuPortal? = null,
+    morphSourceHasGlassBackground: Boolean = true,
     morphShaderPrograms: LiquidMenuShaderPrograms? = null,
     onMorphReady: ((Rect) -> Unit)? = null,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
@@ -340,6 +341,7 @@ fun GlasmioContextMenu(
                         backdrop = backdrop,
                         exportChildBackdrop = exportChildBackdrop,
                         sourcePortal = morphSourcePortal,
+                        sourceHasGlassBackground = morphSourceHasGlassBackground,
                         shaderPrograms = morphShaderPrograms,
                         menuScale = menuScale,
                         transformOrigin = startOrigin,
@@ -422,6 +424,7 @@ fun GlasmioMenu(
     val shadowAlpha = remember { Animatable(0f) }
     val localMenuAnchor = rememberGlasmioMenuAnchorState()
     val sourceAnchor = menuAnchorState ?: localMenuAnchor
+    val ownsLocalAnchor = menuAnchorState == null && externalAnchorBounds == null
     val toolbarGroup = LocalIosToolbarActionGroup.current
     LaunchedEffect(localMenuAnchor, menuAnchorState, externalAnchorBounds, toolbarGroup) {
         if (menuAnchorState == null && externalAnchorBounds != null) {
@@ -526,6 +529,22 @@ fun GlasmioMenu(
         }
     }
 
+    // Selection may resize the source after the close coroutine has started. Retarget
+    // only the current closing session, preserving every spring's value and velocity.
+    LaunchedEffect(sourceAnchor, popupAlive, usesMorph, expanded) {
+        if (popupAlive && usesMorph && !expanded) {
+            snapshotFlow { sourceAnchor.liveBounds to sourceAnchor.previewBounds }
+                .collect { (source, through) ->
+                    if (source != null) {
+                        liquidMotion.updateSource(
+                            source.translate(windowScreenOffset),
+                            through = (through ?: source).translate(windowScreenOffset),
+                        )
+                    }
+                }
+        }
+    }
+
     val currentAlphaCallback by androidx.compose.runtime.rememberUpdatedState(onMenuAlphaChanged)
     LaunchedEffect(menuAlpha) {
         snapshotFlow { menuAlpha.value.coerceIn(0f, 1f) }
@@ -535,13 +554,15 @@ fun GlasmioMenu(
     val anchorFadePaint = remember { Paint() }
 
     Box(modifier.onSizeChanged { anchorSize = it }
-        .then(if (menuAnchorState == null && externalAnchorBounds == null) {
+        .then(if (ownsLocalAnchor) {
             Modifier.glasmioMenuAnchor(localMenuAnchor)
         } else Modifier)) {
         Box(
             Modifier
                 .drawWithContent {
-                    val alpha = if (sourceAnchor.isAcquired && !sourceAnchor.isGroupedSource && sourceAnchor.portal != null) {
+                    // A local anchor's outer layer already hides its live pixels. Let
+                    // the inner content update its portal when the selection changes.
+                    val alpha = if (!ownsLocalAnchor && sourceAnchor.isAcquired && !sourceAnchor.isGroupedSource && sourceAnchor.portal != null) {
                         0f
                     } else if (keepAnchorVisible || usesMorph) {
                         1f
@@ -704,6 +725,7 @@ fun GlasmioMenu(
                             morphMotion = liquidMotion.takeIf { usesMorph },
                             morphSourceAcquired = sourceAnchor.isAcquired,
                             morphSourcePortal = sourceAnchor.portal,
+                            morphSourceHasGlassBackground = sourceAnchor.sourceHasGlassBackground,
                             morphShaderPrograms = sourceAnchor.shaderPrograms,
                             onMorphReady = { target ->
                                 if (usesMorph && !surfaceReady) measuredMorphTarget = target

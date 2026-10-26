@@ -62,6 +62,7 @@ object SfSymbolCatalog {
         "chevron.up.chevron.down" to 0x10018F,
         "circle" to 0x100000,
         "circle.circle.fill" to 0x100A02,
+        "circle.dashed" to 0x1004DE,
         "circle.grid.2x2.fill" to 0x1007BF,
         "circle.grid.cross" to 0x1009F8,
         "circle.lefthalf.filled" to 0x100002,

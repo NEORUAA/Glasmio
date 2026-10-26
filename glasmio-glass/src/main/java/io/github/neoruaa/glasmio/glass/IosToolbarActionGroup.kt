@@ -112,6 +112,9 @@ class GlasmioMenuAnchorState constructor() {
 
     /** Group content is hidden in the final Row draw, after its portal is recorded. */
     val isGroupedSource: Boolean get() = acquiredGroup != null
+    /** A plain anchor transfers its pixels without inventing a glass background. */
+    var sourceHasGlassBackground by mutableStateOf(false)
+        private set
     internal val isStandaloneAnchor: Boolean get() = group == null
     internal val hasStandaloneForeground: Boolean get() = standalonePortal != null
     var isAcquired by mutableStateOf(false)
@@ -144,7 +147,10 @@ class GlasmioMenuAnchorState constructor() {
         if (retained == null || retained.layer !== layer || retained.sourceBounds.size != size) {
             standalonePortal = ToolbarMenuPortal(layer, Rect(Offset.Zero, size))
         }
-        if (isAcquired && acquiredGroup == null) portal = standalonePortal
+        if (isAcquired && acquiredGroup == null) {
+            portal = standalonePortal
+            sourceHasGlassBackground = true
+        }
     }
 
     internal fun bindStandaloneContent(layer: GraphicsLayer, size: Size) {
@@ -153,7 +159,10 @@ class GlasmioMenuAnchorState constructor() {
         if (retained == null || retained.layer !== layer || retained.sourceBounds.size != size) {
             standaloneContentPortal = ToolbarMenuPortal(layer, Rect(Offset.Zero, size))
         }
-        if (isAcquired && acquiredGroup == null) portal = standalonePortal ?: standaloneContentPortal
+        if (isAcquired && acquiredGroup == null) {
+            portal = standalonePortal ?: standaloneContentPortal
+            sourceHasGlassBackground = standalonePortal != null
+        }
     }
 
     internal fun clearStandaloneForeground(layer: GraphicsLayer) {
@@ -171,6 +180,7 @@ class GlasmioMenuAnchorState constructor() {
         val run = sourceGroup?.menuSourceRun(source).orEmpty()
         acquiredBounds = if (run.isEmpty()) source else sourceGroup!!.visualBoundsInWindow(run)
         acquiredGroup = sourceGroup.takeIf { run.isNotEmpty() }
+        sourceHasGlassBackground = acquiredGroup != null || standalonePortal != null
         portal = acquiredGroup?.foregroundPortal(run) ?:
             (standalonePortal ?: standaloneContentPortal).takeIf { sourceGroup == null }
         isAcquired = true
@@ -182,6 +192,7 @@ class GlasmioMenuAnchorState constructor() {
         acquiredGroup?.restoreMenuSource(this)
         acquiredGroup = null
         portal = null
+        sourceHasGlassBackground = false
         acquiredBounds = null
         isAcquired = false
     }
@@ -208,19 +219,17 @@ fun Modifier.glasmioMenuAnchor(state: GlasmioMenuAnchorState): Modifier {
     return onGloballyPositioned { state.bind(group, it.boundsInWindow()) }
         .modifierLocalProvider(ModifierLocalMenuAnchor) { state }
         .graphicsLayer {
-            // Generic anchors without a foreground recorder stay visible during handoff.
+            // The live anchor is hidden only after its foreground has a portal owner.
             alpha = if (state.isAcquired && !state.isGroupedSource && state.portal != null) 0f else 1f
         }
         .drawWithContent {
             if (!state.isStandaloneAnchor || state.hasStandaloneForeground) {
                 drawContent()
             } else {
-                // A plain Row owns no separate glass pass. Retain its complete content,
-                // while a nested GlassSurface supplies its material-free foreground.
-                if (!state.isAcquired || state.portal == null) {
-                    contentLayer.record { this@drawWithContent.drawContent() }
-                    state.bindStandaloneContent(contentLayer, size)
-                }
+                // Keep selection changes live in the retained Row while the outer layer
+                // is hidden. A nested GlassSurface supplies its own foreground instead.
+                contentLayer.record { this@drawWithContent.drawContent() }
+                state.bindStandaloneContent(contentLayer, size)
                 drawLayer(contentLayer)
             }
         }

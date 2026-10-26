@@ -12,13 +12,24 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -28,6 +39,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import sh.calvin.reorderable.ReorderableColumn
+import kotlin.math.abs
 
 /**
  * Figma 5707:47196 grouped rows with a trailing iOS grabber.
@@ -49,6 +61,33 @@ fun <T> GlasmioReorderableGroup(
 
     val colors = LocalGlassColors.current
     val hapticFeedback = LocalHapticFeedback.current
+    val rowHeightPx = with(LocalDensity.current) { 52.dp.roundToPx() }
+    var liftedIndex by remember { mutableStateOf<Int?>(null) }
+    var dragging by remember { mutableStateOf(false) }
+    var groupCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val rowCoordinates = remember { mutableMapOf<Int, LayoutCoordinates>() }
+    LaunchedEffect(liftedIndex, dragging, rowHeightPx) {
+        val index = liftedIndex ?: return@LaunchedEffect
+        if (dragging) return@LaunchedEffect
+        // A no-op drag has no onSettle callback in ReorderableColumn. Keep its opaque
+        // surface until the actual rendered position stops at its original slot.
+        var previousOffset: Float? = null
+        while (true) {
+            withFrameNanos { }
+            val parent = groupCoordinates
+            val row = rowCoordinates[index]
+            if (parent?.isAttached != true || row?.isAttached != true) {
+                liftedIndex = null
+                break
+            }
+            val offset = parent.localPositionOf(row, Offset.Zero).y - rowHeightPx * index
+            if (abs(offset) < 0.001f && offset == previousOffset) {
+                liftedIndex = null
+                break
+            }
+            previousOffset = offset
+        }
+    }
     val commitMove: (Int, Int) -> Boolean = { fromIndex, toIndex ->
         if (fromIndex !in items.indices || toIndex !in items.indices || fromIndex == toIndex) {
             false
@@ -64,28 +103,37 @@ fun <T> GlasmioReorderableGroup(
     GlasmioGroupedList(modifier = modifier) {
         ReorderableColumn(
             list = items,
-            onSettle = { fromIndex, toIndex -> commitMove(fromIndex, toIndex) },
+            onSettle = { fromIndex, toIndex ->
+                commitMove(fromIndex, toIndex)
+                liftedIndex = null
+            },
             onMove = {
                 hapticFeedback.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
             },
-            modifier = Modifier.fillMaxWidth(),
-        ) { index, item, _ ->
+            modifier = Modifier.fillMaxWidth().onGloballyPositioned { groupCoordinates = it }.drawBehind {
+                // Dividers describe the fixed list slots, not a moving item's surface.
+                // isDragging resets before the settle animation, so hiding an item-owned
+                // divider with that flag would make it reappear in mid-flight on release.
+                val rowHeight = 52.dp.roundToPx()
+                val inset = 16.dp.toPx()
+                for (index in 1 until items.size) {
+                    val y = (rowHeight * index).toFloat()
+                    drawLine(
+                        color = colors.separator,
+                        start = Offset(inset, y),
+                        end = Offset(size.width - inset, y),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                }
+            },
+        ) { index, item, isDragging ->
             ReorderableItem(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp)
-                        .drawBehind {
-                            if (index > 0) {
-                                val inset = 16.dp.toPx()
-                                drawLine(
-                                    color = colors.separator,
-                                    start = Offset(inset, 0f),
-                                    end = Offset(size.width - inset, 0f),
-                                    strokeWidth = 1.dp.toPx(),
-                                )
-                            }
-                        }
+                        .onGloballyPositioned { rowCoordinates[index] = it }
+                        .background(if (isDragging || liftedIndex == index) colors.elevatedBackground else Color.Transparent)
                         .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -112,11 +160,14 @@ fun <T> GlasmioReorderableGroup(
                             .fillMaxHeight()
                             .draggableHandle(
                                 onDragStarted = {
+                                    liftedIndex = index
+                                    dragging = true
                                     hapticFeedback.performHapticFeedback(
                                         HapticFeedbackType.GestureThresholdActivate,
                                     )
                                 },
                                 onDragStopped = {
+                                    dragging = false
                                     hapticFeedback.performHapticFeedback(HapticFeedbackType.GestureEnd)
                                 },
                             )
