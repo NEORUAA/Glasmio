@@ -19,6 +19,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -60,6 +62,10 @@ class ComponentBehaviorTest {
                     },
                 )
             }
+        }
+        // Dialog fixtures can own focus before the activity's window does.
+        rule.waitUntil(10_000) {
+            rule.onAllNodes(isRoot()).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
         }
     }
 
@@ -239,12 +245,14 @@ class ComponentBehaviorTest {
     }
 
     @Test fun groupedPreferenceSeparatorIsVisibleAndKeepsTheOuterGutterClear() {
+        var secondEnabled by mutableStateOf(true)
         content {
             GlasmioGroupedList(Modifier.testTag("preference-separator-group")) {
                 GlasmioPreferenceEntry(title = { Text("First preference") })
                 GlasmioPreferenceEntry(
                     title = { Text("Second preference") },
                     modifier = Modifier.testTag("second-preference"),
+                    isEnabled = secondEnabled,
                     showTopSeparator = true,
                 )
             }
@@ -267,6 +275,17 @@ class ComponentBehaviorTest {
         assertTrue("The row boundary must contain a visible separator", contrastAt((pixels.width * 0.8f).toInt()) > 0.02f)
         val gutterX = with(rule.density) { 8.dp.roundToPx() }
         assertTrue("The separator must not extend through the outer gutter", contrastAt(gutterX) < 0.01f)
+        rule.runOnIdle { secondEnabled = false }
+        val disabledPixels = groupNode.captureToImage().toPixelMap()
+        val dividerX = (pixels.width * 0.8f).toInt()
+        for (delta in -1..1) {
+            val row = (y + delta).coerceIn(0, pixels.height - 1)
+            val before = pixels[dividerX, row]
+            val after = disabledPixels[dividerX, row]
+            assertEquals("Disabling content cannot fade a structural separator", before.red, after.red, 0.01f)
+            assertEquals(before.green, after.green, 0.01f)
+            assertEquals(before.blue, after.blue, 0.01f)
+        }
     }
 
     @Test fun popUpButtonSelectsOnceAndKeepsTheSelectionAfterDismissal() {
@@ -278,11 +297,11 @@ class ComponentBehaviorTest {
                 commits++
             }, { it })
         }
-        rule.onNodeWithText("Default").performClick()
+        rule.onNodeWithText("Default").performSemanticsAction(SemanticsActions.OnClick) { it() }
         rule.onNodeWithText("Recent").assertIsDisplayed().performClick()
         rule.waitUntil(10_000) { rule.onAllNodesWithText("Default").fetchSemanticsNodes().isEmpty() }
         rule.runOnIdle { assertEquals(1, commits) }
-        rule.onNodeWithText("Recent").assertIsDisplayed().performClick()
+        rule.onNodeWithText("Recent").assertIsDisplayed().performSemanticsAction(SemanticsActions.OnClick) { it() }
         rule.onNodeWithText("Default").assertIsDisplayed()
         pressSystemBack(rule)
         rule.waitUntil(10_000) { rule.onAllNodesWithText("Default").fetchSemanticsNodes().isEmpty() }
@@ -347,7 +366,7 @@ class SampleNavigationBehaviorTest {
 
     @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
         rule.waitUntil(30_000) {
-            rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
         }
         val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
         rule.onNode(tab and hasContentDescription("材质")).performClick()
@@ -356,7 +375,7 @@ class SampleNavigationBehaviorTest {
         rule.onNodeWithText("Apache License 2.0").assertIsDisplayed()
         rule.activityRule.scenario.recreate()
         rule.waitUntil(30_000) {
-            rule.onAllNodesWithText("Apache License 2.0").fetchSemanticsNodes().isNotEmpty()
+            rule.onAllNodesWithText("Apache License 2.0").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
         }
         rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
         rule.onNodeWithContentDescription("搜索").performClick()
@@ -367,6 +386,11 @@ class SampleNavigationBehaviorTest {
             focused
         }
         pressSystemBack(rule)
+        rule.waitUntil(10_000) { !imeVisible() }
+        if (rule.onAllNodesWithContentDescription("搜索").fetchSemanticsNodes().isEmpty()) {
+            rule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)).assertIsDisplayed()
+            pressSystemBack(rule)
+        }
         val selectedAboutTab = tab and hasContentDescription("关于") and isSelected()
         rule.waitUntil(10_000) {
             rule.onAllNodes(selectedAboutTab).fetchSemanticsNodes().size == 1 &&
@@ -376,8 +400,53 @@ class SampleNavigationBehaviorTest {
         rule.onNodeWithText("Search Components").assertDoesNotExist()
     }
 
+    private fun imeVisible(): Boolean {
+        var visible = false
+        rule.activityRule.scenario.onActivity {
+            visible = it.window.decorView.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true
+        }
+        return visible
+    }
+
+    @Test fun floatingSearchFiltersCancelsAndStartsEmptyOnReentry() {
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+        rule.onNodeWithContentDescription("搜索").performClick()
+        val editor = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
+        val input = rule.onNode(editor).assertIsDisplayed()
+        val screen = rule.onRoot().fetchSemanticsNode().boundsInRoot
+        val inputBounds = input.fetchSemanticsNode().boundsInRoot
+        assertTrue("Search must float in the lower half of the screen", inputBounds.top > screen.height * 0.4f)
+        input.performTextInput("Controls")
+        rule.onNode(hasText("Controls") and hasClickAction() and !editor).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Cancel").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithContentDescription("搜索").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNode(editor).assertDoesNotExist()
+        rule.onNodeWithContentDescription("搜索").performClick()
+        rule.onNode(editor).assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        rule.onNodeWithContentDescription("Cancel").performClick()
+    }
+
+    @Test fun dynamicTypePickerChangesTheRenderedSemanticStyle() {
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+        rule.onNodeWithText("Text Styles and Dynamic Type").performScrollTo().performClick()
+        val initialHeight = rule.onAllNodesWithText("Large Title")[0]
+            .fetchSemanticsNode().boundsInRoot.height
+        rule.onNode(hasText("Large") and hasClickAction()).performClick()
+        rule.onNodeWithText("AX1").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("Large").fetchSemanticsNodes().isEmpty() }
+        val title = rule.onAllNodesWithText("Large Title")[0].performScrollTo()
+        val layouts = mutableListOf<TextLayoutResult>()
+        title.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val style = layouts.single().layoutInput.style
+        assertEquals(with(rule.density) { 44.dp.toSp() }, style.fontSize)
+        assertEquals(with(rule.density) { 52.dp.toSp() }, style.lineHeight)
+        // Android preserves the loaded font's rounded ascent/descent outside the
+        // requested line box. Verify growth without forcing the glyphs to clip.
+        assertTrue(title.fetchSemanticsNode().boundsInRoot.height > initialHeight)
+    }
+
     @Test fun rootNavigationCompactsOnScrollAndExpandsWithoutChangingTheTab() {
-        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
         val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
         rule.onAllNodes(tab).assertCountEquals(4)
         rule.onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performTouchInput {
@@ -396,7 +465,7 @@ class SampleNavigationBehaviorTest {
     }
 
     @Test fun toolbarMenuOpensAndClosesFromItsRealAnchor() {
-        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
         rule.onNodeWithText("Menus").performScrollTo().performClick()
         rule.onNodeWithContentDescription("Menu").assertIsDisplayed().performClick()
         rule.onNodeWithText("Favorite").assertIsDisplayed()
@@ -412,7 +481,7 @@ class SampleNavigationBehaviorTest {
 
 
     @Test fun settingsScrollShowsTheCenteredTitleAndSurvivesRootTabSwitches() {
-        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
         val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
         rule.onNode(tab and hasContentDescription("设置")).performClick().assertIsSelected()
         val scrollable = hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)

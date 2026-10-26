@@ -7,17 +7,19 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Area | Public entry points |
 | --- | --- |
 | Theme | `GlasmioTheme`, `glasmioColorScheme`, `glasmioTypography`, `GlassAppearance`, `GlassColors`, `GlassDimensions`, `GlasmioShapes`, `GlasmioSpacing`, `GlasmioMotion` |
+| Text styles | `GlasmioTextStyles`, `glasmioTextStyles`, `rememberGlasmioTextStyles`, `IosTextStyle`, `IosTextVariant`, `IosDynamicTypeSize` |
 | Glass | `GlasmioBackdropHost`, `GlasmioBackdropProvider`, `GlassSurface`, `GlassSurfaceStyle`, `GlassEmphasis`, `rememberCrossWindowBackdrop`, `rememberSharedGlassBackdrop`, `rememberRasterizedBackdrop` |
 | Buttons | `GlasmioButton`, `GlasmioIconButton`, `GlasmioButtonSize`, `GlasmioButtonDefaults` |
 | Controls | `GlasmioSwitch`, `GlasmioSlider`, `GlasmioStepper`, `GlasmioSegmentedControl`, `GlasmioScrollableTabRow`, `GlasmioColorPicker` |
 | Input | `GlasmioTextField`, `GlasmioSearchBar`, `GlasmioSearchToolbar` |
-| Lists | `GlasmioCard`, `GlasmioGroupedList`, `GlasmioListRow`, `GlasmioReorderableGroup` |
+| Lists | `GlasmioCard`, `GlasmioGroupedList`, `GlasmioListRow`, `GlasmioSectionTitle`, `GlasmioGroupedTableFooter`, `GlasmioListValuePill`, `GlasmioListSwipeActions`, `GlasmioListSwipeAction`, `GlasmioSwipeActionStyle`, `GlasmioReorderableGroup` |
 | Toolbars | `GlasmioTopBar`, `GlasmioTopBarStyle`, `GlasmioToolbarActionGroup`, `GlasmioToolbarActionStyle`, `GlasmioBottomToolbar`, `GlasmioSheetTopToolbar`, `GlasmioSheetToolbarButton`, `GlasmioSheetButton` |
 | Navigation | `GlasmioNavigationBar`, `GlasmioTabItem` |
 | Menus | `GlasmioMenu`, `GlasmioMenuItem`, `GlasmioContextMenu`, `GlasmioCascadingMenu`, `GlasmioCascadingMenuItem`, `GlasmioPopUpButton`, `rememberGlasmioMenuAnchorState`, `Modifier.glasmioMenuAnchor` |
 | Alerts | `GlasmioAlertDialog`, `GlasmioAlertButtonSpec`, `GlasmioAlertButtonRole`, `GlasmioAlertButtonLayout`, `GlasmioAlertSurface`, `GlasmioAlertButton`, `GlasmioAlertFieldGroup`, `GlasmioAlertTextField` |
 | Sheets and overlays | `GlasmioBottomSheet`, `GlasmioSheetSurface`, `GlasmioActionSheet`, `GlasmioActionSheetContent`, `GlasmioModalOverlay` |
 | Pages | `GlasmioScaffold`, `GlasmioListPage`, `GlasmioPinnedListPage`, `GlasmioPinnedPage`, `rememberGlasmioGridCollapseProgress`, `GlasmioOverscrollHost`, `Modifier.pullToRefreshRebound`, `rememberGlasmioAppBarScrollBehavior` |
+| Floating search | `GlasmioFloatingSearch`, `GlasmioFloatingSearchButton` |
 | Sheet motion | `GlasmioBottomSheetState`, `rememberGlasmioBottomSheetState`, `GlasmioSheetDefaults` |
 | Preferences | `GlasmioPreferenceEntry`, `GlasmioSwitchPreference`, `GlasmioEditTextPreference`, `GlasmioListPreference`, `GlasmioEnumListPreference`, `GlasmioPreferenceGroupTitle` |
 | Icons | `SfIcon`, `SfSymbol`, `SfSymbolCatalog`, `GlasmioIcon`, `GlasmioIconProvider`, `GlasmioIconResolver` |
@@ -135,7 +137,12 @@ For independently measured bars, use `GlasmioScaffold` and pass its `PaddingValu
 
 The sample's Lists page switches between a lazy list and an adaptive grid while preserving each scroll state. Its toolbar refresh and pull gesture share one caller-owned callback, rotating the visible items after a short refresh. `Modifier.pullToRefreshRebound` animates only the body; the refresh indicator sits below the fixed toolbar, and both layouts apply the pinned page's content padding once.
 
-Preferences present values and report edits. The host chooses DataStore, database, network, or in-memory storage.
+Preferences present values and report edits. The host chooses DataStore, database, network, or in-memory storage. Disable a row's content without dimming its separator. Set `showTopSeparator = false` on the first preference row in a group.
+
+Labeled swipe actions default to Apple's `SymbolAndLabelTall` layout: a 60 × 38 point
+symbol capsule with its caption below, within a 68 point action slot. `SymbolOnly`
+and `SymbolAndLabel` expose the other source variants. Reorderable groups keep
+separators attached to fixed list slots while the grabbed row moves.
 
 ## Menus
 
@@ -211,8 +218,30 @@ fun ModalScreen() = ExampleHost {
 
 ## Navigation and reorderable content
 
+`GlasmioFloatingSearch` combines the floating input toolbar, results overlay, keyboard
+insets and focus cleanup. The host owns its route, query and results; its navigation
+handles Back by default so the first Back can dismiss the IME. Set `handleBack = true`
+when no navigation host owns dismissal. Use
+`GlasmioFloatingSearchButton` beside the navigation bar with the same compact progress.
+
 `GlasmioNavigationBar` takes caller-owned `GlasmioTabItem<T>` keys, selection, compact progress, and an expand callback. It does not define destinations or install a navigation runtime. The compact progress is `State<Float>` in `0f..1f`; use a stable state object for live transitions.
 
 `GlasmioReorderableGroup` reports the complete reordered list through `onReorder`. Its grabber owns the drag target, leaving the rest of the row available for vertical scrolling. Supply localized drag, move-up, and move-down labels for accessibility actions.
 
 The [sample source](../sample/src/main/java/io/github/neoruaa/glasmio/sample/MainActivity.kt) contains complete navigation, color-picker, reorder, toolbar, and menu examples.
+
+## Text Styles and Dynamic Type
+
+`GlasmioTheme.textStyles` exposes all eleven Apple semantic roles. Indexed access
+adds the exact emphasis and italic variants available for each role:
+
+```kotlin
+Text("Body", style = GlasmioTheme.textStyles.body)
+Text("Emphasis", style = GlasmioTheme.textStyles[IosTextStyle.Body, IosTextVariant.Emphasized])
+```
+
+The default Large presets follow Android font scaling. Pass
+`dynamicTypeSize = IosDynamicTypeSize.AX1` to `GlasmioTheme` to select an explicit
+Apple category, or use `rememberGlasmioTextStyles` for a local preview. Explicit
+categories account for the host density once, without scaling the selected category
+a second time. See [the source metrics](design/typography.md) for all twelve sizes.

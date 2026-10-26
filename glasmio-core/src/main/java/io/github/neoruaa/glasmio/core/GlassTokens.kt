@@ -57,7 +57,7 @@ data class GlassDimensions(
 val GlassColors.segmentedControlBackground: Color
     get() = if (isDark) Color.White.copy(alpha = 0.12f) else Color(0x1F767680)
 
-/** iOS names for the shared application typography roles. */
+/** iOS names for shared roles. Existing largeTitle/title2 aliases retain emphasized headlines. */
 object IosTypography {
     val fontFamily: FontFamily
         @Composable
@@ -67,10 +67,18 @@ object IosTypography {
         @Composable
         @ReadOnlyComposable
         get() = MaterialTheme.typography.headlineLarge
+    val title1: TextStyle
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalGlasmioTextStyles.current.title1
     val title2: TextStyle
         @Composable
         @ReadOnlyComposable
         get() = MaterialTheme.typography.headlineSmall
+    val title3: TextStyle
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalGlasmioTextStyles.current.title3
     val headline: TextStyle
         @Composable
         @ReadOnlyComposable
@@ -79,10 +87,26 @@ object IosTypography {
         @Composable
         @ReadOnlyComposable
         get() = MaterialTheme.typography.bodyLarge
+    val callout: TextStyle
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalGlasmioTextStyles.current.callout
     val subheadline: TextStyle
         @Composable
         @ReadOnlyComposable
         get() = MaterialTheme.typography.bodyMedium
+    val footnote: TextStyle
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalGlasmioTextStyles.current.footnote
+    val caption1: TextStyle
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalGlasmioTextStyles.current.caption1
+    val caption2: TextStyle
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalGlasmioTextStyles.current.caption2
     val caption: TextStyle
         @Composable
         @ReadOnlyComposable

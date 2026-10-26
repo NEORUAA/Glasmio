@@ -35,13 +35,17 @@ Run the component behavior tests on an Android device or emulator:
 ./gradlew :sample:connectedDebugAndroidTest
 ```
 
-The sample demonstrates materials, controls, navigation, lists, preferences, search, menus, and sheets. Its Home, Materials, Settings, and About tabs share a navigation bar with a separate search button. Pages use collapsing titles and progressive edge blur. Root tabs fade between destinations; detail pages use Miuix transitions. It builds independently of MeiloX.
+The sample demonstrates materials, controls, navigation, lists, preferences, text styles, search, menus, and sheets. Its Home, Materials, Settings, and About tabs share a navigation bar with a separate floating search control. Pages use collapsing titles and progressive edge blur. Root tabs fade between destinations; detail pages use Miuix transitions. It builds independently of MeiloX.
 
 To render the catalog with SF Symbols, supply your local symbol font for debug builds:
 
 ```sh
 ./gradlew :sample:assembleDebug "-Pglasmio.symbolFont=/absolute/path/SF Pro.ttf"
 ```
+
+For the text-style catalog's real italic faces, also pass
+`-Pglasmio.italicFont=/absolute/path/SF-Pro-Italic.ttf`. Both optional fonts are
+debug-only Sample assets; neither is included in the library artifacts.
 
 You can also set `glasmio.symbolFont` in the ignored root `local.properties`. The debug build generates a local font asset and installs one icon provider around the entire catalog. With the SF Pro variable font, the sample also selects text weight and optical size from that asset. Release artifacts and published libraries do not contain that font.
 

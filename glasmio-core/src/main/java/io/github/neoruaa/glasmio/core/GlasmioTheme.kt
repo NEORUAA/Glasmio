@@ -17,12 +17,9 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.CornerBasedShape
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.kyant.capsule.ContinuousRoundedRectangle
 
 /** Every rounded surface uses the same continuous curvature, including Material fallbacks. */
@@ -52,25 +49,25 @@ object GlasmioMotion {
 val LocalGlasmioShapes = staticCompositionLocalOf { GlasmioShapes() }
 val LocalGlasmioSpacing = staticCompositionLocalOf { GlasmioSpacing() }
 
-/** iOS 27 text metrics; system fonts are the default until a host supplies its licensed family. */
+/** Apple semantic presets mapped to Material roles; hosts can supply their licensed family. */
 fun glasmioTypography(fontFamily: FontFamily = FontFamily.Default): Typography {
-    val base = TextStyle(fontFamily = fontFamily)
+    val text = glasmioTextStyles(fontFamily)
     return Typography(
-        displayLarge = base.copy(fontSize = 57.sp, lineHeight = 64.sp),
-        displayMedium = base.copy(fontSize = 45.sp, lineHeight = 52.sp),
-        displaySmall = base.copy(fontSize = 36.sp, lineHeight = 44.sp),
-        headlineLarge = base.copy(fontWeight = FontWeight.Bold, fontSize = 34.sp, lineHeight = 41.sp, letterSpacing = 0.40.sp),
-        headlineMedium = base.copy(fontWeight = FontWeight.Bold, fontSize = 28.sp, lineHeight = 34.sp, letterSpacing = 0.38.sp),
-        headlineSmall = base.copy(fontWeight = FontWeight.Bold, fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = (-0.26).sp),
-        titleLarge = base.copy(fontWeight = FontWeight(590), fontSize = 20.sp, lineHeight = 25.sp, letterSpacing = (-0.45).sp),
-        titleMedium = base.copy(fontWeight = FontWeight(590), fontSize = 17.sp, lineHeight = 22.sp, letterSpacing = (-0.43).sp),
-        titleSmall = base.copy(fontWeight = FontWeight(590), fontSize = 15.sp, lineHeight = 20.sp, letterSpacing = (-0.23).sp),
-        bodyLarge = base.copy(fontSize = 17.sp, lineHeight = 22.sp, letterSpacing = (-0.43).sp),
-        bodyMedium = base.copy(fontSize = 15.sp, lineHeight = 20.sp, letterSpacing = (-0.23).sp),
-        bodySmall = base.copy(fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = (-0.08).sp),
-        labelLarge = base.copy(fontWeight = FontWeight(510), fontSize = 17.sp, lineHeight = 22.sp, letterSpacing = (-0.43).sp),
-        labelMedium = base.copy(fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp),
-        labelSmall = base.copy(fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 13.sp, letterSpacing = 0.06.sp),
+        displayLarge = text[IosTextStyle.LargeTitle, IosTextVariant.Emphasized],
+        displayMedium = text[IosTextStyle.Title1, IosTextVariant.Emphasized],
+        displaySmall = text[IosTextStyle.Title2, IosTextVariant.Emphasized],
+        headlineLarge = text[IosTextStyle.LargeTitle, IosTextVariant.Emphasized],
+        headlineMedium = text[IosTextStyle.Title1, IosTextVariant.Emphasized],
+        headlineSmall = text[IosTextStyle.Title2, IosTextVariant.Emphasized],
+        titleLarge = text[IosTextStyle.Title3, IosTextVariant.Emphasized],
+        titleMedium = text.headline,
+        titleSmall = text[IosTextStyle.Subheadline, IosTextVariant.Emphasized],
+        bodyLarge = text.body,
+        bodyMedium = text.subheadline,
+        bodySmall = text.footnote,
+        labelLarge = text[IosTextStyle.Body, IosTextVariant.Emphasized],
+        labelMedium = text.caption1,
+        labelSmall = text.caption2,
     )
 }
 
@@ -99,17 +96,22 @@ fun GlasmioTheme(
     dimensions: GlassDimensions = GlassDimensions(),
     shapes: GlasmioShapes = GlasmioShapes(),
     spacing: GlasmioSpacing = GlasmioSpacing(),
+    dynamicTypeSize: IosDynamicTypeSize? = null,
     content: @Composable () -> Unit,
 ) {
+    val textStyles = rememberGlasmioTextStyles(dynamicTypeSize, typography)
+    val materialTypography = if (dynamicTypeSize == null) typography
+        else textStyles.resizeMaterialTypography(typography)
     CompositionLocalProvider(
         LocalGlassColors provides colors,
         LocalGlassAppearance provides appearance,
         LocalGlassDimensions provides dimensions,
         LocalGlasmioShapes provides shapes,
         LocalGlasmioSpacing provides spacing,
+        LocalGlasmioTextStyles provides textStyles,
         LocalContentColor provides colors.content,
     ) {
-        MaterialTheme(colorScheme, shapes.materialShapes(), typography, content)
+        MaterialTheme(colorScheme, shapes.materialShapes(), materialTypography, content)
     }
 }
 
@@ -120,4 +122,5 @@ object GlasmioTheme {
     val shapes: GlasmioShapes @Composable @ReadOnlyComposable get() = LocalGlasmioShapes.current
     val spacing: GlasmioSpacing @Composable @ReadOnlyComposable get() = LocalGlasmioSpacing.current
     val typography: Typography @Composable @ReadOnlyComposable get() = MaterialTheme.typography
+    val textStyles: GlasmioTextStyles @Composable @ReadOnlyComposable get() = LocalGlasmioTextStyles.current
 }
