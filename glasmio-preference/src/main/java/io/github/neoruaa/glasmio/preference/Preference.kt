@@ -9,22 +9,27 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.ProvideTextStyle
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.Role
+import io.github.neoruaa.glasmio.core.IosTypography
+import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.icons.SfIcon
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -38,7 +43,10 @@ fun GlasmioPreferenceEntry(
     trailingContent: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     isEnabled: Boolean = true,
+    showTopSeparator: Boolean = true,
 ) {
+    val colors = LocalGlassColors.current
+    val minimumHeight = if (description != null || content != null) 68.dp else 52.dp
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
@@ -48,7 +56,7 @@ fun GlasmioPreferenceEntry(
                 onClick = onClick ?: {}
             )
             .alpha(if (isEnabled) 1f else 0.5f)
-            .padding(horizontal = 16.dp, vertical = 16.dp)
+            .padding(horizontal = 16.dp)
     ) {
         if (icon != null) {
             Box(
@@ -60,29 +68,41 @@ fun GlasmioPreferenceEntry(
             Spacer(Modifier.width(12.dp))
         }
 
-        Column(
-            verticalArrangement = Arrangement.Center,
+        Row(
             modifier = Modifier.weight(1f)
+                .heightIn(min = minimumHeight)
+                .drawBehind {
+                    if (showTopSeparator) {
+                        drawLine(colors.separator, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx())
+                    }
+                }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            ProvideTextStyle(MaterialTheme.typography.titleMedium) {
-                title()
+            Column(
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.weight(1f),
+            ) {
+                ProvideTextStyle(IosTypography.body) {
+                    title()
+                }
+
+                if (description != null) {
+                    Text(
+                        text = description,
+                        style = IosTypography.subheadline,
+                        color = colors.secondaryContent
+                    )
+                }
+
+                content?.invoke()
             }
 
-            if (description != null) {
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.secondary
-                )
+            if (trailingContent != null) {
+                Spacer(Modifier.width(12.dp))
+
+                trailingContent()
             }
-
-            content?.invoke()
-        }
-
-        if (trailingContent != null) {
-            Spacer(Modifier.width(12.dp))
-
-            trailingContent()
         }
     }
 }
@@ -98,36 +118,35 @@ fun <T> GlasmioListPreference(
     valueText: @Composable (T) -> String,
     onValueSelected: (T) -> Unit,
     isEnabled: Boolean = true,
+    showTopSeparator: Boolean = true,
 ) {
-    var showDialog by remember {
+    var showDialog by rememberSaveable {
         mutableStateOf(false)
     }
     if (showDialog) {
         PreferenceListDialog(
+            title = title,
             onDismiss = { showDialog = false }
         ) {
-            items(values) { value ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            showDialog = false
+            itemsIndexed(values) { index, value ->
+                val selected = value == selectedValue
+                GlasmioListRow(
+                    title = valueText(value),
+                    modifier = Modifier.selectable(
+                        selected = selected,
+                        role = Role.RadioButton,
+                        onClick = {
                             onValueSelected(value)
+                            showDialog = false
+                        },
+                    ),
+                    showTopSeparator = index > 0,
+                    trailing = {
+                        if (selected) {
+                            SfIcon("checkmark", null, size = 17.dp, tint = LocalGlassColors.current.accent)
                         }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
-                    RadioButton(
-                        selected = value == selectedValue,
-                        onClick = null
-                    )
-
-                    Text(
-                        text = valueText(value),
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.padding(start = 16.dp)
-                    )
-                }
+                    },
+                )
             }
         }
     }
@@ -138,7 +157,8 @@ fun <T> GlasmioListPreference(
         description = description ?: valueText(selectedValue),
         icon = icon,
         onClick = { showDialog = true },
-        isEnabled = isEnabled
+        isEnabled = isEnabled,
+        showTopSeparator = showTopSeparator,
     )
 }
 
@@ -151,6 +171,7 @@ inline fun <reified T : Enum<T>> GlasmioEnumListPreference(
     noinline valueText: @Composable (T) -> String,
     noinline onValueSelected: (T) -> Unit,
     isEnabled: Boolean = true,
+    showTopSeparator: Boolean = true,
 ) {
     GlasmioListPreference(
         modifier = modifier,
@@ -160,7 +181,8 @@ inline fun <reified T : Enum<T>> GlasmioEnumListPreference(
         values = enumValues<T>().toList(),
         valueText = valueText,
         onValueSelected = onValueSelected,
-        isEnabled = isEnabled
+        isEnabled = isEnabled,
+        showTopSeparator = showTopSeparator,
     )
 }
 
@@ -173,6 +195,7 @@ fun GlasmioSwitchPreference(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     isEnabled: Boolean = true,
+    showTopSeparator: Boolean = true,
 ) {
     GlasmioPreferenceEntry(
         modifier = modifier,
@@ -187,7 +210,8 @@ fun GlasmioSwitchPreference(
             )
         },
         onClick = { onCheckedChange(!checked) },
-        isEnabled = isEnabled
+        isEnabled = isEnabled,
+        showTopSeparator = showTopSeparator,
     )
 }
 
@@ -201,13 +225,15 @@ fun GlasmioEditTextPreference(
     singleLine: Boolean = true,
     isInputValid: (String) -> Boolean = { it.isNotEmpty() },
     isEnabled: Boolean = true,
+    showTopSeparator: Boolean = true,
 ) {
-    var showDialog by remember {
+    var showDialog by rememberSaveable {
         mutableStateOf(false)
     }
 
     if (showDialog) {
         PreferenceTextFieldDialog(
+            title = title,
             initialTextFieldValue = TextFieldValue(
                 text = value,
                 selection = TextRange(value.length)
@@ -225,7 +251,8 @@ fun GlasmioEditTextPreference(
         description = value,
         icon = icon,
         onClick = { showDialog = true },
-        isEnabled = isEnabled
+        isEnabled = isEnabled,
+        showTopSeparator = showTopSeparator,
     )
 }
 
@@ -234,10 +261,5 @@ fun GlasmioPreferenceGroupTitle(
     title: String,
     modifier: Modifier = Modifier,
 ) {
-    Text(
-        text = title.uppercase(),
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(16.dp)
-    )
+    GlasmioSectionTitle(title, modifier)
 }

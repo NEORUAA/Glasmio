@@ -141,6 +141,13 @@ Preferences present values and report edits. The host chooses DataStore, databas
 
 The menu owns its popup lifecycle while the application owns `expanded`. Render actions through `GlasmioMenuItem` and invoke the supplied `close` callback after choosing an action. Nested actions can use `GlasmioCascadingMenuItem.children`.
 
+Pop-up Buttons and Cascading Menus use the native source-preview morph by default.
+Standalone sources transfer their own foreground; toolbar sources retain the complete
+button group. For an external anchor, pass a `GlasmioMenuAnchorState` attached through
+`Modifier.glasmioMenuAnchor` to preserve its foreground throughout dismissal.
+`morphFromAnchor = false` selects the separate compact-menu transition. See
+[the native motion reference](dropdown-motion.md) for the branch and spring sources.
+
 ```kotlin
 @Composable
 fun MenuScreen() = ExampleHost {

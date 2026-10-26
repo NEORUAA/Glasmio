@@ -25,6 +25,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -108,7 +112,24 @@ fun GlasmioStepper(
 ) {
     val colors = LocalGlassColors.current
     val fill = if (colors.isDark) Color.White.copy(alpha = 0.12f) else Color(0x14747480)
-    Row(modifier.graphicsLayer { alpha = if (enabled) 1f else 0.45f }.background(fill, Capsule()).height(32.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier
+            .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
+            .height(32.dp)
+            .clip(Capsule())
+            .background(fill)
+            .drawWithContent {
+                drawContent()
+                val lineWidth = 1.dp.toPx()
+                drawRoundRect(
+                    colors.separator,
+                    topLeft = Offset((size.width - lineWidth) / 2f, 4.dp.toPx()),
+                    size = Size(lineWidth, 24.dp.toPx()),
+                    cornerRadius = CornerRadius(lineWidth / 2f),
+                )
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Box(
             Modifier.size(width = 46.dp, height = 32.dp)
                 .semantics { contentDescription = decreaseContentDescription }
@@ -117,7 +138,6 @@ fun GlasmioStepper(
         ) {
             SfIcon("minus", null, size = 17.dp, tint = colors.content)
         }
-        Box(Modifier.width(1.dp).height(22.dp).background(colors.separator))
         Box(
             Modifier.size(width = 46.dp, height = 32.dp)
                 .semantics { contentDescription = increaseContentDescription }
@@ -128,5 +148,3 @@ fun GlasmioStepper(
         }
     }
 }
-
-/** Figma nodes 770:21901 and 754:62668. */

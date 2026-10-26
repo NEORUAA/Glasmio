@@ -13,6 +13,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,7 +25,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -34,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
@@ -85,6 +94,7 @@ fun GlasmioAlertDialog(
         dismissOnClickOutside = true,
         usePlatformDefaultWidth = false,
     ),
+    titleContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit = {},
 ) {
     val colors = LocalGlassColors.current
@@ -117,46 +127,53 @@ fun GlasmioAlertDialog(
                         },
                     ),
             )
-            GlasmioAlertSurface(
-                modifier = modifier.align(Alignment.Center),
-                backdrop = backdrop,
-                title = title,
-                message = message,
-                dimAmount = 0f,
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime)),
             ) {
-                content()
-                if (buttons.isNotEmpty()) {
-                    when (buttonLayout) {
-                        GlasmioAlertButtonLayout.SideBySide -> {
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                buttons.forEach { button ->
-                                    GlasmioAlertButton(
-                                        text = button.label,
-                                        onClick = button.onClick,
-                                        modifier = Modifier.weight(1f),
-                                        role = button.role,
-                                        enabled = button.enabled,
-                                    )
+                GlasmioAlertSurface(
+                    modifier = modifier.align(Alignment.Center),
+                    backdrop = backdrop,
+                    title = title,
+                    message = message,
+                    dimAmount = 0f,
+                    titleContent = titleContent,
+                ) {
+                    content()
+                    if (buttons.isNotEmpty()) {
+                        when (buttonLayout) {
+                            GlasmioAlertButtonLayout.SideBySide -> {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    buttons.forEach { button ->
+                                        GlasmioAlertButton(
+                                            text = button.label,
+                                            onClick = button.onClick,
+                                            modifier = Modifier.weight(1f),
+                                            role = button.role,
+                                            enabled = button.enabled,
+                                        )
+                                    }
                                 }
                             }
-                        }
 
-                        GlasmioAlertButtonLayout.Stacked -> {
-                            Column(
-                                Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                buttons.forEach { button ->
-                                    GlasmioAlertButton(
-                                        text = button.label,
-                                        onClick = button.onClick,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        role = button.role,
-                                        enabled = button.enabled,
-                                    )
+                            GlasmioAlertButtonLayout.Stacked -> {
+                                Column(
+                                    Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    buttons.forEach { button ->
+                                        GlasmioAlertButton(
+                                            text = button.label,
+                                            onClick = button.onClick,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            role = button.role,
+                                            enabled = button.enabled,
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -175,6 +192,7 @@ fun GlasmioAlertSurface(
     title: String,
     message: String? = null,
     dimAmount: Float? = null,
+    titleContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit = {},
 ) {
     val colors = LocalGlassColors.current
@@ -237,11 +255,11 @@ fun GlasmioAlertSurface(
                         .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        title,
-                        style = IosTypography.headline,
-                        color = colors.content,
-                    )
+                    if (titleContent != null) {
+                        ProvideTextStyle(IosTypography.headline.copy(color = colors.content), titleContent)
+                    } else {
+                        Text(title, style = IosTypography.headline, color = colors.content)
+                    }
                     message?.let {
                         Text(
                             it,
@@ -316,11 +334,11 @@ fun GlasmioAlertFieldGroup(
     Column(
         modifier
             .fillMaxWidth()
+            .padding(bottom = 19.dp)
             .clip(ContinuousRoundedRectangle(26.dp))
             .background(
                 if (colors.isDark) Color.White.copy(alpha = 0.16f) else Color(0x28787880),
-            )
-            .padding(bottom = 19.dp),
+            ),
         content = content,
     )
 }
@@ -333,6 +351,8 @@ fun GlasmioAlertTextField(
     modifier: Modifier = Modifier,
     singleLine: Boolean = true,
     maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     val colors = LocalGlassColors.current
     val fieldTextStyle = IosTypography.body.copy(fontWeight = FontWeight(510), lineHeight = 20.sp)
@@ -344,8 +364,11 @@ fun GlasmioAlertTextField(
             .height(52.dp)
             .padding(horizontal = 16.dp),
         textStyle = fieldTextStyle.copy(color = colors.content),
+        cursorBrush = SolidColor(colors.accent),
         singleLine = singleLine,
         maxLines = maxLines,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
         decorationBox = { innerTextField ->
             Box(
                 Modifier.fillMaxSize(),

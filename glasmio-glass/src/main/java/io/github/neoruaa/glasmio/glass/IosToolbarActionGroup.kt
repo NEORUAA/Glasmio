@@ -55,6 +55,9 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.modifier.modifierLocalConsumer
+import androidx.compose.ui.modifier.modifierLocalOf
+import androidx.compose.ui.modifier.modifierLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Density
@@ -85,6 +88,8 @@ const val ToolbarDetachProgress = 0.8f
 val LocalIosToolbarActionGroup = staticCompositionLocalOf<ToolbarActionGroup?> { null }
 val LocalToolbarActionSeparation = staticCompositionLocalOf<(() -> Float)?> { null }
 
+internal val ModifierLocalMenuAnchor = modifierLocalOf<GlasmioMenuAnchorState?> { null }
+
 /** Transfers a complete connected toolbar surface to its menu without changing its layout. */
 @Stable
 class GlasmioMenuAnchorState constructor() {
@@ -92,6 +97,8 @@ class GlasmioMenuAnchorState constructor() {
     private var triggerBounds by mutableStateOf<Rect?>(null)
     private var acquiredBounds by mutableStateOf<Rect?>(null)
     private var acquiredGroup: ToolbarActionGroup? = null
+    private var standalonePortal: ToolbarMenuPortal? = null
+    private var standaloneContentPortal: ToolbarMenuPortal? = null
     @Volatile
     var shaderPrograms: LiquidMenuShaderPrograms? = null
         private set
@@ -105,6 +112,8 @@ class GlasmioMenuAnchorState constructor() {
 
     /** Group content is hidden in the final Row draw, after its portal is recorded. */
     val isGroupedSource: Boolean get() = acquiredGroup != null
+    internal val isStandaloneAnchor: Boolean get() = group == null
+    internal val hasStandaloneForeground: Boolean get() = standalonePortal != null
     var isAcquired by mutableStateOf(false)
         private set
 
@@ -129,6 +138,32 @@ class GlasmioMenuAnchorState constructor() {
         triggerBounds = bounds
     }
 
+    internal fun bindStandaloneForeground(layer: GraphicsLayer, size: Size) {
+        if (!isStandaloneAnchor || size.isEmpty()) return
+        val retained = standalonePortal
+        if (retained == null || retained.layer !== layer || retained.sourceBounds.size != size) {
+            standalonePortal = ToolbarMenuPortal(layer, Rect(Offset.Zero, size))
+        }
+        if (isAcquired && acquiredGroup == null) portal = standalonePortal
+    }
+
+    internal fun bindStandaloneContent(layer: GraphicsLayer, size: Size) {
+        if (!isStandaloneAnchor || size.isEmpty()) return
+        val retained = standaloneContentPortal
+        if (retained == null || retained.layer !== layer || retained.sourceBounds.size != size) {
+            standaloneContentPortal = ToolbarMenuPortal(layer, Rect(Offset.Zero, size))
+        }
+        if (isAcquired && acquiredGroup == null) portal = standalonePortal ?: standaloneContentPortal
+    }
+
+    internal fun clearStandaloneForeground(layer: GraphicsLayer) {
+        if (standalonePortal?.layer === layer) standalonePortal = null
+    }
+
+    internal fun clearStandaloneContent(layer: GraphicsLayer) {
+        if (standaloneContentPortal?.layer === layer) standaloneContentPortal = null
+    }
+
     fun acquire(): Rect? {
         if (isAcquired) return acquiredBounds
         val source = triggerBounds?.takeUnless { it.isEmpty } ?: return null
@@ -136,7 +171,8 @@ class GlasmioMenuAnchorState constructor() {
         val run = sourceGroup?.menuSourceRun(source).orEmpty()
         acquiredBounds = if (run.isEmpty()) source else sourceGroup!!.visualBoundsInWindow(run)
         acquiredGroup = sourceGroup.takeIf { run.isNotEmpty() }
-        portal = acquiredGroup?.foregroundPortal(run)
+        portal = acquiredGroup?.foregroundPortal(run) ?:
+            (standalonePortal ?: standaloneContentPortal).takeIf { sourceGroup == null }
         isAcquired = true
         acquiredGroup?.hideMenuSource(this, run)
         return acquiredBounds
@@ -164,9 +200,50 @@ fun rememberGlasmioMenuAnchorState(): GlasmioMenuAnchorState {
 @Composable
 fun Modifier.glasmioMenuAnchor(state: GlasmioMenuAnchorState): Modifier {
     val group = LocalIosToolbarActionGroup.current
+    val contentLayer = rememberGraphicsLayer()
+    DisposableEffect(state, contentLayer) {
+        onDispose { state.clearStandaloneContent(contentLayer) }
+    }
     LaunchedEffect(state) { withContext(Dispatchers.Default) { state.prewarmShaders() } }
     return onGloballyPositioned { state.bind(group, it.boundsInWindow()) }
-        .graphicsLayer { alpha = if (state.isAcquired && !state.isGroupedSource) 0f else 1f }
+        .modifierLocalProvider(ModifierLocalMenuAnchor) { state }
+        .graphicsLayer {
+            // Generic anchors without a foreground recorder stay visible during handoff.
+            alpha = if (state.isAcquired && !state.isGroupedSource && state.portal != null) 0f else 1f
+        }
+        .drawWithContent {
+            if (!state.isStandaloneAnchor || state.hasStandaloneForeground) {
+                drawContent()
+            } else {
+                // A plain Row owns no separate glass pass. Retain its complete content,
+                // while a nested GlassSurface supplies its material-free foreground.
+                if (!state.isAcquired || state.portal == null) {
+                    contentLayer.record { this@drawWithContent.drawContent() }
+                    state.bindStandaloneContent(contentLayer, size)
+                }
+                drawLayer(contentLayer)
+            }
+        }
+}
+
+/** Retain only a standalone surface's foreground; its material remains owned by the morph. */
+@Composable
+internal fun rememberMenuAnchorForeground(): Modifier {
+    var anchor by remember { mutableStateOf<GlasmioMenuAnchorState?>(null) }
+    val foreground = if (anchor?.isStandaloneAnchor == true) rememberGraphicsLayer() else null
+    DisposableEffect(anchor, foreground) {
+        val state = anchor
+        onDispose { if (foreground != null) state?.clearStandaloneForeground(foreground) }
+    }
+    return Modifier
+        .modifierLocalConsumer { anchor = ModifierLocalMenuAnchor.current }
+        // A nested surface must not replace its enclosing button's retained foreground.
+        .modifierLocalProvider(ModifierLocalMenuAnchor) { null }
+        .then(if (foreground != null) Modifier.drawWithContent {
+            foreground.record { this@drawWithContent.drawContent() }
+            anchor?.bindStandaloneForeground(foreground, size)
+            drawLayer(foreground)
+        } else Modifier)
 }
 
 /** Shares only the material; each action retains its own hit target and interaction state. */

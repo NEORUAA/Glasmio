@@ -6,21 +6,9 @@ import io.github.neoruaa.glasmio.icons.*
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,11 +16,29 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.animation.core.*
+import androidx.compose.runtime.*
+import com.kyant.shapes.Capsule
+import kotlin.math.roundToInt
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kyant.capsule.ContinuousRoundedRectangle
-import kotlinx.coroutines.flow.first
 
 
 /** Figma node 781:15374 grouped-list container. Use ordinary rows inside for GPU efficiency. */
@@ -84,6 +90,7 @@ fun GlasmioGroupedList(
     }
 }
 
+/** Apple's 52dp regular row and 68dp title/subtitle row. Accessories remain caller-owned slots. */
 @Composable
 fun GlasmioListRow(
     title: String,
@@ -95,62 +102,201 @@ fun GlasmioListRow(
     onClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
     showTopSeparator: Boolean = true,
+    enabled: Boolean = true,
+    showDisclosure: Boolean = onClick != null && trailing == null,
+    titleColor: Color = Color.Unspecified,
+    titleAlignment: TextAlign = TextAlign.Start,
 ) {
     val colors = LocalGlassColors.current
     Row(
         modifier
             .fillMaxWidth()
-            .height(if (subtitle == null) 52.dp else 62.dp)
-            .drawBehind {
-                if (showTopSeparator) {
-                    drawLine(
-                        colors.separator,
-                        androidx.compose.ui.geometry.Offset(16.dp.toPx(), 0f),
-                        androidx.compose.ui.geometry.Offset(size.width - 16.dp.toPx(), 0f),
-                        1.dp.toPx(),
-                    )
-                }
-            }
-            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+            .height(if (subtitle == null) 52.dp else 68.dp)
+            .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
+            .alpha(if (enabled) 1f else 0.4f)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        leading?.let { it(); Spacer(Modifier.width(12.dp)) }
+        leading?.let { it(); Spacer(Modifier.width(8.dp)) }
         systemName?.let {
             SfIcon(it, null, size = 23.dp, tint = colors.accent)
             Spacer(Modifier.width(12.dp))
         }
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = IosTypography.body,
-                color = colors.content,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            subtitle?.let {
+        Row(
+            Modifier.weight(1f).fillMaxHeight().drawBehind {
+                if (showTopSeparator) {
+                    drawLine(colors.separator, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx())
+                }
+            },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    it,
-                    style = IosTypography.subheadline,
-                    color = colors.secondaryContent,
+                    title,
+                    modifier = Modifier.fillMaxWidth(),
+                    style = IosTypography.body,
+                    color = if (titleColor == Color.Unspecified) colors.content else titleColor,
+                    textAlign = titleAlignment,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                subtitle?.let {
+                    Text(
+                        it,
+                        style = IosTypography.subheadline,
+                        color = colors.secondaryContent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-        }
-        detail?.let { Text(it, style = IosTypography.subheadline, color = colors.secondaryContent) }
-        trailing?.let { trailingContent ->
-            CompositionLocalProvider(
-                LocalGroupedListIconColor provides colors.content,
-                LocalContentColor provides colors.content,
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                trailingContent()
+                detail?.let {
+                    Text(it, style = IosTypography.body, color = colors.secondaryContent, maxLines = 1)
+                }
+                trailing?.let { trailingContent ->
+                    CompositionLocalProvider(
+                        LocalGroupedListIconColor provides colors.content,
+                        LocalContentColor provides colors.content,
+                    ) { trailingContent() }
+                }
+                if (showDisclosure) {
+                    Box(Modifier.size(width = 8.dp, height = 22.dp), contentAlignment = Alignment.Center) {
+                        SfIcon("chevron.forward", null, size = 17.dp, tint = colors.tertiaryContent)
+                    }
+                }
             }
-        }
-        if (onClick != null && trailing == null) {
-            Spacer(Modifier.width(8.dp)); SfIcon("chevron.forward", null, size = 12.dp, tint = colors.separator)
         }
     }
 }
 
-/** Figma node 5661:43368 stepper. */
+/** Figma 50:56535: the section label is emphasized body text, with its original casing. */
+@Composable
+fun GlasmioSectionTitle(title: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier.fillMaxWidth().height(39.dp).padding(horizontal = 16.dp).padding(bottom = 9.dp),
+        contentAlignment = Alignment.BottomStart,
+    ) {
+        Text(
+            title,
+            style = IosTypography.body.copy(fontWeight = FontWeight(590)),
+            color = LocalGlassColors.current.secondaryContent,
+        )
+    }
+}
+
+/** Figma 35:55757. The footer expands naturally when its explanatory text wraps. */
+@Composable
+fun GlasmioGroupedTableFooter(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier = modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 6.dp),
+        style = IosTypography.body.copy(fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = (-0.08).sp),
+        color = LocalGlassColors.current.secondaryContent,
+    )
+}
+
+/** Figma 30:53802: the collapsed date/time accessory uses a flat 34dp capsule. */
+@Composable
+fun GlasmioListValuePill(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val colors = LocalGlassColors.current
+    Box(
+        modifier.height(34.dp).clip(Capsule()).background(colors.segmentedControlBackground)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 11.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, style = IosTypography.body, color = colors.content.copy(alpha = if (enabled) 1f else 0.4f))
+    }
+}
+
+/** Reveals caller-owned actions without deleting or mutating the row's data. */
+@Composable
+fun GlasmioListSwipeActions(
+    revealed: Boolean,
+    onRevealedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    actionsAtStart: Boolean = false,
+    actions: @Composable RowScope.() -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    var actionWidth by remember { mutableIntStateOf(0) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    var dragging by remember { mutableStateOf(false) }
+    val towardRight = actionsAtStart == (layoutDirection == LayoutDirection.Ltr)
+    val sign = if (towardRight) 1f else -1f
+    val distance = actionWidth + with(density) { 10.dp.toPx() }
+    val target = if (revealed) sign * distance else 0f
+    val offset by animateFloatAsState(
+        targetValue = if (dragging) dragOffset else target,
+        animationSpec = if (dragging) snap() else spring(stiffness = Spring.StiffnessMediumLow),
+        label = "ListSwipeActions",
+    )
+    val visible = revealed || dragging || kotlin.math.abs(offset) > 0.5f
+    val dragState = rememberDraggableState { delta ->
+        dragOffset = (dragOffset + delta).coerceIn(
+            if (towardRight) 0f else -distance,
+            if (towardRight) distance else 0f,
+        )
+    }
+    Box(modifier.fillMaxWidth().clipToBounds()) {
+        Row(
+            Modifier.align(if (actionsAtStart) Alignment.CenterStart else Alignment.CenterEnd)
+                .onSizeChanged { actionWidth = it.width }
+                .padding(horizontal = 16.dp)
+                .alpha(if (visible) 1f else 0f)
+                .then(if (visible) Modifier else Modifier.clearAndSetSemantics {}),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = actions,
+        )
+        Box(
+            Modifier.fillMaxWidth().absoluteOffset { IntOffset(offset.roundToInt(), 0) }
+                .clip(Capsule()).background(LocalGlassColors.current.elevatedBackground)
+                .draggable(
+                    state = dragState,
+                    orientation = Orientation.Horizontal,
+                    onDragStarted = { dragOffset = offset; dragging = true },
+                    onDragStopped = {
+                        onRevealedChange(kotlin.math.abs(dragOffset) >= distance / 2f)
+                        dragging = false
+                    },
+                ),
+        ) { content() }
+    }
+}
+
+/** Apple's 60×44 symbol action and 84×44 inline symbol/label action. */
+@Composable
+fun GlasmioListSwipeAction(
+    systemName: String,
+    onClick: () -> Unit,
+    containerColor: Color,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    contentDescription: String? = label,
+) {
+    Row(
+        modifier.height(44.dp).widthIn(min = if (label == null) 60.dp else 84.dp)
+            .clip(Capsule()).background(containerColor)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SfIcon(systemName, contentDescription, size = if (label == null) 17.dp else 16.dp, tint = Color.White)
+        label?.let {
+            Text(it, style = IosTypography.body.copy(fontSize = 13.sp, lineHeight = 15.sp), color = Color.White)
+        }
+    }
+}

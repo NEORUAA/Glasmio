@@ -70,7 +70,11 @@ data class GlasmioCascadingMenuItem(
     val subtitle: String? = null,
 )
 
-/** Uses the settings popup lifecycle, glass surface, and interactive menu rows unchanged. */
+/**
+ * A dropdown menu sharing the popup lifecycle, glass surface, and interactive rows.
+ * Transfers a toolbar or standalone anchor into the menu by default.
+ * Disable [morphFromAnchor] for a host that does not use source-preview morphing.
+ */
 @Composable
 fun GlasmioCascadingMenu(
     anchorBounds: Rect?,
@@ -87,6 +91,7 @@ fun GlasmioCascadingMenu(
     centerHorizontally: Boolean = false,
     expandFromAnchor: Alignment.Horizontal? = null,
     forceBelowAnchor: Boolean = false,
+    morphFromAnchor: Boolean = true,
 ) {
     var open by remember { mutableStateOf(false) }
     var started by remember { mutableStateOf(false) }
@@ -164,6 +169,7 @@ fun GlasmioCascadingMenu(
         onMenuBoundsChanged = { menuBounds = it },
         onMenuAlphaChanged = { onTriggerAlphaChanged?.invoke(1f - it) },
         menuAnchorState = menuAnchorState,
+        morphFromAnchor = morphFromAnchor,
         onClosed = {
             if (started && !open) {
                 onDismiss()

@@ -1,13 +1,17 @@
 package io.github.neoruaa.glasmio.preference
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -16,58 +20,86 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import com.kyant.capsule.ContinuousRoundedRectangle
-import io.github.neoruaa.glasmio.ui.*
+import io.github.neoruaa.glasmio.ui.GlasmioAlertButtonRole
+import io.github.neoruaa.glasmio.ui.GlasmioAlertButtonSpec
+import io.github.neoruaa.glasmio.ui.GlasmioAlertDialog
+import io.github.neoruaa.glasmio.ui.GlasmioAlertFieldGroup
+import io.github.neoruaa.glasmio.ui.GlasmioAlertTextField
 
 @Composable
 internal fun PreferenceListDialog(
+    title: @Composable () -> Unit,
     onDismiss: () -> Unit,
     content: LazyListScope.() -> Unit,
 ) {
     val maxHeight = LocalConfiguration.current.screenHeightDp.dp / 2
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        GlasmioCard(Modifier.padding(24.dp)) {
-            LazyColumn(Modifier.heightIn(max = maxHeight), content = content)
-        }
+    GlasmioAlertDialog(
+        onDismissRequest = onDismiss,
+        title = "",
+        titleContent = title,
+        buttons = listOf(
+            GlasmioAlertButtonSpec(
+                stringResource(android.R.string.cancel),
+                onDismiss,
+                GlasmioAlertButtonRole.Cancel,
+            ),
+        ),
+    ) {
+        LazyColumn(Modifier.heightIn(max = maxHeight), content = content)
     }
 }
 
 @Composable
 internal fun PreferenceTextFieldDialog(
+    title: @Composable () -> Unit,
     initialTextFieldValue: TextFieldValue,
     singleLine: Boolean,
     isInputValid: (String) -> Boolean,
     onDone: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var value by remember { mutableStateOf(initialTextFieldValue) }
+    // The caller's persisted value initializes a separate draft for this dialog session.
+    var value by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(initialTextFieldValue)
+    }
+    var submitted by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     fun submit() {
-        if (isInputValid(value.text)) {
+        if (!submitted && isInputValid(value.text)) {
+            submitted = true
             onDone(value.text)
             onDismiss()
         }
     }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        GlasmioCard(Modifier.padding(24.dp)) {
-            Column(Modifier.padding(16.dp)) {
-                TextField(
-                    value = value,
-                    onValueChange = { value = it },
-                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
-                    singleLine = singleLine,
-                    shape = ContinuousRoundedRectangle(16.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = if (singleLine) ImeAction.Done else ImeAction.Default),
-                    keyboardActions = KeyboardActions(onDone = { submit() }),
-                )
-                Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GlasmioAlertButton(stringResource(android.R.string.cancel), onDismiss, Modifier.weight(1f), role = GlasmioAlertButtonRole.Cancel)
-                    GlasmioAlertButton(stringResource(android.R.string.ok), ::submit, Modifier.weight(1f), enabled = isInputValid(value.text))
-                }
-            }
+    GlasmioAlertDialog(
+        onDismissRequest = onDismiss,
+        title = "",
+        titleContent = title,
+        buttons = listOf(
+            GlasmioAlertButtonSpec(
+                stringResource(android.R.string.cancel),
+                onDismiss,
+                GlasmioAlertButtonRole.Cancel,
+            ),
+            GlasmioAlertButtonSpec(
+                stringResource(android.R.string.ok),
+                ::submit,
+                enabled = !submitted && isInputValid(value.text),
+            ),
+        ),
+    ) {
+        GlasmioAlertFieldGroup {
+            GlasmioAlertTextField(
+                value = value,
+                onValueChange = { value = it },
+                modifier = Modifier.focusRequester(focus),
+                singleLine = singleLine,
+                keyboardOptions = KeyboardOptions(
+                    imeAction = if (singleLine) ImeAction.Done else ImeAction.Default,
+                ),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
+            )
         }
     }
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    LaunchedEffect(focus) { focus.requestFocus() }
 }

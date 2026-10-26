@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -58,7 +59,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.disabled
@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
@@ -89,6 +90,15 @@ import kotlinx.coroutines.launch
 
 
 private val LocalIosPopupMenuInteractive = staticCompositionLocalOf { true }
+
+// AnimationKit MorphAnimationSettings.liquidMorph copies this content spring to
+// width, height, position and transform (UIKitCore/AnimationKit iOS 27).
+// Stiffness is (2 * PI / response)^2 for the native 0.3 s response and unit mass.
+private val DropdownMorphSpring = spring<Float>(
+    dampingRatio = 0.8f,
+    stiffness = 438.64908f,
+    visibilityThreshold = 0.001f,
+)
 
 /** Overflow room around the menu so spring overshoot, velocity deformation, blur bleed and the
  *  drop shadow can draw past the resting bounds without being clipped by the popup host. The
@@ -218,7 +228,7 @@ fun GlasmioContextMenu(
     val radius = 34.dp
     var menuScreenOrigin by remember { mutableStateOf<Offset?>(null) }
     val menuShape = remember(radius) { ContinuousRoundedRectangle(radius) }
-    val transitionScale = 0.24f + 0.76f * animationProgress
+    val transitionScale = 0.2f + 0.8f * animationProgress
     val startOrigin = initialTransformOrigin ?: TransformOrigin(1f, if (opensAbove) 1f else 0f)
     val originProgress = transformOriginProgress.coerceIn(0f, 1f)
     val transitionOrigin = TransformOrigin(
@@ -373,6 +383,7 @@ fun GlasmioContextMenu(
  * Keeps one Popup and one connected source through opening, retargeting and collapse.
  * Toolbar menus use independent liquid geometry and optical channels; other anchors retain
  * the compact popup transition. The source returns only after the physical surface settles.
+ * [morphFromAnchor] controls the source transfer independently of anchor measurement.
  */
 @Composable
 fun GlasmioMenu(
@@ -398,6 +409,7 @@ fun GlasmioMenu(
     onClosed: (() -> Unit)? = null,
     overlayContent: @Composable BoxScope.(() -> Float) -> Unit = {},
     anchor: @Composable (onClick: () -> Unit) -> Unit,
+    morphFromAnchor: Boolean = true,
     content: @Composable ColumnScope.(LayerBackdrop, close: () -> Unit) -> Unit,
 ) {
     var anchorSize by remember { mutableStateOf(IntSize.Zero) }
@@ -406,12 +418,16 @@ fun GlasmioMenu(
     var opensAbove by remember { mutableStateOf(false) }
     var anchorFractionX by remember { mutableFloatStateOf(1f) }
     val progress = remember { Animatable(0f) }
-    val transformOriginProgress = remember { Animatable(0f) }
     val menuAlpha = remember { Animatable(0f) }
     val shadowAlpha = remember { Animatable(0f) }
     val localMenuAnchor = rememberGlasmioMenuAnchorState()
     val sourceAnchor = menuAnchorState ?: localMenuAnchor
     val toolbarGroup = LocalIosToolbarActionGroup.current
+    LaunchedEffect(localMenuAnchor, menuAnchorState, externalAnchorBounds, toolbarGroup) {
+        if (menuAnchorState == null && externalAnchorBounds != null) {
+            localMenuAnchor.bind(toolbarGroup, externalAnchorBounds)
+        }
+    }
     LaunchedEffect(sourceAnchor, toolbarGroup) {
         if (toolbarGroup != null) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             sourceAnchor.prewarmShaders()
@@ -420,7 +436,7 @@ fun GlasmioMenu(
     val hostView = LocalView.current
     val density = LocalDensity.current
     val liquidMotion = remember { LiquidMenuMorphMotion() }
-    val morphsToolbar = menuAnchorState != null || toolbarGroup != null
+    val usesAnchorMorph = morphFromAnchor
     var windowScreenOffset by remember { mutableStateOf(Offset.Zero) }
     DisposableEffect(sourceAnchor) { onDispose { sourceAnchor.release() } }
     var morphSourceBounds by remember { mutableStateOf<Rect?>(null) }
@@ -431,7 +447,7 @@ fun GlasmioMenu(
     val resolvedFullScreen = fullScreen || usesMorph
     val contentAlpha = if (usesMorph) {
         ((progress.value - 0.12f) / 0.64f).coerceIn(0f, 1f)
-    } else progress.value.coerceIn(0f, 1f)
+    } else 1f
 
     LaunchedEffect(expanded) {
         if (expanded) {
@@ -440,7 +456,7 @@ fun GlasmioMenu(
                 surfaceReady = false
                 measuredMorphTarget = null
                 positionAnchorBounds = externalAnchorBounds
-                if (morphsToolbar) {
+                if (usesAnchorMorph) {
                     val source = snapshotFlow { sourceAnchor.bounds?.takeUnless { it.isEmpty } }.first { it != null }!!
                     val screen = IntArray(2)
                     val window = IntArray(2)
@@ -468,22 +484,18 @@ fun GlasmioMenu(
             coroutineScope {
                 if (morphSourceBounds != null) launch {
                     progress.snapTo(1f)
-                    transformOriginProgress.snapTo(1f)
                     shadowAlpha.snapTo(1f)
                     liquidMotion.animateTo(true)
                 } else launch {
-                    progress.animateTo(1f, spring(
-                        // AnimationKit liquidMorph: response 0.3 s, mass normalized to 1.
-                        dampingRatio = 0.8f,
-                        stiffness = 438.65f,
-                        visibilityThreshold = 0.001f,
-                    ))
+                    progress.animateTo(1f, DropdownMorphSpring)
                 }
                 if (morphSourceBounds == null) {
-                    launch { transformOriginProgress.animateTo(1f, spring(dampingRatio = 0.78f, stiffness = 500f)) }
-                    launch { shadowAlpha.animateTo(1f, tween(200)) }
+                    // Native contentMorph sets the platform view alpha in the same spring
+                    // transaction. Fade the whole surface once, including its shadow.
+                    launch { menuAlpha.animateTo(1f, DropdownMorphSpring) }
+                } else {
+                    launch { menuAlpha.animateTo(1f, tween(120)) }
                 }
-                launch { menuAlpha.animateTo(1f, tween(120)) }
             }
         } else {
             if (popupAlive) coroutineScope {
@@ -497,11 +509,11 @@ fun GlasmioMenu(
                     liquidMotion.animateTo(false)
                 }
                 if (morphSourceBounds == null) {
-                    launch { progress.animateTo(0f, spring(dampingRatio = 0.9f, stiffness = 438.65f, visibilityThreshold = 0.001f)) }
-                    launch { transformOriginProgress.animateTo(0f, tween(300)) }
-                    launch { shadowAlpha.animateTo(0f, tween(160)) }
+                    launch { progress.animateTo(0f, DropdownMorphSpring) }
+                    launch { menuAlpha.animateTo(0f, DropdownMorphSpring) }
+                } else {
+                    launch { menuAlpha.animateTo(0f, tween(300)) }
                 }
-                launch { menuAlpha.animateTo(0f, tween(300)) }
             }
             sourceAnchor.release()
             popupAlive = false
@@ -522,13 +534,14 @@ fun GlasmioMenu(
 
     val anchorFadePaint = remember { Paint() }
 
-    Box(modifier.onSizeChanged { anchorSize = it }.onGloballyPositioned {
-        if (menuAnchorState == null) localMenuAnchor.bind(toolbarGroup, it.boundsInWindow())
-    }) {
+    Box(modifier.onSizeChanged { anchorSize = it }
+        .then(if (menuAnchorState == null && externalAnchorBounds == null) {
+            Modifier.glasmioMenuAnchor(localMenuAnchor)
+        } else Modifier)) {
         Box(
             Modifier
                 .drawWithContent {
-                    val alpha = if (sourceAnchor.isAcquired && !sourceAnchor.isGroupedSource) {
+                    val alpha = if (sourceAnchor.isAcquired && !sourceAnchor.isGroupedSource && sourceAnchor.portal != null) {
                         0f
                     } else if (keepAnchorVisible || usesMorph) {
                         1f
@@ -674,10 +687,10 @@ fun GlasmioMenu(
                             },
                             backdrop = backdrop,
                             animationProgress = progress.value,
-                            transformOriginProgress = transformOriginProgress.value,
+                            transformOriginProgress = if (usesMorph) 1f else 0f,
                             menuAlpha = if (usesMorph) 1f else menuAlpha.value,
                             contentAlpha = contentAlpha,
-                            shadowAlpha = shadowAlpha.value,
+                            shadowAlpha = if (usesMorph) shadowAlpha.value else 1f,
                             opensAbove = opensAbove,
                             itemCount = itemCount,
                             heightOverride = heightOverride,
@@ -727,6 +740,7 @@ fun <T> GlasmioPopUpButton(
         anchor = { openMenu ->
             Row(
                 Modifier
+                    .height(44.dp)
                     .clickable(
                         enabled = enabled,
                         interactionSource = null,
@@ -735,22 +749,32 @@ fun <T> GlasmioPopUpButton(
                         onClick = openMenu,
                     ),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 Text(
                     text = label(selected),
-                    style = IosTypography.body,
+                    style = IosTypography.body.copy(
+                        fontSize = 18.sp,
+                        lineHeight = 18.sp,
+                        letterSpacing = 0.sp,
+                        fontWeight = FontWeight(590),
+                    ),
                     color = if (enabled) LocalGlassColors.current.accent
                     else LocalGlassColors.current.secondaryContent,
                 )
-                SfIcon(
-                    "chevron.up.chevron.down",
-                    contentDescription = null,
-                    size = 15.dp,
-                    tint = if (enabled) LocalGlassColors.current.accent
-                    else LocalGlassColors.current.secondaryContent,
-                    modifier = Modifier.padding(start = 7.dp),
-                    weight = FontWeight.Bold
-                )
+                CompositionLocalProvider(LocalSfToolbarSymbols provides true) {
+                    SfIcon(
+                        "chevron.up.chevron.down",
+                        contentDescription = null,
+                        size = 18.dp,
+                        fontSize = 18.sp,
+                        tint = if (enabled) LocalGlassColors.current.accent
+                        else LocalGlassColors.current.secondaryContent,
+                        modifier = Modifier.size(width = 14.dp, height = 18.dp),
+                        weight = FontWeight(590),
+                        fontFeatureSettings = "'ss15' 1",
+                    )
+                }
             }
         },
     ) { childBackdrop, close ->

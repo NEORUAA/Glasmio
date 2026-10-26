@@ -10,6 +10,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
@@ -27,6 +28,9 @@ import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.GlassAppearance
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
 import io.github.neoruaa.glasmio.ui.*
+import io.github.neoruaa.glasmio.preference.GlasmioEditTextPreference
+import io.github.neoruaa.glasmio.preference.GlasmioListPreference
+import io.github.neoruaa.glasmio.preference.GlasmioPreferenceEntry
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -116,6 +120,176 @@ class ComponentBehaviorTest {
         rule.onNodeWithContentDescription("Minimum decrease").performClick().assertIsNotEnabled()
     }
 
+    @Test fun preferenceEditorKeepsItsDraftUntilValidConfirmation() {
+        var stored = "Initial name"
+        var commits = 0
+        content {
+            var value by remember { mutableStateOf(stored) }
+            GlasmioEditTextPreference(
+                title = { Text("Display name") },
+                value = value,
+                onValueChange = { value = it; stored = it; commits++ },
+                isInputValid = { it.isNotBlank() },
+            )
+        }
+        val cancel = rule.activity.getString(android.R.string.cancel)
+        val confirm = rule.activity.getString(android.R.string.ok)
+        val editable = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
+        fun editor() = rule.onNode(editable and hasAnyAncestor(isDialog()))
+
+        rule.onNodeWithText("Display name").performClick()
+        rule.onNode(hasText("Display name") and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        editor().assertIsDisplayed().performTextReplacement("Uncommitted draft")
+        rule.onNodeWithText(cancel).performClick()
+        rule.onNode(isDialog()).assertDoesNotExist()
+        rule.runOnIdle { assertEquals("Initial name", stored); assertEquals(0, commits) }
+
+        rule.onNodeWithText("Display name").performClick()
+        editor().assertTextEquals("Initial name").performTextReplacement("")
+        rule.onNodeWithText(confirm).assertIsNotEnabled()
+        editor().performTextReplacement("Updated name")
+        rule.onNodeWithText(confirm).assertIsEnabled().performClick()
+        rule.onNode(isDialog()).assertDoesNotExist()
+        rule.runOnIdle { assertEquals("Updated name", stored); assertEquals(1, commits) }
+
+        rule.onNodeWithText("Display name").performClick()
+        editor().performTextReplacement("Keyboard confirmation")
+        editor().performImeAction()
+        rule.onNode(isDialog()).assertDoesNotExist()
+        rule.runOnIdle { assertEquals("Keyboard confirmation", stored); assertEquals(2, commits) }
+    }
+
+    @Test fun preferenceChoicesHaveATitleAndCancelWithoutSelection() {
+        var selected = "System"
+        var selections = 0
+        content {
+            var value by remember { mutableStateOf(selected) }
+            GlasmioListPreference(
+                title = { Text("Appearance choice") },
+                selectedValue = value,
+                values = listOf("System", "Light", "Dark"),
+                valueText = { it },
+                onValueSelected = { value = it; selected = it; selections++ },
+            )
+        }
+        rule.onNodeWithText("Appearance choice").performClick()
+        rule.onNode(hasText("Appearance choice") and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        rule.onNode(hasText("System") and hasAnyAncestor(isDialog())).assertIsSelected()
+        rule.onNodeWithText(rule.activity.getString(android.R.string.cancel)).performClick()
+        rule.runOnIdle { assertEquals("System", selected); assertEquals(0, selections) }
+        rule.onNodeWithText("Appearance choice").performClick()
+        rule.onNode(hasText("Dark") and hasAnyAncestor(isDialog())).performClick()
+        rule.onNode(isDialog()).assertDoesNotExist()
+        rule.runOnIdle { assertEquals("Dark", selected); assertEquals(1, selections) }
+    }
+
+    @Test fun alertFieldLeavesTheSpecifiedGapBeforeItsButtons() {
+        content {
+            var value by remember { mutableStateOf(TextFieldValue("Name")) }
+            GlasmioAlertDialog(
+                onDismissRequest = {},
+                title = "Input geometry",
+                buttons = listOf(GlasmioAlertButtonSpec("Confirm geometry", {})),
+            ) {
+                GlasmioAlertFieldGroup {
+                    GlasmioAlertTextField(value, { value = it }, modifier = Modifier.testTag("alert-field"))
+                }
+            }
+        }
+        val field = rule.onNodeWithTag("alert-field").fetchSemanticsNode().boundsInRoot
+        val button = rule.onNodeWithText("Confirm geometry").fetchSemanticsNode().boundsInRoot
+        val expectedGap = with(rule.density) { 19.dp.toPx() }
+        assertEquals(expectedGap, button.top - field.bottom, 1f)
+        val fieldInset = with(rule.density) { 16.dp.toPx() }
+        assertEquals(button.left + fieldInset, field.left, 1f)
+        assertEquals(button.right - fieldInset, field.right, 1f)
+    }
+
+    @Test fun stepperKeepsIts92dpCapsuleWhilePressed() {
+        content {
+            Box(Modifier.testTag("stepper-region").background(Color.White).padding(8.dp)) {
+                GlasmioStepper(
+                    1, {}, Modifier.testTag("stepper-geometry"), range = 0..2,
+                    decreaseContentDescription = "Geometry decrease", increaseContentDescription = "Geometry increase",
+                )
+            }
+        }
+        rule.onNodeWithTag("stepper-geometry").assertWidthIsEqualTo(92.dp).assertHeightIsEqualTo(32.dp)
+        val increase = rule.onNodeWithContentDescription("Geometry increase")
+        increase.performTouchInput { down(center) }
+        try {
+            rule.mainClock.advanceTimeBy(160)
+            val pixels = rule.onNodeWithTag("stepper-region").captureToImage().toPixelMap()
+            val inset = with(rule.density) { 8.dp.toPx() }
+            val corner = with(rule.density) { 1.dp.toPx() }
+            val width = with(rule.density) { 92.dp.toPx() }
+            val height = with(rule.density) { 32.dp.toPx() }
+            // These four pixels are inside the control's rectangle and outside its capsule.
+            for (x in listOf(inset + corner, inset + width - corner)) {
+                for (y in listOf(inset + corner, inset + height - corner)) {
+                    val pixel = pixels[x.toInt(), y.toInt()]
+                    assertEquals(1f, pixel.red, 0.01f)
+                    assertEquals(1f, pixel.green, 0.01f)
+                    assertEquals(1f, pixel.blue, 0.01f)
+                }
+            }
+        } finally {
+            increase.performTouchInput { up() }
+        }
+    }
+
+    @Test fun groupedPreferenceSeparatorIsVisibleAndKeepsTheOuterGutterClear() {
+        content {
+            GlasmioGroupedList(Modifier.testTag("preference-separator-group")) {
+                GlasmioPreferenceEntry(title = { Text("First preference") })
+                GlasmioPreferenceEntry(
+                    title = { Text("Second preference") },
+                    modifier = Modifier.testTag("second-preference"),
+                    showTopSeparator = true,
+                )
+            }
+        }
+        val groupNode = rule.onNodeWithTag("preference-separator-group")
+        val groupBounds = groupNode.fetchSemanticsNode().boundsInRoot
+        val secondBounds = rule.onNodeWithTag("second-preference").fetchSemanticsNode().boundsInRoot
+        val pixels = groupNode.captureToImage().toPixelMap()
+        val y = ((secondBounds.top - groupBounds.top) * pixels.height / groupBounds.height).toInt()
+        val sampleOffset = with(rule.density) { 4.dp.roundToPx() }
+        fun contrastAt(x: Int): Float {
+            val reference = pixels[x, (y + sampleOffset).coerceAtMost(pixels.height - 1)]
+            return (-2..2).maxOf { delta ->
+                val actual = pixels[x, (y + delta).coerceIn(0, pixels.height - 1)]
+                (kotlin.math.abs(actual.red - reference.red) +
+                    kotlin.math.abs(actual.green - reference.green) +
+                    kotlin.math.abs(actual.blue - reference.blue)) / 3f
+            }
+        }
+        assertTrue("The row boundary must contain a visible separator", contrastAt((pixels.width * 0.8f).toInt()) > 0.02f)
+        val gutterX = with(rule.density) { 8.dp.roundToPx() }
+        assertTrue("The separator must not extend through the outer gutter", contrastAt(gutterX) < 0.01f)
+    }
+
+    @Test fun popUpButtonSelectsOnceAndKeepsTheSelectionAfterDismissal() {
+        var commits = 0
+        content {
+            var selected by remember { mutableStateOf("Default") }
+            GlasmioPopUpButton(selected, listOf("Default", "Recent"), {
+                selected = it
+                commits++
+            }, { it })
+        }
+        rule.onNodeWithText("Default").performClick()
+        rule.onNodeWithText("Recent").assertIsDisplayed().performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("Default").fetchSemanticsNodes().isEmpty() }
+        rule.runOnIdle { assertEquals(1, commits) }
+        rule.onNodeWithText("Recent").assertIsDisplayed().performClick()
+        rule.onNodeWithText("Default").assertIsDisplayed()
+        pressSystemBack(rule)
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("Default").fetchSemanticsNodes().isEmpty() }
+        rule.onNodeWithText("Recent").assertIsDisplayed()
+        rule.runOnIdle { assertEquals(1, commits) }
+    }
+
     @Test fun searchEditsSubmitsAndKeepsDisabledInputInactive() {
         var submitted = ""
         var disabledActivations = 0
@@ -201,4 +375,85 @@ class SampleNavigationBehaviorTest {
         rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
         rule.onNodeWithText("Search Components").assertDoesNotExist()
     }
+
+    @Test fun rootNavigationCompactsOnScrollAndExpandsWithoutChangingTheTab() {
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty() }
+        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        rule.onAllNodes(tab).assertCountEquals(4)
+        rule.onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performTouchInput {
+            swipeUp(startY = height * 0.75f, endY = height * 0.3f, durationMillis = 400)
+        }
+        rule.waitUntil(10_000) { rule.onAllNodes(tab).fetchSemanticsNodes().size == 1 }
+        rule.onNode(tab and hasContentDescription("主页")).assertIsSelected()
+        rule.onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performTouchInput {
+            swipeDown(startY = height * 0.3f, endY = height * 0.75f, durationMillis = 400)
+        }
+        rule.waitUntil(10_000) { rule.onAllNodes(tab).fetchSemanticsNodes().size == 4 }
+        rule.onNode(tab and hasContentDescription("主页")).assertIsSelected()
+        rule.onNode(tab and hasContentDescription("材质")).performClick().assertIsSelected()
+        rule.onNodeWithText("Regular Small").assertIsDisplayed()
+        rule.onAllNodes(tab).assertCountEquals(4)
+    }
+
+    @Test fun toolbarMenuOpensAndClosesFromItsRealAnchor() {
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText("Menus").performScrollTo().performClick()
+        rule.onNodeWithContentDescription("Menu").assertIsDisplayed().performClick()
+        rule.onNodeWithText("Favorite").assertIsDisplayed()
+        rule.onNodeWithText("Unavailable").assertIsNotEnabled()
+        rule.onNodeWithText("Favorite").performClick()
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("Favorite").fetchSemanticsNodes().isEmpty() }
+        rule.onNodeWithContentDescription("Menu").assertIsDisplayed().performClick()
+        rule.onNodeWithText("Favorite").assertIsDisplayed()
+        pressSystemBack(rule)
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("Favorite").fetchSemanticsNodes().isEmpty() }
+        rule.onNodeWithContentDescription("Menu").assertIsDisplayed()
+    }
+
+
+    @Test fun settingsScrollShowsTheCenteredTitleAndSurvivesRootTabSwitches() {
+        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty() }
+        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        rule.onNode(tab and hasContentDescription("设置")).performClick().assertIsSelected()
+        val scrollable = hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
+        val titleInBody = hasText("Settings") and hasAnyAncestor(scrollable)
+        val toolbarTitle = hasText("Settings") and !hasAnyAncestor(scrollable)
+        val initialLarge = rule.onAllNodes(titleInBody).fetchSemanticsNodes().maxByOrNull { it.boundsInRoot.height }
+            ?: error("Settings must initially show its large title")
+        assertTrue(initialLarge.boundsInRoot.height > with(rule.density) { 28.dp.toPx() })
+        val initialContrast = visibleContrast(rule.onNode(toolbarTitle))
+
+        // Exercise the real LazyColumn action. A page shorter than its viewport cannot satisfy this transition.
+        rule.onNode(scrollable).performScrollToIndex(1)
+        rule.waitForIdle()
+        val compactTitle = rule.onNode(toolbarTitle).assertIsDisplayed()
+        val titleBounds = compactTitle.fetchSemanticsNode().boundsInRoot
+        val viewport = rule.onRoot().fetchSemanticsNode().boundsInRoot
+        assertEquals(viewport.center.x, titleBounds.center.x, with(rule.density) { 1.dp.toPx() })
+        val afterContrast = visibleContrast(compactTitle)
+        assertTrue("The toolbar title must actually become visible after scrolling", afterContrast > 0.25f && afterContrast > initialContrast + 0.15f)
+        val oldLarge = rule.onAllNodes(SemanticsMatcher("original Settings large title") { it.id == initialLarge.id })
+            .fetchSemanticsNodes()
+        val toolbarBottom = titleBounds.bottom + with(rule.density) { 20.dp.toPx() }
+        assertTrue("The large title must leave the body viewport", oldLarge.isEmpty() || oldLarge.all { it.boundsInRoot.bottom <= toolbarBottom })
+
+        rule.onNode(tab and hasContentDescription("关于")).performClick().assertIsSelected()
+        rule.onNode(tab and hasContentDescription("设置")).performClick().assertIsSelected()
+        rule.onAllNodes(tab).assertCountEquals(4)
+        assertTrue("Returning to Settings must retain its scrolled title state", visibleContrast(rule.onNode(toolbarTitle)) > 0.25f)
+    }
+
+    private fun visibleContrast(node: SemanticsNodeInteraction): Float {
+        val pixels = node.captureToImage().toPixelMap()
+        var darkest = 1f
+        var lightest = 0f
+        for (y in 0 until pixels.height) for (x in 0 until pixels.width) {
+            val pixel = pixels[x, y]
+            val brightness = (pixel.red + pixel.green + pixel.blue) / 3f * pixel.alpha + 0.5f * (1f - pixel.alpha)
+            darkest = minOf(darkest, brightness)
+            lightest = maxOf(lightest, brightness)
+        }
+        return lightest - darkest
+    }
+
 }

@@ -866,6 +866,7 @@ fun GlassSurface(
             )
         }
     }
+    val menuAnchorForeground = rememberMenuAnchorForeground()
     val drawSurface: @Composable (Modifier) -> Unit = { surfaceModifier ->
         Box(
             modifier = surfaceModifier
@@ -902,7 +903,8 @@ fun GlassSurface(
                 )
                 .then(if (toolbarMember != null && !sharesToolbarSurface) {
                     Modifier.drawWithContent { toolbarMember.drawForeground(this) }
-                } else Modifier),
+                } else Modifier)
+                .then(menuAnchorForeground),
             contentAlignment = contentAlignment,
             content = {
                 val contentColor = if (emphasis == GlassEmphasis.Prominent) Color.White else colors.content

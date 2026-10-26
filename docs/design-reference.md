@@ -9,6 +9,11 @@ The [Apple iOS and iPadOS 27 design library](https://www.figma.com/design/AmwPTD
 | Segmented Control | `GlasmioSegmentedControl` | `10460:170` | 32 dp compact container, 28 dp selected surface |
 | Stepper | `GlasmioStepper` | `5415:17699` | 92 × 32 dp, 46 dp action halves |
 | Text Field | `GlasmioTextField` | `553:23061` | 52 dp row, 16 dp horizontal inset |
+| Pop-up Button | `GlasmioPopUpButton` | `410:50568`, `410:50570` | 44 dp height, 18 sp Semibold 590 with 18 sp line height, 3 dp gap, 14 × 18 dp Medium symbol |
+| Alert | `GlasmioAlertDialog` | `65:57149`, `12616:942` | 300 dp panel, 34 dp continuous corners, 14 dp outer inset, 19 dp field-to-action gap |
+| List row | `GlasmioListRow` | `550:50627`, `550:50515` | 52 dp single-line or 68 dp subtitle row, inset separators, 17 sp detail |
+| Section Title | `GlasmioSectionTitle` | `50:56535` | 39 dp minimum height, 16 dp horizontal inset, 9 dp bottom inset |
+| Grouped Table Footer | `GlasmioGroupedTableFooter` | `35:55757` | 13 sp text, 18 sp line height, 16 dp horizontal inset |
 
 Buttons retain the host's theme height when `size` is omitted, so the initial migration preserves MeiloX's existing control geometry. Explicit `GlasmioButtonSize` values use the official size terminology. `GlassEmphasis.Regular` and `Prominent` express Glass and Glass Prominent. Destructive and disabled states are caller-controlled.
 
@@ -24,7 +29,7 @@ Figma's native parameters are recorded in [design/ios27-materials.json](design/i
 
 ## Sample wallpaper
 
-Ordinary catalog, preference and About pages use a solid theme background. Material and glass-control demonstrations use these original Apple iPhone assets from the System page, cropped to the viewport. The source images are unchanged PNG exports at 1206 × 2622 pixels.
+Only the Materials tab and Materials catalog page use these original Apple iPhone assets from the System page, cropped to the viewport. All other Sample pages use a solid theme background. The source images are unchanged PNG exports at 1206 × 2622 pixels.
 
 | Asset | Figma node | SHA-256 |
 | --- | --- | --- |

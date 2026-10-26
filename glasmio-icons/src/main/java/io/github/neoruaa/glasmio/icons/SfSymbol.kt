@@ -60,6 +60,7 @@ enum class SfSymbol(
     Warning("exclamationmark.triangle", 0x1001FE),
     Search("magnifyingglass", 0x1002AB),
     Settings("gear", 0x10035F),
+    Gearshape("gearshape", 0x1008CB),
     PersonFilled("person.fill", 0x10026A),
     Waveform("waveform", 0x10066B),
     PlayFilled("play.fill", 0x100284),
@@ -88,6 +89,7 @@ fun SfIcon(
     fontSize: TextUnit = TextUnit.Unspecified,
     weight: FontWeight? = null,
     mirrored: Boolean = false,
+    fontFeatureSettings: String = "'ss16' 1",
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val toolbar = LocalSfToolbarSymbols.current
@@ -106,6 +108,7 @@ fun SfIcon(
         weight = weight ?: if (toolbar) FontWeight.Medium else FontWeight.Normal,
         fitToSlot = !toolbar,
         mirrored = mirrored && symbol.autoMirrored && layoutDirection == LayoutDirection.Rtl,
+        features = fontFeatureSettings,
     )
 }
 
@@ -119,6 +122,7 @@ fun SfIcon(
     fontSize: TextUnit = TextUnit.Unspecified,
     weight: FontWeight? = null,
     mirrored: Boolean = false,
+    fontFeatureSettings: String = "'ss16' 1",
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val toolbar = LocalSfToolbarSymbols.current
@@ -138,6 +142,7 @@ fun SfIcon(
         weight = weight ?: if (toolbar) FontWeight.Medium else FontWeight.Normal,
         fitToSlot = !toolbar,
         mirrored = mirrored && layoutDirection == LayoutDirection.Rtl,
+        features = fontFeatureSettings,
     )
 }
 
@@ -159,6 +164,7 @@ private fun SfIconGlyph(
     weight: FontWeight,
     fitToSlot: Boolean,
     mirrored: Boolean,
+    features: String,
 ) {
     val density = LocalDensity.current
     val baseTypeface = LocalGlasmioSymbolTypeface.current ?: return
@@ -168,12 +174,12 @@ private fun SfIconGlyph(
     val glyph = remember(codePoint) { String(Character.toChars(codePoint)) }
     val requestedSize = with(density) { fontSize.toPx() }
     val iconSize = with(density) { size.toPx() }
-    val drawCache = remember(typeface, glyph, requestedSize, iconSize, fitToSlot) {
+    val drawCache = remember(typeface, glyph, requestedSize, iconSize, fitToSlot, features) {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
             this.typeface = typeface
             textSize = requestedSize
             textAlign = Paint.Align.LEFT
-            fontFeatureSettings = "'ss16' 1"
+            fontFeatureSettings = features
         }
         val bounds = Rect()
         paint.getTextBounds(glyph, 0, glyph.length, bounds)

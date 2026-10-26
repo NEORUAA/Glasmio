@@ -35,7 +35,7 @@ Run the component behavior tests on an Android device or emulator:
 ./gradlew :sample:connectedDebugAndroidTest
 ```
 
-The sample demonstrates materials, controls, navigation, lists, preferences, search, menus, and sheets. Its Home, Materials, and About tabs share a navigation bar with a separate search button. Pages use collapsing titles, progressive edge blur, and Miuix transitions. It builds independently of MeiloX.
+The sample demonstrates materials, controls, navigation, lists, preferences, search, menus, and sheets. Its Home, Materials, Settings, and About tabs share a navigation bar with a separate search button. Pages use collapsing titles and progressive edge blur. Root tabs fade between destinations; detail pages use Miuix transitions. It builds independently of MeiloX.
 
 To render the catalog with SF Symbols, supply your local symbol font for debug builds:
 
