@@ -58,6 +58,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -566,6 +567,7 @@ fun <T> GlasmioNavigationBar(
             isDark = colors.isDark,
             pressProgress = { pressProgressState.value },
             layerBlock = pressLayerBlock,
+            material = NavigationGlassMaterial.RegularSmall,
         )
         val navigationGlassModifier = if (sharesContactSurface) Modifier.graphicsLayer(pressLayerBlock)
         else if (morphing) morphingNavigationGlass else remember(
@@ -587,6 +589,8 @@ fun <T> GlasmioNavigationBar(
                 pressProgressState = pressProgressState,
                 layerBlock = pressLayerBlock,
                 appearance = appearance,
+                material = NavigationGlassMaterial.RegularSmall,
+                blurRadius = NavigationGlassMaterial.RegularSmall.frostRadius,
             )
         }
         val hiddenLayerBackdropModifier = remember(tabsBackdrop) {
@@ -954,6 +958,7 @@ fun <T> GlasmioNavigationBar(
                                 )
                                 .semantics(mergeDescendants = true) {
                                     contentDescription = selectedItem.contentDescription
+                                    selected = true
                                 }
                         } else {
                             Modifier
@@ -993,7 +998,8 @@ private fun <T> FullTabContent(
                             indication = null,
                             role = Role.Tab,
                             onClick = { onSelected(item.key) },
-                        ),
+                        )
+                        .semantics { this.selected = selected },
                     content = {
                         Column(
                             modifier = Modifier

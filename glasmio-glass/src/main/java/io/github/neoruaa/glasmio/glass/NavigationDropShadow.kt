@@ -31,12 +31,17 @@ import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
 
 /** Figma's exterior-only 0/8/15/0 black 2% navigation shadow. */
 class NavigationDropShadowRenderer(
     private val renderScale: Float = 1f,
     private val cacheBlurResult: Boolean = false,
+    private val shadowRadius: Dp = 15.dp,
+    private val shadowOffsetY: Dp = 8.dp,
+    private val shadowAlpha: Float = 0.02f,
 ) {
     init {
         require(renderScale.isFinite() && renderScale > 0f)
@@ -68,7 +73,7 @@ class NavigationDropShadowRenderer(
         if (!canvas.isHardwareAccelerated || bounds.isEmpty || alpha <= 0f) return
         prepare(scope, shape, bounds.size)
         val shadow = prepareShadowNode()
-        shadow.alpha = ShadowAlpha * alpha.coerceIn(0f, 1f)
+        shadow.alpha = shadowAlpha * alpha.coerceIn(0f, 1f)
         val save = canvas.save()
         try {
             canvas.translate(bounds.left, bounds.top)
@@ -94,7 +99,7 @@ class NavigationDropShadowRenderer(
         if (!canvas.isHardwareAccelerated || scope.size.minDimension <= 0f || transform.alpha <= 0f) return
         prepare(scope, shape, scope.size)
         val shadow = prepareShadowNode()
-        shadow.alpha = ShadowAlpha
+        shadow.alpha = shadowAlpha
         val node = transformNode ?: RenderNode("Navigation drop shadow transform").also {
             it.setClipToBounds(false)
             transformNode = it
@@ -149,11 +154,11 @@ class NavigationDropShadowRenderer(
         if (blurDensity != scope.density) {
             // Figma blur 15 is Gaussian sigma 7.5. Android's public radius maps to
             // sigma = radius * 0.57735 + 0.5, so invert after reducing mask pixels.
-            val sigma = 7.5f * scope.density
+            val sigma = (shadowRadius.value * 0.5f) * scope.density
             val radius = ((sigma * renderScale - 0.5f) / 0.57735f).coerceAtLeast(0.001f)
             mask.setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
             padding = ceil(3f * sigma)
-            verticalOffset = 8f * scope.density
+            verticalOffset = shadowOffsetY.value * scope.density
             blurDensity = scope.density
         }
         val requiredWidth = ceil((size.width + padding * 2f) * renderScale).toInt()
@@ -239,9 +244,6 @@ class NavigationDropShadowRenderer(
         val fontScale: Float,
     )
 
-    private companion object {
-        const val ShadowAlpha = 0.02f
-    }
 }
 
 /** Draws outside the backdrop clip while sharing only its live press transform. */
@@ -249,19 +251,25 @@ fun Modifier.navigationGlassDropShadow(
     shape: () -> Shape,
     layerBlock: (GraphicsLayerScope.() -> Unit)? = null,
     cacheBlurResult: Boolean = false,
-): Modifier = then(NavigationGlassDropShadowElement(shape, layerBlock, cacheBlurResult))
+    shadowRadius: Dp = 15.dp,
+    shadowOffsetY: Dp = 8.dp,
+    shadowAlpha: Float = 0.02f,
+): Modifier = then(NavigationGlassDropShadowElement(shape, layerBlock, cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha))
 
 private data class NavigationGlassDropShadowElement(
     val shape: () -> Shape,
     val layerBlock: (GraphicsLayerScope.() -> Unit)?,
     val cacheBlurResult: Boolean,
+    val shadowRadius: Dp,
+    val shadowOffsetY: Dp,
+    val shadowAlpha: Float,
 ) : ModifierNodeElement<NavigationGlassDropShadowNode>() {
-    override fun create() = NavigationGlassDropShadowNode(shape, layerBlock, cacheBlurResult)
+    override fun create() = NavigationGlassDropShadowNode(shape, layerBlock, cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha)
 
     override fun update(node: NavigationGlassDropShadowNode) {
         node.shape = shape
         node.layerBlock = layerBlock
-        node.updateBlurResultCache(cacheBlurResult)
+        node.updateConfiguration(cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha)
         node.invalidateDraw()
     }
 
@@ -277,15 +285,21 @@ private class NavigationGlassDropShadowNode(
     var shape: () -> Shape,
     var layerBlock: (GraphicsLayerScope.() -> Unit)?,
     private var cacheBlurResult: Boolean,
+    private var shadowRadius: Dp,
+    private var shadowOffsetY: Dp,
+    private var shadowAlpha: Float,
 ) : DrawModifierNode, Modifier.Node() {
-    private var renderer = NavigationDropShadowRenderer(cacheBlurResult = cacheBlurResult)
+    private var renderer = NavigationDropShadowRenderer(cacheBlurResult = cacheBlurResult, shadowRadius = shadowRadius, shadowOffsetY = shadowOffsetY, shadowAlpha = shadowAlpha)
     private val layerScope = GraphicsLayerBlockScope()
 
-    fun updateBlurResultCache(enabled: Boolean) {
-        if (cacheBlurResult == enabled) return
+    fun updateConfiguration(enabled: Boolean, radius: Dp, offsetY: Dp, alpha: Float) {
+        if (cacheBlurResult == enabled && shadowRadius == radius && shadowOffsetY == offsetY && shadowAlpha == alpha) return
         renderer.release()
         cacheBlurResult = enabled
-        renderer = NavigationDropShadowRenderer(cacheBlurResult = enabled)
+        shadowRadius = radius
+        shadowOffsetY = offsetY
+        shadowAlpha = alpha
+        renderer = NavigationDropShadowRenderer(cacheBlurResult = enabled, shadowRadius = radius, shadowOffsetY = offsetY, shadowAlpha = alpha)
     }
 
     override fun ContentDrawScope.draw() {

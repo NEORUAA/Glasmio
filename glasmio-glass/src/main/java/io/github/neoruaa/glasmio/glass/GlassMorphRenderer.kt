@@ -64,14 +64,17 @@ fun rememberGlassMorphRenderer(
     blurRadius: Dp = 2.dp,
     renderScale: Float = DefaultGlassRenderScale,
     programs: LiquidMenuShaderPrograms? = null,
+    materialPreset: NavigationGlassMaterial? = null,
+    isDark: Boolean = false,
 ): GlassMorphRenderer {
     val density = LocalDensity.current
     val appearance = LocalGlassAppearance.current
     val source = rememberGraphicsLayer()
     val refracted = rememberGraphicsLayer()
     val material = rememberGraphicsLayer()
-    val renderer = remember(backdrop, density, blurRadius, renderScale, source, refracted, material, appearance, programs) {
-        GlassMorphRenderer(backdrop, density, blurRadius, renderScale, source, refracted, material, appearance, programs)
+    val materialDark = materialPreset != null && isDark
+    val renderer = remember(backdrop, density, blurRadius, renderScale, source, refracted, material, appearance, programs, materialPreset, materialDark) {
+        GlassMorphRenderer(backdrop, density, blurRadius, renderScale, source, refracted, material, appearance, programs, materialPreset, materialDark)
     }
     DisposableEffect(renderer, active) {
         // Keep shaders/layers across endpoints, but never reuse an old capture when a new
@@ -104,14 +107,21 @@ class GlassMorphRenderer(
     private val material: GraphicsLayer,
     private val appearance: GlassAppearance,
     programs: LiquidMenuShaderPrograms? = null,
+    private val materialPreset: NavigationGlassMaterial? = null,
+    private val materialDark: Boolean = false,
 ) {
     private val shader = if (appearance.usesRefraction) programs?.refraction ?: RuntimeShader(TransitionRefractionShader) else null
     private val highlight = programs?.highlight ?: RuntimeShader(TransitionHighlightShader)
     private val highlightBrush = ShaderBrush(highlight)
     private val pressLight = PressHighlightRenderer()
     private val innerShadows = NavigationInnerShadowRenderer(renderScale = renderScale)
-    private val dropShadow = NavigationDropShadowRenderer(renderScale = renderScale)
-    private val shadowLiftEffect = if (appearance.usesBackdrop) navigationShadowLiftEffect() else null
+    private val dropShadow = NavigationDropShadowRenderer(
+        renderScale = renderScale,
+        shadowRadius = materialPreset?.shadowRadius ?: 15.dp,
+        shadowOffsetY = materialPreset?.shadowOffsetY ?: 8.dp,
+        shadowAlpha = materialPreset?.let { if (materialDark) it.darkShadowAlpha else it.lightShadowAlpha } ?: 0.02f,
+    )
+    private val shadowLiftEffect = if (appearance.usesBackdrop && materialPreset == null) navigationShadowLiftEffect() else null
     private val reusableOutlinePath = Path()
     private var materialWidth = 0
     private var materialHeight = 0
@@ -163,6 +173,7 @@ class GlassMorphRenderer(
         pressHighlight: GlassPressHighlight? = null,
         pressHighlightBounds: Rect? = null,
         outlinePath: Path? = null,
+        materialTint: Color? = null,
     ) = with(scope) {
         if (bounds.isEmpty || viewport.isEmpty) return@with
         val recordedLayoutDirection = layoutDirection
@@ -267,7 +278,7 @@ class GlassMorphRenderer(
         } else refractionEffect
         refracted.renderEffect = sampledEffect?.asComposeRenderEffect()
 
-        if (navigationOutline) {
+        if (navigationOutline && materialPreset == null) {
             val sideExpansion = 1.4.dp.toPx()
             withTransform({
                 scale((bounds.width + sideExpansion) / bounds.width, 1f, bounds.center)
@@ -352,7 +363,7 @@ class GlassMorphRenderer(
                             scale(1f / renderScale, 1f / renderScale, Offset.Zero)
                         }) { drawLayer(refracted) }
                         inset(bounds.left, bounds.top, size.width - bounds.right, size.height - bounds.bottom) {
-                            drawNavigationGlassMaterial(tint, isDark, tintMultiplier)
+                            drawNavigationGlassMaterial(tint, isDark, tintMultiplier, materialPreset, materialTint)
                         }
                         innerShadows.draw(this, shape, bounds, isDark)
                     } finally {
@@ -436,8 +447,14 @@ fun rememberMorphingNavigationGlass(
     verticalTravel: Dp = 0.dp,
     morphProgress: () -> Float = { 0f },
     backdropPosition: (() -> Offset)? = null,
+    material: NavigationGlassMaterial? = null,
+    materialTint: Color? = null,
 ): Modifier {
-    val renderer = rememberGlassMorphRenderer(backdrop, active, if (lensSource) 8.dp else 2.dp)
+    val surfaceMaterial = material.takeUnless { lensSource }
+    val renderer = rememberGlassMorphRenderer(
+        backdrop, active, if (lensSource) 8.dp else surfaceMaterial?.frostRadius ?: 2.dp,
+        materialPreset = surfaceMaterial, isDark = isDark,
+    )
     val view = LocalView.current
     if (!active) return Modifier
     val recording = remember(renderer, view.width, view.height) { MorphCaptureBand() }
@@ -496,6 +513,7 @@ fun rememberMorphingNavigationGlass(
                     dropShadowAlpha = if (lensSource) 0f else 1f,
                     isDark = isDark,
                     sampleScale = sampleScale,
+                    materialTint = materialTint,
                 )
             }
             drawContent()

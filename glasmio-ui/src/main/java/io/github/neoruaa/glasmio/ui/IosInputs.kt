@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kyant.shapes.Capsule
@@ -50,6 +51,7 @@ fun GlasmioTextField(
     keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     val colors = LocalGlassColors.current
+    val fieldTextStyle = IosTypography.body.copy(fontWeight = FontWeight(510))
     Row(
         modifier
             .fillMaxWidth()
@@ -71,14 +73,14 @@ fun GlasmioTextField(
             onValueChange,
             modifier = Modifier.weight(1f),
             enabled = enabled,
-            textStyle = IosTypography.body.copy(color = colors.content),
+            textStyle = fieldTextStyle.copy(color = colors.content),
             cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.accent),
             singleLine = true,
             visualTransformation = visualTransformation,
             keyboardOptions = keyboardOptions,
             keyboardActions = keyboardActions,
             decorationBox = { inner ->
-                if (value.isEmpty()) Text(placeholder, style = IosTypography.body, color = colors.tertiaryContent)
+                if (value.isEmpty()) Text(placeholder, style = fieldTextStyle, color = colors.tertiaryContent)
                 inner()
             },
         )

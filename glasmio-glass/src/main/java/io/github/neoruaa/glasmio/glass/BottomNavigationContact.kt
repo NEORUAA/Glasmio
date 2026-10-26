@@ -116,6 +116,8 @@ fun BottomNavigationContact(
                             renderedSurface.value?.let { contact.drawPressHighlight(this, it.bounds.topLeft) }
                         },
                         appearance = appearance,
+                        material = NavigationGlassMaterial.RegularSmall,
+                        blurRadius = NavigationGlassMaterial.RegularSmall.frostRadius,
                     )
                 }
                 Box(Modifier.matchParentSize()

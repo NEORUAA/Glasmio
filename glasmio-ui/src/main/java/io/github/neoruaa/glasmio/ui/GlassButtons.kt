@@ -7,6 +7,7 @@ import io.github.neoruaa.glasmio.icons.*
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
@@ -63,6 +66,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.Backdrop
@@ -126,6 +131,20 @@ fun GlasmioButton(
         prominentContainer = colors.destructive,
     ) else colors
     val height = GlasmioButtonDefaults.height(size, LocalGlassDimensions.current)
+    val horizontalPadding = when (size) {
+        GlasmioButtonSize.Small -> 10.dp
+        GlasmioButtonSize.Medium -> 12.dp
+        GlasmioButtonSize.Large -> 20.dp
+        null -> 16.dp
+    }
+    val explicitTextStyle = size?.let {
+        MaterialTheme.typography.labelLarge.copy(
+            fontSize = if (it == GlasmioButtonSize.Small) 15.sp else 17.sp,
+            lineHeight = 18.sp,
+            letterSpacing = 0.sp,
+            fontWeight = FontWeight(510),
+        )
+    }
     CompositionLocalProvider(LocalGlassColors provides buttonColors) {
         GlassSurface(
             modifier = modifier.height(height),
@@ -141,10 +160,13 @@ fun GlasmioButton(
             detailAction = detailAction,
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp),
+                modifier = Modifier.padding(horizontal = horizontalPadding),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                content = content,
-            )
+            ) {
+                if (explicitTextStyle != null) ProvideTextStyle(explicitTextStyle) { content() }
+                else content()
+            }
         }
     }
 }

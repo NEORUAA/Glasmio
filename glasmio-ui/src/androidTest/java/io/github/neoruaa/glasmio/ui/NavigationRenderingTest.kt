@@ -22,12 +22,23 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
+import com.kyant.backdrop.backdrops.emptyBackdrop
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import io.github.neoruaa.glasmio.core.GlasmioTheme
+import io.github.neoruaa.glasmio.core.GlassAppearance
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.icons.SfSymbol
@@ -176,6 +187,38 @@ class NavigationRenderingTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun visibleTabSemanticsFollowSelectionAndCompactState() {
+        val selectedKey = mutableStateOf("home")
+        val compact = mutableFloatStateOf(0f)
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavigationBar(
+                    items = listOf(
+                        GlasmioTabItem("home", "Home", SfSymbol.House),
+                        library,
+                        GlasmioTabItem("favorites", "Favorites", SfSymbol.Heart),
+                    ),
+                    selectedKey = selectedKey.value,
+                    onSelected = { selectedKey.value = it },
+                    onExpand = { compact.floatValue = 0f },
+                    compactProgress = compact,
+                    compactSize = 48.dp,
+                    backdrop = emptyBackdrop(),
+                )
+            }
+        }
+        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        compose.onAllNodes(tab).assertCountEquals(3)
+        compose.onNode(tab and hasContentDescription("Home")).assertIsSelected()
+        compose.onNode(tab and hasContentDescription("Library")).assertIsNotSelected().performClick()
+        compose.onNode(tab and hasContentDescription("Library")).assertIsSelected()
+        compose.onNode(tab and hasContentDescription("Home")).assertIsNotSelected()
+        compose.runOnIdle { compact.floatValue = 1f }
+        compose.onAllNodes(tab).assertCountEquals(1)
+        compose.onNode(tab and hasContentDescription("Library")).assertIsSelected()
     }
 
 }

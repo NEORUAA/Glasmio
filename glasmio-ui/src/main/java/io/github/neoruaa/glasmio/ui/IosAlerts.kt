@@ -39,6 +39,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.window.DialogProperties
@@ -203,7 +205,7 @@ fun GlasmioAlertSurface(
         )
     }
     BoxWithConstraints(modifier) {
-        val alertWidth = (maxWidth * 0.8f).coerceIn(280.dp, 380.dp)
+        val alertWidth = 300.dp.coerceAtMost(maxWidth)
         Column(
             Modifier
                 .width(alertWidth)
@@ -214,10 +216,11 @@ fun GlasmioAlertSurface(
                     navigationMaterial = true,
                     innerShadows = innerShadows,
                     isDark = colors.isDark,
-                    blurRadius = if (light) 16.dp else 8.dp,
-                    appearance = appearance.copy(liquidGlassEnabled = false),
+                    blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
+                    appearance = appearance,
+                    material = NavigationGlassMaterial.RegularMedium,
                     pressProgressState = pressProgress,
-                    dropShadow = Shadow.Default,
+
                     layerBlock = alertLayerBlock,
                 )
                 .then(interactiveHighlight.modifier)
@@ -231,7 +234,7 @@ fun GlasmioAlertSurface(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 20.dp),
+                        .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Text(
@@ -332,6 +335,7 @@ fun GlasmioAlertTextField(
     maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
 ) {
     val colors = LocalGlassColors.current
+    val fieldTextStyle = IosTypography.body.copy(fontWeight = FontWeight(510), lineHeight = 20.sp)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
@@ -339,7 +343,7 @@ fun GlasmioAlertTextField(
             .fillMaxWidth()
             .height(52.dp)
             .padding(horizontal = 16.dp),
-        textStyle = IosTypography.body.copy(color = colors.content),
+        textStyle = fieldTextStyle.copy(color = colors.content),
         singleLine = singleLine,
         maxLines = maxLines,
         decorationBox = { innerTextField ->
@@ -350,7 +354,7 @@ fun GlasmioAlertTextField(
                 if (value.text.isEmpty() && placeholder != null) {
                     Text(
                         placeholder,
-                        style = IosTypography.body,
+                        style = fieldTextStyle,
                         color = colors.tertiaryContent,
                     )
                 }

@@ -72,7 +72,6 @@ import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.highlight.HighlightStyle
-import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
@@ -92,11 +91,12 @@ enum class GlassEmphasis {
 }
 
 enum class GlassSurfaceStyle {
+    @Deprecated("Use Navigation; Standard resolves to the same material.", ReplaceWith("GlassSurfaceStyle.Navigation"))
     Standard,
     Navigation,
 }
 
-val LocalGlassSurfaceStyle = staticCompositionLocalOf { GlassSurfaceStyle.Standard }
+val LocalGlassSurfaceStyle = staticCompositionLocalOf { GlassSurfaceStyle.Navigation }
 val LocalGlassSurfaceBrightness = staticCompositionLocalOf { 0f }
 
 /** Global opacity control for the navigation glass box-shadow stack. */
@@ -378,24 +378,6 @@ class GraphicsLayerBlockScope : GraphicsLayerScope {
     }
 }
 
-/** Shared color treatment for standard glass and tinted navigation controls. */
-private fun DrawScope.drawGlassSurfaceColor(
-    surfaceColor: Color,
-    prominent: Boolean,
-    isLight: Boolean,
-    brightness: Float,
-    enabled: Boolean,
-) {
-    drawRect(
-        Color.White.copy(alpha = (if (isLight) 0.16f else 0.06f) + brightness * 0.18f),
-        blendMode = BlendMode.Screen,
-    )
-    if (prominent) {
-        drawRect(surfaceColor.copy(alpha = 1f), alpha = 0.22f, blendMode = BlendMode.Hue)
-    }
-    drawRect(surfaceColor.copy(alpha = surfaceColor.alpha * if (enabled) 1f else 0.8f))
-}
-
 const val LightNavigationContainerAlphaScale = 0.5f
 
 /** Adjusts only the sampled image, before the neutral tint and foreground are drawn. */
@@ -409,7 +391,18 @@ fun DrawScope.drawNavigationGlassMaterial(
     containerColor: Color,
     isDark: Boolean,
     containerAlphaMultiplier: Float = 1.25f,
+    material: NavigationGlassMaterial? = null,
+    materialTint: Color? = null,
 ) {
+    if (material != null) {
+        material.fills(isDark).forEach { fill ->
+            drawRect(fill.color, blendMode = fill.blendMode)
+        }
+        materialTint?.let { tint ->
+            drawRect(tint.copy(alpha = (tint.alpha * containerAlphaMultiplier).coerceIn(0f, 1f)))
+        }
+        return
+    }
     if (isDark) {
         drawRect(Color(0xFF999999).copy(alpha = 0.17f), blendMode = BlendMode.Luminosity)
     } else {
@@ -551,8 +544,13 @@ fun Modifier.navigationGlassBackground(
     highlightAlphaMultiplier: Float = 1f,
     shadowAlpha: Float = 1f,
     dropShadow: Shadow? = null,
-): Modifier = this
-    .then(
+    refractionHeight: Dp = 10.dp,
+    refractionAmount: Dp = 24.dp,
+    opticalHighlightBoost: Float = 0f,
+    material: NavigationGlassMaterial? = null,
+    materialTint: Color? = null,
+): Modifier {
+    return this.then(
         if (dropShadow == null) {
             Modifier.navigationGlassDropShadow(
                 shape,
@@ -562,10 +560,17 @@ fun Modifier.navigationGlassBackground(
                         alpha *= shadowAlpha.coerceIn(0f, 1f)
                     }
                 },
+                shadowRadius = material?.shadowRadius ?: 15.dp,
+                shadowOffsetY = material?.shadowOffsetY ?: 8.dp,
+                shadowAlpha = material?.let { if (isDark) it.darkShadowAlpha else it.lightShadowAlpha } ?: 0.02f,
             )
         } else Modifier,
     )
-    .navigationGlassBoxShadow(shape, GlassBoxShadowAlpha * shadowAlpha.coerceIn(0f, 1f), layerBlock)
+    .navigationGlassBoxShadow(
+        shape,
+        if (material == null) GlassBoxShadowAlpha * shadowAlpha.coerceIn(0f, 1f) else 0f,
+        layerBlock,
+    )
     .drawBackdrop(
         backdrop = if (sampleBackdrop && appearance.usesBackdrop) backdrop else emptyBackdrop(),
         exportedBackdrop = exportedBackdrop,
@@ -574,22 +579,24 @@ fun Modifier.navigationGlassBackground(
             if (sampleBackdrop && appearance.usesBackdrop) {
                 vibrancy()
                 blur(blurRadius.toPx())
-                if (appearance.usesRefraction) {
+                if (appearance.usesRefraction && refractionHeight > 0.dp && refractionAmount > 0.dp) {
                     lens(
-                        refractionHeight = 10.dp.toPx(),
-                        refractionAmount = 24.dp.toPx(),
+                        refractionHeight = refractionHeight.toPx(),
+                        refractionAmount = refractionAmount.toPx(),
                         depthEffect = true,
                         chromaticAberration = true,
                     )
                 }
-                if (navigationMaterial && !isDark) liftNavigationShadows()
+                if (material == null && navigationMaterial && !isDark) liftNavigationShadows()
             }
         },
         highlight = {
             if (accentHighlights) null else {
                 val progress = pressProgressState?.value ?: pressProgress
+                val highlightAlpha = (0.54f + 0.38f * progress) * highlightAlphaMultiplier.coerceIn(0f, 1f)
                 Highlight.Default.copy(
-                    alpha = (0.54f + 0.38f * progress) * highlightAlphaMultiplier.coerceIn(0f, 1f),
+                    alpha = if (opticalHighlightBoost == 0f) highlightAlpha
+                    else (highlightAlpha + opticalHighlightBoost).coerceIn(0f, 1f),
                     style = HighlightStyle.Default(angle = highlightAngle),
                 )
             }
@@ -602,17 +609,20 @@ fun Modifier.navigationGlassBackground(
         onDrawSurface = {
             if (appearance.reduceTransparency) {
                 drawRect(containerColor.copy(alpha = 1f))
-            } else if (surfaceOverlay != null) {
-                surfaceOverlay()
-            } else if (navigationMaterial && sampleBackdrop && appearance.usesBackdrop) {
-                drawNavigationGlassMaterial(containerColor, isDark, containerAlphaMultiplier)
-                innerShadows?.draw(this, shape(), isDark = isDark)
             } else {
-                drawRect(
-                    containerColor.copy(
-                        alpha = containerColor.alpha * containerAlphaMultiplier.coerceAtLeast(0f),
-                    ),
-                )
+                if (navigationMaterial && sampleBackdrop && appearance.usesBackdrop) {
+                    drawNavigationGlassMaterial(containerColor, isDark, containerAlphaMultiplier, material, materialTint)
+                } else {
+                    drawRect(
+                        containerColor.copy(
+                            alpha = containerColor.alpha * containerAlphaMultiplier.coerceAtLeast(0f),
+                        ),
+                    )
+                }
+                surfaceOverlay?.invoke(this)
+                if (navigationMaterial && sampleBackdrop && appearance.usesBackdrop) {
+                    innerShadows?.draw(this, shape(), isDark = isDark)
+                }
             }
         },
         onDrawFront = {
@@ -622,6 +632,7 @@ fun Modifier.navigationGlassBackground(
             pressOverlay?.invoke(this)
         },
     )
+}
 
 @Composable
 fun GlassSurface(
@@ -633,7 +644,7 @@ fun GlassSurface(
     navigationSurfaceAlphaMultiplier: Float = 1.25f,
     emphasis: GlassEmphasis = GlassEmphasis.Regular,
     enabled: Boolean = true,
-    refractionHeight: Dp = 12.dp,
+    refractionHeight: Dp = 10.dp,
     refractionAmount: Dp = 24.dp,
     opticalHighlightBoost: Float = 0f,
     sampleBackdrop: Boolean = true,
@@ -649,34 +660,35 @@ fun GlassSurface(
     onLongClick: (() -> Unit)? = null,
     contentAlignment: Alignment = Alignment.Center,
     detailAction: Boolean = false,
+    material: NavigationGlassMaterial = NavigationGlassMaterial.RegularSmall,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
+    // The deprecated Standard spelling shares Navigation's material and interaction contracts.
+    val resolvedStyle = if (style == GlassSurfaceStyle.Navigation) style else GlassSurfaceStyle.Navigation
     val appearance = LocalGlassAppearance.current
     val toolbarSymbols = LocalIosToolbarActionGroup.current != null
     val isLight = !colors.isDark
-    val navigationMaterial = emphasis == GlassEmphasis.Regular &&
-        navigationSurfaceColor == null && sampleBackdrop && appearance.usesBackdrop
-    val accentDetailAction = detailAction && style == GlassSurfaceStyle.Navigation &&
+    val navigationMaterial = sampleBackdrop && appearance.usesBackdrop
+    val accentDetailAction = detailAction && resolvedStyle == GlassSurfaceStyle.Navigation &&
         emphasis == GlassEmphasis.Prominent && navigationSurfaceColor == null &&
         sampleBackdrop && appearance.usesBackdrop
     val innerShadows = rememberNavigationInnerShadows(
-        style == GlassSurfaceStyle.Navigation && (navigationMaterial || accentDetailAction),
+        resolvedStyle == GlassSurfaceStyle.Navigation && (navigationMaterial || accentDetailAction),
     )
-    val brightness = LocalGlassSurfaceBrightness.current.coerceIn(0f, 1f)
     val animationScope = rememberCoroutineScope()
     val interactiveHighlight = remember(animationScope) {
         InteractiveHighlight(animationScope = animationScope)
     }
     val toolbarMember = rememberToolbarActionMember(
-        eligible = style == GlassSurfaceStyle.Navigation && emphasis == GlassEmphasis.Regular && !detailAction,
+        eligible = resolvedStyle == GlassSurfaceStyle.Navigation && emphasis == GlassEmphasis.Regular && !detailAction,
         material = ToolbarActionMaterial(navigationSurfaceColor, navigationSurfaceAlphaMultiplier, sampleBackdrop),
         separation = groupSurfaceSeparation,
         highlight = interactiveHighlight,
     )
     val sharesToolbarSurface = toolbarMember?.sharesSurface == true
     val contactMember = if (LocalBottomControlContact.current != null && toolbarMember == null &&
-        style == GlassSurfaceStyle.Navigation && emphasis == GlassEmphasis.Regular && !detailAction
+        resolvedStyle == GlassSurfaceStyle.Navigation && emphasis == GlassEmphasis.Regular && !detailAction
     ) {
         val density = LocalDensity.current
         val contactTransformScope = remember(density) { GraphicsLayerBlockScope() }
@@ -743,7 +755,7 @@ fun GlassSurface(
             morphProgress?.value?.let { it != 0f && it != 1f } == true
         }
     }.value
-    val morphGlassModifier = if (morphProgress != null && style == GlassSurfaceStyle.Navigation &&
+    val morphGlassModifier = if (morphProgress != null && resolvedStyle == GlassSurfaceStyle.Navigation &&
         sampleBackdrop && emphasis == GlassEmphasis.Regular
     ) {
         rememberMorphingNavigationGlass(
@@ -759,6 +771,8 @@ fun GlassSurface(
             captureWidth = morphCaptureWidth,
             verticalTravel = morphVerticalTravel,
             morphProgress = { morphProgress.value },
+            material = material,
+            materialTint = navigationSurfaceColor,
         )
     } else null
     val glassModifier = if (sharesToolbarSurface) {
@@ -767,7 +781,7 @@ fun GlassSurface(
         Modifier.graphicsLayer(dragScaleLayerBlock).clip(shape)
     } else if (morphing && morphGlassModifier != null) {
         morphGlassModifier
-    } else if (style == GlassSurfaceStyle.Navigation) {
+    } else {
         val containerColor = navigationSurfaceColor ?: surfaceColor
         remember(
             surfaceBackdrop,
@@ -778,8 +792,12 @@ fun GlassSurface(
             navigationMaterial,
             accentDetailAction,
             innerShadows,
-            brightness,
             enabled,
+            refractionHeight,
+            refractionAmount,
+            opticalHighlightBoost,
+            exportedBackdrop,
+            material,
             navigationSurfaceAlphaMultiplier,
             pressProgressState,
             sampleBackdrop,
@@ -794,14 +812,12 @@ fun GlassSurface(
                 innerShadows = innerShadows,
                 isDark = colors.isDark,
                 containerAlphaMultiplier = navigationSurfaceAlphaMultiplier,
-                surfaceOverlay = if (accentDetailAction) {
+                surfaceOverlay = if (emphasis == GlassEmphasis.Prominent) {
                     {
-                        drawGlassSurfaceColor(containerColor, true, isLight, brightness, enabled)
-                        innerShadows?.draw(this, shape, isDark = colors.isDark)
-                    }
-                } else if (emphasis == GlassEmphasis.Prominent) {
-                    {
-                        drawGlassSurfaceColor(containerColor, true, isLight, brightness, enabled)
+                        // Apple's Glass Prominent variant adds its backing and tint to the same glass.
+                        drawRect(Color.White.copy(alpha = 0.94f))
+                        val tint = navigationSurfaceColor ?: containerColor.copy(alpha = 1f)
+                        drawRect(tint.copy(alpha = tint.alpha * if (enabled) 1f else 0.8f))
                     }
                 } else null,
                 accentHighlights = accentDetailAction,
@@ -809,81 +825,13 @@ fun GlassSurface(
                 sampleBackdrop = sampleBackdrop,
                 layerBlock = dragScaleLayerBlock,
                 appearance = appearance,
-            )
-        }
-    } else {
-        remember(
-            surfaceBackdrop,
-            shapeProvider,
-            refractionHeight,
-            refractionAmount,
-            isLight,
-            brightness,
-            opticalHighlightBoost,
-            enabled,
-            exportedBackdrop,
-            emphasis,
-            colors.prominentContainer,
-            surfaceColor,
-            sampleBackdrop,
-            dragScaleLayerBlock,
-            appearance,
-        ) {
-            Modifier.drawBackdrop(
-                backdrop = surfaceBackdrop,
-                shape = shapeProvider,
-                effects = {
-                    if (sampleBackdrop && appearance.usesBackdrop) {
-                        val progress = interactiveHighlight.pressProgress
-                        vibrancy()
-                        blur(2.dp.toPx())
-                        if (appearance.usesRefraction) {
-                            lens(
-                                refractionHeight = refractionHeight.toPx(),
-                                refractionAmount = refractionAmount.toPx(),
-                                depthEffect = progress > 0.01f,
-                                chromaticAberration = true,
-                            )
-                        }
-                    }
-                },
-                highlight = {
-                    Highlight.Default.copy(
-                        alpha = ((if (isLight) 0.48f else 0.32f) + brightness * 0.18f +
-                            opticalHighlightBoost + 0.30f * interactiveHighlight.pressProgress)
-                            .coerceAtMost(1f),
-                    )
-                },
-                shadow = {
-                    Shadow(
-                        radius = 24.dp,
-                        color = Color.Black.copy(alpha = 0.1f),
-                        alpha = (0.08f + 0.22f * interactiveHighlight.pressProgress) *
-                            if (enabled) 1f else 0.35f,
-                    )
-                },
-                innerShadow = {
-                    InnerShadow(
-                        radius = 4.dp + 8.dp * interactiveHighlight.pressProgress,
-                        color = Color.Black.copy(alpha = 0.15f),
-                        alpha = 0.1f + 0.3f * interactiveHighlight.pressProgress,
-                    )
-                },
-                layerBlock = dragScaleLayerBlock,
                 exportedBackdrop = exportedBackdrop,
-                onDrawSurface = {
-                    if (appearance.reduceTransparency) {
-                        drawRect(surfaceColor.copy(alpha = 1f))
-                    } else {
-                        drawGlassSurfaceColor(
-                            surfaceColor = surfaceColor,
-                            prominent = emphasis == GlassEmphasis.Prominent,
-                            isLight = isLight,
-                            brightness = brightness,
-                            enabled = enabled,
-                        )
-                    }
-                },
+                refractionHeight = refractionHeight,
+                refractionAmount = refractionAmount,
+                opticalHighlightBoost = opticalHighlightBoost,
+                material = material,
+                materialTint = navigationSurfaceColor.takeIf { emphasis == GlassEmphasis.Regular },
+                blurRadius = material.frostRadius,
             )
         }
     }

@@ -179,7 +179,7 @@ private class IosPopupPositionProvider(
     }
 }
 
-/** Scrollable iOS capsule tabs for sets that cannot fit a segmented control. */
+/** Context-menu surface using the shared Regular Medium material. */
 
 @Composable
 fun GlasmioContextMenu(
@@ -347,17 +347,13 @@ fun GlasmioContextMenu(
                             navigationMaterial = true,
                             innerShadows = innerShadows,
                             isDark = colors.isDark,
-                            blurRadius = if (isLight) 16.dp else 12.dp,
-                            appearance = appearance.copy(liquidGlassEnabled = false),
+                            blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
+                            appearance = appearance,
+                            material = NavigationGlassMaterial.RegularMedium,
                             pressProgressState = pressProgress,
                             highlightAlphaMultiplier = highlightAlpha ?: progress,
                             shadowAlpha = shadowAlpha,
-                            dropShadow = Shadow(
-                                radius = 32.dp,
-                                offset = androidx.compose.ui.unit.DpOffset(0.dp, 10.dp),
-                                color = Color.Black,
-                                alpha = 0.4f * GlassBoxShadowAlpha,
-                            ),
+
                             layerBlock = menuLayerBlock,
                         )
                         .then(interactiveHighlight.modifier)

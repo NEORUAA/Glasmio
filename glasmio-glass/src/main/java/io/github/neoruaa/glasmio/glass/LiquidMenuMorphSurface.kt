@@ -65,7 +65,10 @@ fun LiquidMenuMorphSurface(
 ) {
     val colors = LocalGlassColors.current
     val source = rememberCrossWindowBackdrop(backdrop)
-    val renderer = rememberGlassMorphRenderer(source, active = true, blurRadius = if (colors.isDark) 12.dp else 16.dp, programs = shaderPrograms)
+    val renderer = rememberGlassMorphRenderer(
+        source, active = true, blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
+        programs = shaderPrograms, materialPreset = NavigationGlassMaterial.RegularMedium, isDark = colors.isDark,
+    )
     val portal = remember(shaderPrograms) { shaderPrograms?.portal ?: RuntimeShader(LiquidMenuPortalShader) }
     DisposableEffect(portal) {
         onDispose {

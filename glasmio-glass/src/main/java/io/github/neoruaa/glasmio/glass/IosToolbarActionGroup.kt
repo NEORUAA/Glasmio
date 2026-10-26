@@ -195,7 +195,7 @@ fun GlasmioToolbarActionGroup(
     Box(modifier.onGloballyPositioned(group::updateCoordinates)) {
         runs.forEach { run -> key(run.first(), run.last()) {
             val material = run.first().material
-            val navigationMaterial = material.color == null && material.sampleBackdrop && appearance.usesBackdrop
+            val navigationMaterial = material.sampleBackdrop && appearance.usesBackdrop
             val innerShadows = rememberNavigationInnerShadows(navigationMaterial)
             val shapeState = remember(group, progress, run) {
                 derivedStateOf { group.shape(run, progress.value) }
@@ -213,6 +213,7 @@ fun GlasmioToolbarActionGroup(
                     innerShadows = innerShadows,
                     isDark = colors.isDark,
                     containerAlphaMultiplier = material.alphaMultiplier,
+                    materialTint = material.color,
                     sampleBackdrop = material.sampleBackdrop,
                     pressProgressState = press,
                     pressOverlay = { group.drawPressHighlight(this, run) },
@@ -221,6 +222,8 @@ fun GlasmioToolbarActionGroup(
                         alpha = if (group.isMenuSourceHidden(run)) 0f else 1f
                     },
                     appearance = appearance,
+                    material = NavigationGlassMaterial.RegularSmall,
+                    blurRadius = NavigationGlassMaterial.RegularSmall.frostRadius,
                 )
             }
             // The layer stays at the run's untransformed size; its graphics transform can

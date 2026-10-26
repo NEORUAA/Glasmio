@@ -30,6 +30,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,8 +48,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindowProvider
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.highlight.Highlight
 import com.kyant.backdrop.shadow.Shadow
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
@@ -144,7 +143,7 @@ fun GlasmioBottomSheet(
     }
 }
 
-/** Figma node 770:21908. The shell is glass; rows inside remain ordinary grouped content. */
+/** Figma large-sheet surface 10525:1640 in 10525:1632; inner rows remain ordinary content. */
 @Composable
 fun GlasmioSheetSurface(
     modifier: Modifier = Modifier,
@@ -162,6 +161,9 @@ fun GlasmioSheetSurface(
     val activeInteractiveHighlight = interactiveHighlight ?: remember(animationScope) {
         InteractiveHighlight(animationScope = animationScope)
     }
+    val pressProgress = remember(activeInteractiveHighlight) {
+        derivedStateOf { activeInteractiveHighlight.pressProgress }
+    }
     val sheetLayerBlock: (GraphicsLayerScope.() -> Unit)? = if (applyDragScale) {
         {
             applyGlassDragScale(
@@ -177,37 +179,27 @@ fun GlasmioSheetSurface(
     // localPositionOf mapping cannot cross compose owners and silently sampled nothing.
     val backdropRenderer = if (appearance.usesBackdrop) {
         val samplingBackdrop = rememberCrossWindowBackdrop(backdrop)
-        rememberSheetBackdropRenderer(samplingBackdrop, if (isLight) 16.dp else 12.dp)
+        rememberSheetBackdropRenderer(samplingBackdrop, NavigationGlassMaterial.RegularLarge.frostRadius)
     } else {
         emptyBackdrop()
     }
     Box(
         modifier
             .fillMaxWidth()
-                .navigationGlassBoxShadow(
-                    shape = { shape },
-                    alpha = GlassBoxShadowAlpha,
-                    layerBlock = sheetLayerBlock,
-                )
-                .drawBackdrop(
+                .navigationGlassBackground(
                     backdrop = backdropRenderer,
                     shape = { shape },
-                    effects = {},
-                    highlight = { Highlight.Default.copy(alpha = if (isLight) 0.58f else 0.38f) },
-                    shadow = { Shadow(radius = 48.dp, alpha = 0.25f) },
-                    innerShadow = null,
+                    containerColor = colors.container,
+                    navigationMaterial = true,
+                    innerShadows = innerShadows,
+                    isDark = colors.isDark,
+                    // The quarter-resolution backend already supplies the scene blur.
+                    blurRadius = 0.dp,
+                    appearance = appearance,
+                    material = NavigationGlassMaterial.RegularLarge,
+                    pressProgressState = pressProgress,
+
                     layerBlock = sheetLayerBlock,
-                    onDrawSurface = {
-                        drawRect(
-                            colors.elevatedBackground.copy(
-                                alpha = if (!appearance.usesBackdrop) 1f else if (isLight) 0.72f else 0.54f,
-                            ),
-                        )
-                        if (appearance.usesBackdrop) {
-                            drawRect(Color.White.copy(alpha = if (isLight) 0.12f else 0.04f))
-                        }
-                        innerShadows?.draw(this, shape, isDark = colors.isDark)
-                    },
                 )
                 .then(activeInteractiveHighlight.modifier)
                 .then(activeInteractiveHighlight.gestureModifier),
