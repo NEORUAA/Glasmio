@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(glasmio_glass LANGUAGES CXX)
+add_library(glasmio_liquid_menu_sdf SHARED liquid_menu_sdf.cpp)
+target_compile_features(glasmio_liquid_menu_sdf PRIVATE cxx_std_17)
+target_compile_options(glasmio_liquid_menu_sdf PRIVATE -O3 -fno-math-errno -ffp-contract=off -fvisibility=hidden)
+set_target_properties(glasmio_liquid_menu_sdf PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
