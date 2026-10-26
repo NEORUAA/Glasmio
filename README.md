@@ -4,7 +4,7 @@ An Android-first Jetpack Compose UI framework with Liquid Glass materials, conti
 
 ![Glasmio component catalog](docs/images/catalog.webp)
 
-`0.1.0` is in development. The Maven coordinates below are configured for local publication; they are not yet available from Maven Central.
+All six libraries share version `0.1.0` and the Maven group `io.github.neoruaa.glasmio`.
 
 ## Modules
 
@@ -47,13 +47,15 @@ You can also set `glasmio.symbolFont` in the ignored root `local.properties`. Th
 
 ## Use in an application
 
-For local development, publish the modules first:
+Enable Google Maven and Maven Central in your application's settings:
 
-```sh
-./gradlew publishToMavenLocal
+```kotlin
+dependencyResolutionManagement {
+    repositories { google(); mavenCentral() }
+}
 ```
 
-Add `mavenLocal()` to your application's development repository configuration, alongside `google()` and `mavenCentral()`. Then declare the modules you need:
+Then declare the modules you need:
 
 ```kotlin
 dependencies {

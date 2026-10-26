@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — In development
+## 0.1.0 — 2026-10-27
 
 Initial Android Compose framework extraction from MeiloX.
 
@@ -16,8 +16,8 @@ Initial Android Compose framework extraction from MeiloX.
 - Add a three-tab sample navigation bar with separate search, collapsing titles, progressive edge blur, and Miuix page transitions.
 - Use solid catalog backgrounds and the original light/dark iOS 27 wallpaper in glass demonstrations.
 - Match the reference text metrics, tracking, control label weights, and continuous corners.
-- Configure versioned Maven artifacts, source publication, and release tooling. Maven Central publication is pending.
+- Configure signed Maven artifacts, sources, API documentation, and automated Central publication.
+- Apache-2.0 license with third-party notices included in every published module.
 
 MeiloX remains responsible for music playback, product navigation, application settings, and player-specific rendering.
 
-- Apache-2.0 license with third-party notices included in every published module.
