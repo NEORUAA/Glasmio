@@ -1,6 +1,6 @@
 package io.github.neoruaa.glasmio.sample
 
-import android.accessibilityservice.AccessibilityService
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -17,11 +17,11 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.GlassAppearance
@@ -31,6 +31,13 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+
+/** Deliver an actual Back key to the focused window without Espresso root selection. */
+private fun pressSystemBack(rule: ComposeContentTestRule) {
+    rule.waitForIdle()
+    InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+    rule.waitForIdle()
+}
 
 @RunWith(AndroidJUnit4::class)
 class ComponentBehaviorTest {
@@ -49,47 +56,6 @@ class ComponentBehaviorTest {
                     },
                 )
             }
-        }
-    }
-
-    /** Address the focused window, including dialogs and the separately launched real Activity. */
-    private fun pressSystemBack() {
-        rule.waitForIdle()
-        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        assertTrue("The system rejected the Back action", automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
-        rule.waitForIdle()
-    }
-
-    @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
-        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-            rule.waitUntil(30_000) {
-                rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty()
-            }
-            val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
-            rule.onNode(tab and hasContentDescription("材质")).performClick()
-            rule.onNodeWithText("Regular Small").assertIsDisplayed()
-            rule.onNode(tab and hasContentDescription("关于")).performClick().assertIsSelected()
-            rule.onNodeWithText("Apache License 2.0").assertIsDisplayed()
-            scenario.recreate()
-            rule.waitUntil(30_000) {
-                rule.onAllNodesWithText("Apache License 2.0").fetchSemanticsNodes().isNotEmpty()
-            }
-            rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
-            rule.onNodeWithContentDescription("搜索").performClick()
-            rule.onNodeWithText("Search Components").assertIsDisplayed()
-            rule.waitUntil(10_000) {
-                var focused = false
-                scenario.onActivity { focused = it.hasWindowFocus() }
-                focused
-            }
-            pressSystemBack()
-            val selectedAboutTab = tab and hasContentDescription("关于") and isSelected()
-            rule.waitUntil(10_000) {
-                rule.onAllNodes(selectedAboutTab).fetchSemanticsNodes().size == 1 &&
-                    rule.onAllNodesWithText("Search Components").fetchSemanticsNodes().isEmpty()
-            }
-            rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
-            rule.onNodeWithText("Search Components").assertDoesNotExist()
         }
     }
 
@@ -184,19 +150,55 @@ class ComponentBehaviorTest {
             if (stage == 2) Text("Dismissed fixture")
         }
         rule.onNodeWithText("Alert fixture").assertIsDisplayed()
-        pressSystemBack()
+        pressSystemBack(rule)
         rule.waitUntil(10_000) {
             rule.onAllNodesWithText("Alert fixture").fetchSemanticsNodes().isEmpty() &&
                 rule.onAllNodesWithText("Sheet fixture").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithText("Alert fixture").assertDoesNotExist()
         rule.onNodeWithText("Sheet fixture").assertIsDisplayed()
-        pressSystemBack()
+        pressSystemBack(rule)
         rule.waitUntil(10_000) {
             rule.onAllNodesWithText("Sheet fixture").fetchSemanticsNodes().isEmpty() &&
                 rule.onAllNodesWithText("Dismissed fixture").fetchSemanticsNodes().isNotEmpty()
         }
         rule.onNodeWithText("Sheet fixture").assertDoesNotExist()
         rule.onNodeWithText("Dismissed fixture").assertIsDisplayed()
+    }
+}
+
+@RunWith(AndroidJUnit4::class)
+class SampleNavigationBehaviorTest {
+    @get:Rule val rule = createAndroidComposeRule<MainActivity>()
+
+    @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes().isNotEmpty()
+        }
+        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        rule.onNode(tab and hasContentDescription("材质")).performClick()
+        rule.onNodeWithText("Regular Small").assertIsDisplayed()
+        rule.onNode(tab and hasContentDescription("关于")).performClick().assertIsSelected()
+        rule.onNodeWithText("Apache License 2.0").assertIsDisplayed()
+        rule.activityRule.scenario.recreate()
+        rule.waitUntil(30_000) {
+            rule.onAllNodesWithText("Apache License 2.0").fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
+        rule.onNodeWithContentDescription("搜索").performClick()
+        rule.onNodeWithText("Search Components").assertIsDisplayed()
+        rule.waitUntil(10_000) {
+            var focused = false
+            rule.activityRule.scenario.onActivity { focused = it.hasWindowFocus() }
+            focused
+        }
+        pressSystemBack(rule)
+        val selectedAboutTab = tab and hasContentDescription("关于") and isSelected()
+        rule.waitUntil(10_000) {
+            rule.onAllNodes(selectedAboutTab).fetchSemanticsNodes().size == 1 &&
+                rule.onAllNodesWithText("Search Components").fetchSemanticsNodes().isEmpty()
+        }
+        rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
+        rule.onNodeWithText("Search Components").assertDoesNotExist()
     }
 }

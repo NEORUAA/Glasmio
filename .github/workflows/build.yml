@@ -63,9 +63,20 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: ./gradlew :sample:connectedDebugAndroidTest :glasmio-ui:connectedDebugAndroidTest --console=plain
+          script: |
+            adb shell input keyevent KEYCODE_WAKEUP
+            adb shell wm dismiss-keyguard
+            if ! ./gradlew :sample:connectedDebugAndroidTest :glasmio-ui:connectedDebugAndroidTest --console=plain; then
+              mkdir -p sample/build/reports/androidTests
+              adb shell dumpsys window > sample/build/reports/androidTests/window-state.txt
+              adb exec-out screencap -p > sample/build/reports/androidTests/device-failure.png
+              adb logcat -d -t 500 > sample/build/reports/androidTests/logcat.txt
+              exit 1
+            fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: device-tests
-          path: sample/build/reports/androidTests/
+          path: |
+            sample/build/reports/androidTests/
+            glasmio-ui/build/reports/androidTests/
