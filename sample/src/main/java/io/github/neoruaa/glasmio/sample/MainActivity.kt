@@ -567,9 +567,9 @@ private fun MaterialsDemo(layout: SamplePageLayout) {
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                GlasmioButton(onClick = {}, modifier = Modifier.weight(1f), size = GlasmioButtonSize.Large) { Text("Glass") }
-                GlasmioButton(onClick = {}, modifier = Modifier.weight(1f), emphasis = GlassEmphasis.Prominent, size = GlasmioButtonSize.Large) { Text("Glass Prominent") }
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                GlasmioButton(onClick = {}, modifier = Modifier.fillMaxWidth(), size = GlasmioButtonSize.Large) { Text("Glass") }
+                GlasmioButton(onClick = {}, modifier = Modifier.fillMaxWidth(), emphasis = GlassEmphasis.Prominent, size = GlasmioButtonSize.Large) { Text("Glass Prominent") }
             }
         }
         item {
