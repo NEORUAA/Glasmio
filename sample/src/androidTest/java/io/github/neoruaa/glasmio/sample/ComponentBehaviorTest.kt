@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.sample
 
+import android.accessibilityservice.AccessibilityService
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -19,7 +20,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import androidx.test.espresso.Espresso.pressBack
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
@@ -51,6 +52,14 @@ class ComponentBehaviorTest {
         }
     }
 
+    /** Address the focused window, including dialogs and the separately launched real Activity. */
+    private fun pressSystemBack() {
+        rule.waitForIdle()
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        assertTrue("The system rejected the Back action", automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
+        rule.waitForIdle()
+    }
+
     @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             rule.waitUntil(30_000) {
@@ -68,8 +77,19 @@ class ComponentBehaviorTest {
             rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
             rule.onNodeWithContentDescription("搜索").performClick()
             rule.onNodeWithText("Search Components").assertIsDisplayed()
-            pressBack()
+            rule.waitUntil(10_000) {
+                var focused = false
+                scenario.onActivity { focused = it.hasWindowFocus() }
+                focused
+            }
+            pressSystemBack()
+            val selectedAboutTab = tab and hasContentDescription("关于") and isSelected()
+            rule.waitUntil(10_000) {
+                rule.onAllNodes(selectedAboutTab).fetchSemanticsNodes().size == 1 &&
+                    rule.onAllNodesWithText("Search Components").fetchSemanticsNodes().isEmpty()
+            }
             rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
+            rule.onNodeWithText("Search Components").assertDoesNotExist()
         }
     }
 
@@ -164,10 +184,18 @@ class ComponentBehaviorTest {
             if (stage == 2) Text("Dismissed fixture")
         }
         rule.onNodeWithText("Alert fixture").assertIsDisplayed()
-        pressBack()
+        pressSystemBack()
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("Alert fixture").fetchSemanticsNodes().isEmpty() &&
+                rule.onAllNodesWithText("Sheet fixture").fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithText("Alert fixture").assertDoesNotExist()
         rule.onNodeWithText("Sheet fixture").assertIsDisplayed()
-        pressBack()
+        pressSystemBack()
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithText("Sheet fixture").fetchSemanticsNodes().isEmpty() &&
+                rule.onAllNodesWithText("Dismissed fixture").fetchSemanticsNodes().isNotEmpty()
+        }
         rule.onNodeWithText("Sheet fixture").assertDoesNotExist()
         rule.onNodeWithText("Dismissed fixture").assertIsDisplayed()
     }

@@ -81,5 +81,8 @@ class MainActivity : ComponentActivity() {
 if (ROOT / 'local.properties').is_file():
     shutil.copyfile(ROOT / 'local.properties', folder / 'local.properties')
 shutil.copyfile(ROOT / 'gradle.properties', folder / 'gradle.properties')
-subprocess.run([str(ROOT / 'gradlew'), '--project-dir', str(folder), 'assembleDebug', '--refresh-dependencies', '--console=plain'], cwd=ROOT, check=True)
+command = [str(ROOT / 'gradlew'), '--project-dir', str(folder), 'assembleDebug', '--console=plain']
+if args.central:
+    command.append('--refresh-dependencies')
+subprocess.run(command, cwd=ROOT, check=True)
 print('Fresh ' + ('Maven Central' if args.central else 'staged Maven') + ' consumer built successfully.')
