@@ -5,6 +5,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -106,6 +107,7 @@ fun GlasmioTheme(
         LocalGlassDimensions provides dimensions,
         LocalGlasmioShapes provides shapes,
         LocalGlasmioSpacing provides spacing,
+        LocalContentColor provides colors.content,
     ) {
         MaterialTheme(colorScheme, shapes.materialShapes(), typography, content)
     }

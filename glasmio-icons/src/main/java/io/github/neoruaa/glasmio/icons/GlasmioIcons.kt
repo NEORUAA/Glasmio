@@ -28,12 +28,17 @@ fun interface GlasmioIconResolver {
 /** Optional host-owned symbol font. The library never ships or loads an Apple font. */
 val LocalGlasmioSymbolTypeface = staticCompositionLocalOf<Typeface?> { null }
 val LocalGlasmioIconResolver = staticCompositionLocalOf<GlasmioIconResolver> { MaterialGlasmioIconResolver }
+/** Evaluated at each icon call site so nested theme and row locals remain visible. */
+val LocalGlasmioIconTint = staticCompositionLocalOf<@Composable () -> Color> {
+    { LocalContentColor.current }
+}
 
 /** An Apache-2.0 Material icon fallback for the controls included in Glasmio. */
 object MaterialGlasmioIconResolver : GlasmioIconResolver {
     override fun resolve(systemName: String): ImageVector = when {
         systemName == "xmark" || systemName.startsWith("xmark.circle") -> Icons.Default.Close
         systemName.startsWith("checkmark") -> Icons.Default.Check
+        systemName.startsWith("plus.square.on.square") -> Icons.Default.AddToPhotos
         systemName == "plus" || systemName.startsWith("plus.") -> Icons.Default.Add
         systemName == "minus" || systemName.startsWith("minus.") -> Icons.Default.Remove
         systemName.startsWith("chevron.backward") || systemName.startsWith("arrow.backward") -> Icons.AutoMirrored.Filled.ArrowBack
@@ -46,9 +51,11 @@ object MaterialGlasmioIconResolver : GlasmioIconResolver {
         systemName.startsWith("chevron.down") -> Icons.Default.KeyboardArrowDown
         systemName.startsWith("arrow.left") -> Icons.Default.ArrowBack
         systemName.startsWith("arrow.right") -> Icons.Default.ArrowForward
+        systemName.startsWith("arrow.up.arrow.down") -> Icons.Default.SwapVert
         systemName.startsWith("arrow.up") -> Icons.Default.ArrowUpward
         systemName.startsWith("arrow.down") -> Icons.Default.ArrowDownward
         systemName.startsWith("arrow.clockwise") || systemName.startsWith("arrow.triangle") -> Icons.Default.Refresh
+        systemName.startsWith("arrow.counterclockwise") -> Icons.Default.Replay
         systemName.startsWith("magnifyingglass") -> Icons.Default.Search
         systemName.startsWith("house") -> Icons.Default.Home
         systemName.startsWith("gear") -> Icons.Default.Settings
@@ -85,8 +92,12 @@ object MaterialGlasmioIconResolver : GlasmioIconResolver {
         systemName.startsWith("speaker") -> Icons.Default.VolumeUp
         systemName.startsWith("wifi") -> Icons.Default.Wifi
         systemName.startsWith("paintpalette") -> Icons.Default.Palette
+        systemName.startsWith("eyedropper") -> Icons.Default.Colorize
         systemName.startsWith("sun") -> Icons.Default.Brightness7
         systemName.startsWith("moon") -> Icons.Default.Brightness2
+        systemName.startsWith("square.stack") -> Icons.Default.Layers
+        systemName.startsWith("rectangle.3.group") -> Icons.Default.ViewCarousel
+        systemName.startsWith("rectangle.bottomthird") || systemName.startsWith("inset.filled.bottomthird.rectangle") -> Icons.Default.VerticalAlignBottom
         systemName.startsWith("rectangle") || systemName.startsWith("square") -> Icons.Default.CropSquare
         systemName.startsWith("circle") -> Icons.Default.RadioButtonUnchecked
         systemName.startsWith("text") || systemName == "character" -> Icons.Default.TextFields
@@ -102,11 +113,13 @@ object MaterialGlasmioIconResolver : GlasmioIconResolver {
 fun GlasmioIconProvider(
     resolver: GlasmioIconResolver = MaterialGlasmioIconResolver,
     symbolTypeface: Typeface? = null,
+    defaultTint: @Composable () -> Color = { LocalContentColor.current },
     content: @Composable () -> Unit,
 ) {
     CompositionLocalProvider(
         LocalGlasmioIconResolver provides resolver,
         LocalGlasmioSymbolTypeface provides symbolTypeface,
+        LocalGlasmioIconTint provides defaultTint,
         content = content,
     )
 }
@@ -131,6 +144,6 @@ fun GlasmioIcon(
     systemName: String,
     contentDescription: String?,
     modifier: Modifier = Modifier,
-    tint: Color = LocalContentColor.current,
+    tint: Color = LocalGlasmioIconTint.current(),
     size: Dp = 24.dp,
 ) = SfIcon(systemName, contentDescription, modifier, tint, size)

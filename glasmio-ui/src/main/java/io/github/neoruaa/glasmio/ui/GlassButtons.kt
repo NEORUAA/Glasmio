@@ -86,6 +86,24 @@ import kotlin.math.ceil
 import kotlin.math.sin
 import kotlin.math.tanh
 
+/** Text-button sizes from Apple's Liquid Glass button component. */
+enum class GlasmioButtonSize { Small, Medium, Large }
+
+object GlasmioButtonDefaults {
+    val SmallHeight = 28.dp
+    val MediumHeight = 34.dp
+    val LargeHeight = 50.dp
+
+    /** A null size respects the host theme's established control geometry. */
+    fun height(size: GlasmioButtonSize?, dimensions: GlassDimensions): Dp = when (size) {
+        GlasmioButtonSize.Small -> SmallHeight
+        GlasmioButtonSize.Medium -> MediumHeight
+        GlasmioButtonSize.Large -> LargeHeight
+        null -> dimensions.controlHeight
+    }
+}
+
+/** Liquid Glass / Glass Prominent text button, with caller-owned interaction state. */
 @Composable
 fun GlasmioButton(
     onClick: () -> Unit,
@@ -98,26 +116,36 @@ fun GlasmioButton(
     navigationSurfaceAlphaMultiplier: Float = 1.25f,
     sampleBackdrop: Boolean = true,
     detailAction: Boolean = false,
+    size: GlasmioButtonSize? = null,
+    destructive: Boolean = false,
     content: @Composable RowScope.() -> Unit,
 ) {
-    GlassSurface(
-        modifier = modifier.height(LocalGlassDimensions.current.controlHeight),
-        backdrop = backdrop,
-        style = style,
-        navigationSurfaceColor = navigationSurfaceColor,
-        navigationSurfaceAlphaMultiplier = navigationSurfaceAlphaMultiplier,
-        shape = Capsule(),
-        emphasis = emphasis,
-        enabled = enabled,
-        sampleBackdrop = sampleBackdrop,
-        onClick = onClick,
-        detailAction = detailAction,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            content = content,
-        )
+    val colors = LocalGlassColors.current
+    val buttonColors = if (destructive) colors.copy(
+        content = colors.destructive,
+        prominentContainer = colors.destructive,
+    ) else colors
+    val height = GlasmioButtonDefaults.height(size, LocalGlassDimensions.current)
+    CompositionLocalProvider(LocalGlassColors provides buttonColors) {
+        GlassSurface(
+            modifier = modifier.height(height),
+            backdrop = backdrop,
+            style = style,
+            navigationSurfaceColor = navigationSurfaceColor,
+            navigationSurfaceAlphaMultiplier = navigationSurfaceAlphaMultiplier,
+            shape = Capsule(),
+            emphasis = emphasis,
+            enabled = enabled,
+            sampleBackdrop = sampleBackdrop,
+            onClick = onClick,
+            detailAction = detailAction,
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = content,
+            )
+        }
     }
 }
 
@@ -137,10 +165,11 @@ fun GlasmioIconButton(
     groupSurfaceSeparation: (() -> Float)? = LocalToolbarActionSeparation.current,
     onLongClick: (() -> Unit)? = null,
     detailAction: Boolean = false,
+    size: Dp? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     GlassSurface(
-        modifier = modifier.size(LocalGlassDimensions.current.iconButtonSize),
+        modifier = modifier.size(size ?: LocalGlassDimensions.current.iconButtonSize),
         backdrop = backdrop,
         style = style,
         navigationSurfaceColor = navigationSurfaceColor,

@@ -1,12 +1,14 @@
 package io.github.neoruaa.glasmio.sample
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
@@ -20,6 +22,7 @@ import androidx.test.espresso.Espresso.pressBack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.GlassAppearance
+import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
 import io.github.neoruaa.glasmio.ui.*
 import org.junit.Assert.*
 import org.junit.Rule
@@ -33,9 +36,15 @@ class ComponentBehaviorTest {
     private fun content(body: @Composable () -> Unit) {
         rule.setContent {
             GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
-                Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    body()
-                }
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color.White)) },
+                    overlayContent = {
+                        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            body()
+                        }
+                    },
+                )
             }
         }
     }
@@ -109,8 +118,9 @@ class ComponentBehaviorTest {
                 "Disabled search", "Close disabled search", Modifier.testTag("disabled-search"), enabled = false)
         }
         val editable = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
-        rule.onNode(hasAnyAncestor(hasTestTag("search")) and editable).performTextInput("Liquid glass")
-            .performImeAction()
+        val input = rule.onNode(hasAnyAncestor(hasTestTag("search")) and editable)
+        input.performTextInput("Liquid glass")
+        input.performImeAction()
         rule.runOnIdle { assertEquals("Liquid glass", submitted) }
         rule.onNode(hasAnyAncestor(hasTestTag("disabled-search")) and editable).assertIsNotEnabled()
         rule.onNodeWithTag("disabled-search").performTouchInput { click() }

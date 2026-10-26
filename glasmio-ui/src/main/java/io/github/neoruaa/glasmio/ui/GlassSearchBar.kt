@@ -32,6 +32,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -75,6 +77,7 @@ fun GlasmioSearchBar(
 ) {
     val colors = LocalGlassColors.current
     val focusManager = LocalFocusManager.current
+    var hasFocus by remember { mutableStateOf(false) }
     val transitionProgress by animateFloatAsState(
         targetValue = if (active && enabled) 1f else 0f,
         animationSpec = tween(GlassSearchTransitionMillis, easing = FastOutSlowInEasing),
@@ -137,6 +140,7 @@ fun GlasmioSearchBar(
                         .weight(1f)
                         .focusRequester(focusRequester)
                         .onFocusChanged { state ->
+                            hasFocus = state.isFocused
                             if (enabled && state.isFocused && !active) onActiveChange(true)
                         },
                     singleLine = true,
@@ -202,7 +206,8 @@ fun GlasmioSearchBar(
     }
 
     LaunchedEffect(active, enabled) {
-        if (active && enabled) focusRequester.requestFocus() else focusManager.clearFocus()
+        if (active && enabled) focusRequester.requestFocus()
+        else if (hasFocus) focusManager.clearFocus()
     }
     BackHandler(enabled = active && enabled, onBack = onClose)
 }

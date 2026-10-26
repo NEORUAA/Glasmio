@@ -1,6 +1,7 @@
 package io.github.neoruaa.glasmio.sample
 
 import android.os.Bundle
+import android.graphics.Typeface
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -13,14 +14,28 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.Text
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,6 +50,8 @@ import io.github.neoruaa.glasmio.icons.*
 import io.github.neoruaa.glasmio.preference.*
 import io.github.neoruaa.glasmio.scaffold.*
 import io.github.neoruaa.glasmio.ui.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,50 +69,56 @@ class MainActivity : ComponentActivity() {
                     isAppearanceLightNavigationBars = !dark
                 }
             }
-            GlasmioTheme(isDark = dark, appearance = GlassAppearance(reduceTransparency = reduceTransparency)) {
-                CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
-                    BackHandler(page != "Glasmio") { page = "Glasmio" }
-                    GlasmioBackdropHost(
-                        modifier = Modifier.fillMaxSize(),
-                        sampledContent = { SampleBackdrop(colorful = page == "Materials") },
-                        overlayContent = {
-                            if (page == "Lists") {
-                                ListDemo(onBack = { page = "Glasmio" })
-                            } else {
-                                GlasmioScaffold(
-                                    containerColor = Color.Transparent,
-                                    topBar = {
-                                        GlasmioTopBar(
-                                            title = page,
-                                            modifier = Modifier.statusBarsPadding(),
-                                            style = GlasmioTopBarStyle.LargeTitle,
-                                            navigation = if (page != "Glasmio") ({
-                                                GlasmioIconButton(onClick = { page = "Glasmio" }) {
-                                                    SfIcon("chevron.backward", "Back")
-                                                }
-                                            }) else null,
-                                            actions = {
-                                                GlasmioIconButton(onClick = { dark = !dark }) {
-                                                    SfIcon(if (dark) "sun.max" else "moon", if (dark) "Light appearance" else "Dark appearance")
-                                                }
-                                            },
-                                        )
-                                    },
-                                ) { padding ->
-                                    when (page) {
-                                        "Glasmio" -> Catalog(padding) { page = it }
-                                        "Materials" -> MaterialsDemo(padding)
-                                        "Controls" -> ControlsDemo(padding)
-                                        "Navigation" -> NavigationDemo(padding)
-                                        "Preferences" -> PreferencesDemo(padding, dark, { dark = it }, reduceTransparency, { reduceTransparency = it }, rtl, { rtl = it })
-                                        "Search" -> SearchDemo(padding)
-                                        "Menus" -> MenusDemo(padding)
-                                        "Sheets" -> SheetsDemo(padding)
+            val context = LocalContext.current
+            val symbolTypeface = remember(context) {
+                runCatching { Typeface.createFromAsset(context.assets, "glasmio_symbols.ttf") }.getOrNull()
+            }
+            GlasmioIconProvider(symbolTypeface = symbolTypeface) {
+                GlasmioTheme(isDark = dark, appearance = GlassAppearance(reduceTransparency = reduceTransparency)) {
+                    CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+                        BackHandler(page != "Glasmio") { page = "Glasmio" }
+                        GlasmioBackdropHost(
+                            modifier = Modifier.fillMaxSize(),
+                            sampledContent = { SampleBackdrop(colorful = page == "Materials") },
+                            overlayContent = {
+                                if (page == "Lists") {
+                                    ListDemo(onBack = { page = "Glasmio" })
+                                } else {
+                                    GlasmioScaffold(
+                                        containerColor = Color.Transparent,
+                                        topBar = {
+                                            GlasmioTopBar(
+                                                title = page,
+                                                modifier = Modifier.statusBarsPadding(),
+                                                style = GlasmioTopBarStyle.LargeTitle,
+                                                navigation = if (page != "Glasmio") ({
+                                                    GlasmioIconButton(onClick = { page = "Glasmio" }) {
+                                                        SfIcon("chevron.backward", "Back")
+                                                    }
+                                                }) else null,
+                                                actions = {
+                                                    GlasmioIconButton(onClick = { dark = !dark }) {
+                                                        SfIcon(if (dark) "sun.max" else "moon", if (dark) "Light appearance" else "Dark appearance")
+                                                    }
+                                                },
+                                            )
+                                        },
+                                    ) { padding ->
+                                        when (page) {
+                                            "Glasmio" -> Catalog(padding) { page = it }
+                                            "Materials" -> MaterialsDemo(padding)
+                                            "Controls" -> ControlsDemo(padding)
+                                            "Navigation" -> NavigationDemo(padding)
+                                            "Preferences" -> PreferencesDemo(padding, dark, { dark = it }, reduceTransparency, { reduceTransparency = it }, rtl, { rtl = it })
+                                            "Search" -> SearchDemo(padding)
+                                            "Menus" -> MenusDemo(padding)
+                                            "Sheets" -> SheetsDemo(padding)
+                                        }
                                     }
                                 }
-                            }
-                        },
-                    )
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -106,7 +129,8 @@ class MainActivity : ComponentActivity() {
 private fun SampleBackdrop(colorful: Boolean) {
     val colors = LocalGlassColors.current
     Canvas(Modifier.fillMaxSize().background(colors.groupedBackground)) {
-        val alpha = if (colorful) 0.9f else if (colors.isDark) 0.08f else 0.07f
+        if (!colorful) return@Canvas
+        val alpha = 0.9f
         drawCircle(
             Brush.radialGradient(listOf(Color(0xFF0088FF).copy(alpha = alpha), Color.Transparent)),
             radius = size.width * 0.9f,
@@ -148,7 +172,7 @@ private val catalog = listOf(
     "Preferences" to "gear",
     "Search" to "magnifyingglass",
     "Menus" to "ellipsis",
-    "Sheets" to "rectangle.bottomthird.inset.filled",
+    "Sheets" to "inset.filled.bottomthird.rectangle",
 )
 
 @Composable
@@ -264,6 +288,19 @@ private fun ControlsDemo(padding: PaddingValues) {
                 GlasmioButton(onClick = {}, enabled = false) { Text("Disabled") }
             }
         }
+        item {
+            Section("Buttons") {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GlasmioButtonSize.entries.forEach { size ->
+                        GlasmioButton(onClick = {}, size = size, enabled = enabled) { Text(size.name) }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GlasmioButton(onClick = {}, size = GlasmioButtonSize.Large, destructive = true, enabled = enabled) { Text("Delete") }
+                    GlasmioButton(onClick = {}, size = GlasmioButtonSize.Large, emphasis = GlassEmphasis.Prominent, destructive = true, enabled = enabled) { Text("Delete") }
+                }
+            }
+        }
     }
     GlasmioColorPicker(colorPicker, color, { color = it }, { colorPicker = false }, "Colors")
 }
@@ -316,26 +353,127 @@ private fun NavigationDemo(padding: PaddingValues) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ListDemo(onBack: () -> Unit) {
     var reordered by remember { mutableStateOf(listOf("First", "Second", "Third")) }
-    GlasmioPinnedListPage(title = "Lists", onNavigateBack = onBack) {
-        item {
-            GlasmioReorderableGroup(reordered, { reordered = it }, "Reorder", "Move up", "Move down") {
-                Text(it, style = IosTypography.body, modifier = Modifier.weight(1f))
+    var grid by rememberSaveable { mutableStateOf(false) }
+    var entries by remember { mutableStateOf((1..24).toList()) }
+    var refreshing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val refresh: () -> Unit = {
+        if (!refreshing) {
+            refreshing = true
+            scope.launch {
+                try {
+                    delay(400)
+                    entries = entries.drop(1) + entries.first()
+                } finally {
+                    refreshing = false
+                }
             }
         }
-        item {
-            GlasmioGroupedList {
-                GlasmioListRow("Simple row", showTopSeparator = false)
-                GlasmioListRow("Title", subtitle = "Subtitle", detail = "Detail", systemName = "star")
-                GlasmioListRow("A long row title stays inside its layout and truncates cleanly", onClick = {})
-            }
+    }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    val refreshState = rememberPullToRefreshState()
+    val collapseDistance = with(LocalDensity.current) { 56.dp.toPx() }
+    val listCollapseProgress by remember(listState, collapseDistance) {
+        derivedStateOf {
+            if (listState.firstVisibleItemIndex > 0) 1f
+            else (listState.firstVisibleItemScrollOffset / collapseDistance).coerceIn(0f, 1f)
         }
-        items((1..24).toList()) { index ->
-            GlasmioCard(Modifier.fillMaxWidth()) {
-                GlasmioListRow("Item $index", showTopSeparator = false, onClick = {})
+    }
+    val gridCollapseProgress = rememberGlasmioGridCollapseProgress(gridState)
+    val collapseProgress = if (grid) gridCollapseProgress else listCollapseProgress
+    val largeTitle: @Composable () -> Unit = {
+        Text(
+            "Lists",
+            style = IosTypography.largeTitle,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer {
+                    alpha = 1f - collapseProgress
+                    scaleX = 1f - 0.04f * collapseProgress
+                    scaleY = scaleX
+                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                }
+                .blur(6.dp * collapseProgress)
+                .offset(y = (-10).dp)
+                .padding(horizontal = 4.dp, vertical = 6.dp),
+        )
+    }
+    GlasmioPinnedPage(
+        title = "Lists",
+        onNavigateBack = onBack,
+        collapseProgress = collapseProgress,
+        actions = {
+            GlasmioIconButton(onClick = refresh, enabled = !refreshing) {
+                SfIcon("arrow.clockwise", "Refresh")
             }
+            GlasmioIconButton(onClick = { grid = !grid }) {
+                SfIcon(if (grid) "list.bullet" else "rectangle.grid.2x2", if (grid) "Show list" else "Show grid")
+            }
+        },
+    ) { padding ->
+        Box(
+            Modifier.fillMaxSize().pullToRefresh(
+                isRefreshing = refreshing,
+                onRefresh = refresh,
+                state = refreshState,
+            ),
+        ) {
+            Box(Modifier.fillMaxSize().pullToRefreshRebound(refreshState, refreshing)) {
+                if (grid) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(150.dp),
+                        state = gridState,
+                        modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
+                        contentPadding = padding,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        item(key = "large-title", span = { GridItemSpan(maxLineSpan) }) { largeTitle() }
+                        items(entries, key = { it }) { index ->
+                            GlasmioCard(Modifier.fillMaxWidth().height(120.dp)) {
+                                Text("Item $index", style = IosTypography.headline, modifier = Modifier.padding(20.dp))
+                            }
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
+                        contentPadding = padding,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        item(key = "large-title") { largeTitle() }
+                        item(key = "reorderable") {
+                            GlasmioReorderableGroup(reordered, { reordered = it }, "Reorder", "Move up", "Move down") {
+                                Text(it, style = IosTypography.body, modifier = Modifier.weight(1f))
+                            }
+                        }
+                        item(key = "grouped") {
+                            GlasmioGroupedList {
+                                GlasmioListRow("Simple row", showTopSeparator = false)
+                                GlasmioListRow("Title", subtitle = "Subtitle", detail = "Detail", systemName = "star")
+                                GlasmioListRow("A long row title stays inside its layout and truncates cleanly", onClick = {})
+                            }
+                        }
+                        items(entries, key = { it }) { index ->
+                            GlasmioCard(Modifier.fillMaxWidth()) {
+                                GlasmioListRow("Item $index", showTopSeparator = false, onClick = {})
+                            }
+                        }
+                    }
+                }
+            }
+            PullToRefreshDefaults.Indicator(
+                isRefreshing = refreshing,
+                state = refreshState,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = padding.calculateTopPadding()),
+            )
         }
     }
 }
