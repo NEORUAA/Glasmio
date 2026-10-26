@@ -121,7 +121,7 @@ class GlassMorphRenderer(
         shadowOffsetY = materialPreset?.shadowOffsetY ?: 8.dp,
         shadowAlpha = materialPreset?.let { if (materialDark) it.darkShadowAlpha else it.lightShadowAlpha } ?: 0.02f,
     )
-    private val shadowLiftEffect = if (appearance.usesBackdrop && materialPreset == null) navigationShadowLiftEffect() else null
+    private val shadowLiftEffect = if (appearance.usesBackdrop) navigationShadowLiftEffect() else null
     private val reusableOutlinePath = Path()
     private var materialWidth = 0
     private var materialHeight = 0
@@ -278,7 +278,7 @@ class GlassMorphRenderer(
         } else refractionEffect
         refracted.renderEffect = sampledEffect?.asComposeRenderEffect()
 
-        if (navigationOutline && materialPreset == null) {
+        if (navigationOutline) {
             val sideExpansion = 1.4.dp.toPx()
             withTransform({
                 scale((bounds.width + sideExpansion) / bounds.width, 1f, bounds.center)

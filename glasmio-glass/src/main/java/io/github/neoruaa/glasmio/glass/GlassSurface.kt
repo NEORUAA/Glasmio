@@ -378,6 +378,21 @@ class GraphicsLayerBlockScope : GraphicsLayerScope {
     }
 }
 
+/** Original Navigation prominent tint; the shared surface still owns all optics and edge layers. */
+private fun DrawScope.drawNavigationProminentTint(
+    surfaceColor: Color,
+    isLight: Boolean,
+    brightness: Float,
+    enabled: Boolean,
+) {
+    drawRect(
+        Color.White.copy(alpha = (if (isLight) 0.16f else 0.06f) + brightness * 0.18f),
+        blendMode = BlendMode.Screen,
+    )
+    drawRect(surfaceColor.copy(alpha = 1f), alpha = 0.22f, blendMode = BlendMode.Hue)
+    drawRect(surfaceColor.copy(alpha = surfaceColor.alpha * if (enabled) 1f else 0.8f))
+}
+
 const val LightNavigationContainerAlphaScale = 0.5f
 
 /** Adjusts only the sampled image, before the neutral tint and foreground are drawn. */
@@ -568,7 +583,7 @@ fun Modifier.navigationGlassBackground(
     )
     .navigationGlassBoxShadow(
         shape,
-        if (material == null) GlassBoxShadowAlpha * shadowAlpha.coerceIn(0f, 1f) else 0f,
+        GlassBoxShadowAlpha * shadowAlpha.coerceIn(0f, 1f),
         layerBlock,
     )
     .drawBackdrop(
@@ -587,7 +602,7 @@ fun Modifier.navigationGlassBackground(
                         chromaticAberration = true,
                     )
                 }
-                if (material == null && navigationMaterial && !isDark) liftNavigationShadows()
+                if (navigationMaterial && !isDark) liftNavigationShadows()
             }
         },
         highlight = {
@@ -609,6 +624,9 @@ fun Modifier.navigationGlassBackground(
         onDrawSurface = {
             if (appearance.reduceTransparency) {
                 drawRect(containerColor.copy(alpha = 1f))
+            } else if (material == null && surfaceOverlay != null) {
+                // Preserve the original Navigation overlay contract, including detail inner shadows.
+                surfaceOverlay()
             } else {
                 if (navigationMaterial && sampleBackdrop && appearance.usesBackdrop) {
                     drawNavigationGlassMaterial(containerColor, isDark, containerAlphaMultiplier, material, materialTint)
@@ -660,7 +678,7 @@ fun GlassSurface(
     onLongClick: (() -> Unit)? = null,
     contentAlignment: Alignment = Alignment.Center,
     detailAction: Boolean = false,
-    material: NavigationGlassMaterial = NavigationGlassMaterial.RegularSmall,
+    material: NavigationGlassMaterial? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
@@ -669,13 +687,16 @@ fun GlassSurface(
     val appearance = LocalGlassAppearance.current
     val toolbarSymbols = LocalIosToolbarActionGroup.current != null
     val isLight = !colors.isDark
-    val navigationMaterial = sampleBackdrop && appearance.usesBackdrop
+    val navigationMaterial = (material != null ||
+        (emphasis == GlassEmphasis.Regular && navigationSurfaceColor == null)) &&
+        sampleBackdrop && appearance.usesBackdrop
     val accentDetailAction = detailAction && resolvedStyle == GlassSurfaceStyle.Navigation &&
         emphasis == GlassEmphasis.Prominent && navigationSurfaceColor == null &&
         sampleBackdrop && appearance.usesBackdrop
     val innerShadows = rememberNavigationInnerShadows(
         resolvedStyle == GlassSurfaceStyle.Navigation && (navigationMaterial || accentDetailAction),
     )
+    val brightness = LocalGlassSurfaceBrightness.current.coerceIn(0f, 1f)
     val animationScope = rememberCoroutineScope()
     val interactiveHighlight = remember(animationScope) {
         InteractiveHighlight(animationScope = animationScope)
@@ -792,6 +813,7 @@ fun GlassSurface(
             navigationMaterial,
             accentDetailAction,
             innerShadows,
+            brightness,
             enabled,
             refractionHeight,
             refractionAmount,
@@ -812,9 +834,18 @@ fun GlassSurface(
                 innerShadows = innerShadows,
                 isDark = colors.isDark,
                 containerAlphaMultiplier = navigationSurfaceAlphaMultiplier,
-                surfaceOverlay = if (emphasis == GlassEmphasis.Prominent) {
+                surfaceOverlay = if (material == null && accentDetailAction) {
                     {
-                        // Apple's Glass Prominent variant adds its backing and tint to the same glass.
+                        drawNavigationProminentTint(containerColor, isLight, brightness, enabled)
+                        innerShadows?.draw(this, shape, isDark = colors.isDark)
+                    }
+                } else if (material == null && emphasis == GlassEmphasis.Prominent) {
+                    {
+                        drawNavigationProminentTint(containerColor, isLight, brightness, enabled)
+                    }
+                } else if (emphasis == GlassEmphasis.Prominent) {
+                    {
+                        // Explicit scene variants add their source backing and tint to the same glass.
                         drawRect(Color.White.copy(alpha = 0.94f))
                         val tint = navigationSurfaceColor ?: containerColor.copy(alpha = 1f)
                         drawRect(tint.copy(alpha = tint.alpha * if (enabled) 1f else 0.8f))
@@ -831,7 +862,7 @@ fun GlassSurface(
                 opticalHighlightBoost = opticalHighlightBoost,
                 material = material,
                 materialTint = navigationSurfaceColor.takeIf { emphasis == GlassEmphasis.Regular },
-                blurRadius = material.frostRadius,
+                blurRadius = material?.frostRadius ?: 2.dp,
             )
         }
     }

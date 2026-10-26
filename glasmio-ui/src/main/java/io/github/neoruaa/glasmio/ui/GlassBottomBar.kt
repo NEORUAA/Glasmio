@@ -567,7 +567,6 @@ fun <T> GlasmioNavigationBar(
             isDark = colors.isDark,
             pressProgress = { pressProgressState.value },
             layerBlock = pressLayerBlock,
-            material = NavigationGlassMaterial.RegularSmall,
         )
         val navigationGlassModifier = if (sharesContactSurface) Modifier.graphicsLayer(pressLayerBlock)
         else if (morphing) morphingNavigationGlass else remember(
@@ -589,8 +588,6 @@ fun <T> GlasmioNavigationBar(
                 pressProgressState = pressProgressState,
                 layerBlock = pressLayerBlock,
                 appearance = appearance,
-                material = NavigationGlassMaterial.RegularSmall,
-                blurRadius = NavigationGlassMaterial.RegularSmall.frostRadius,
             )
         }
         val hiddenLayerBackdropModifier = remember(tabsBackdrop) {

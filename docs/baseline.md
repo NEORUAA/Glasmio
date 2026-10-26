@@ -87,3 +87,9 @@ The raw rolling frame buffer contains the most recent 120 frames. Its CPU, drawi
 | Migrated / Light | 4.352 / 17.582 ms | 0.664 / 10.964 ms | 16.666 / 33.395 ms |
 
 CPU uses `SyncQueued − FrameStartTime`, Draw uses `SyncQueued − DrawStart`, and Render uses `SwapBuffers − SyncStart`. The recent-frame distributions vary by mode, including higher migrated light-mode tails. Raw data, compilation output, actual ART state, stable-heading evidence, and parsed P50/P90/P95/P99 values are retained in `build/reports/migration/aot-controlled/`. Deadline-miss counts remain excluded because the raw deadlines are many seconds in the future. No renderer parameters or device-wide ART properties were changed, and the migrated APK and light mode were restored after the pair.
+
+## Supplementary source recording
+
+`build/reports/migration/navigation-final/source-baseline-ca6fdd.mp4` records the clean source baseline in light mode, including Settings, the accent menu, the color-picker sheet, and player expansion/collapse. The 21.39-second H.264 clip is 560 × 1218 and was captured separately from performance collection. An unmodified Home PNG and hierarchy accompany it as `source-baseline-ca6fdd-home-light.*`. The current application was restored with `adb install -r` afterwards, with the same account, paused song, settings, and light mode preserved.
+
+The adjacent `navigation-final.mp4` and `pre-stack-fix-functional.json` document the first Navigation-preset candidate. That candidate passed functional search, player, menu, and sheet checks, but its visual acceptance was superseded by the requested restoration of the original Navigation outline and fine shadows. These files are retained as intermediate evidence rather than the final visual result.

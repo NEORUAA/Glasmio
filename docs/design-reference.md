@@ -16,9 +16,11 @@ All rounded component surfaces and Material theme shape roles use continuous cur
 
 ## Navigation glass
 
-All standalone glass surfaces share the navigation renderer. `NavigationGlassMaterial` selects the scene parameters from the Materials page (`215:105157`): Regular Small and Clear use a 6 dp frost radius; Regular Medium and Large use 16 dp. The presets retain the source layer ordering, blend modes, light/dark tint and shadow geometry. Slider, Switch and Segmented Control internals keep their own optical behavior.
+All standalone glass surfaces share the navigation renderer. Its default retains MeiloX's calibrated navigation appearance: the original neutral tint, 2 dp backdrop blur, exterior side shadows, crisp outline, inner shadows and light-mode shadow lift. Selecting a scene never removes these edge layers. Existing navigation bars and floating controls retain this default.
 
-Figma's optical parameters are recorded in [design/ios27-materials.json](design/ios27-materials.json). Its `depth` and `refraction` fields do not use the same units as the Android lens shader. The existing calibrated navigation lens remains the shared optical implementation; those values are not presented as a direct numerical conversion.
+Explicit `NavigationGlassMaterial` presets adapt backing parameters from the Materials page (`215:105157`): Regular Small and Clear declare a frost radius of 6; Regular Medium and Large declare 16. Their tint layers and exterior shadow parameters are applied within the same renderer. Slider, Switch and Segmented Control internals keep their own optical behavior.
+
+Figma's native parameters are recorded in [design/ios27-materials.json](design/ios27-materials.json). Its GLASS frost, depth and refraction fields do not establish equivalent Android shader kernels or lens units. The existing calibrated navigation lens remains the shared optical implementation; those values are not presented as a direct numerical conversion. The preserved default remains the visual reference for navigation controls.
 
 ## Sample wallpaper
 

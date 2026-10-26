@@ -13,6 +13,7 @@ Initial Android Compose framework extraction from MeiloX.
 - Provide one root-level SF symbol font provider, a replaceable icon resolver, and a local debug font option for the sample.
 - Add an independent interactive sample and documentation for component use, backdrop hosting, and migration.
 - Unify standalone glass under the navigation renderer with Regular Small, Regular Medium, Regular Large, and Clear scene presets from Apple's Materials page.
+- Preserve the original calibrated navigation defaults and complete outline, side-shadow, inner-shadow and shadow-lift layers; scene overrides remain opt-in.
 - Add a three-tab sample navigation bar with separate search, collapsing titles, progressive edge blur, and Miuix page transitions.
 - Use solid catalog backgrounds and the original light/dark iOS 27 wallpaper in glass demonstrations.
 - Match the reference text metrics, tracking, control label weights, and continuous corners.

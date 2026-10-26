@@ -21,7 +21,7 @@ GlasmioBackdropHost(
 
 Place glass outside the layer it samples. Recording a control into its own backdrop creates a feedback loop. For scrolling pages, `GlasmioPinnedListPage` already records the body separately from its fixed toolbar.
 
-Standalone surfaces use the shared navigation material. Choose the scene through `GlassSurface(material = NavigationGlassMaterial.RegularSmall)`: Small is suited to controls and bars, Medium to menus and alerts, and Large to sheets. `Clear` retains more of the background. The component defaults already select their scene; Switch, Slider and Segmented Control retain their internal lenses.
+Standalone surfaces use the shared navigation material. The default preserves MeiloX's original calibrated navigation appearance, including its complete outline and shadow layers. Explicit `GlassSurface(material = NavigationGlassMaterial.RegularSmall)` adapts the backing for a scene; Medium serves menus and alerts, Large serves sheets, and Clear retains more background. These presets keep the same edge stack. Switch, Slider and Segmented Control retain their internal lenses.
 
 ## Existing recorded sources
 
