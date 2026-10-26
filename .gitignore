@@ -1,0 +1,12 @@
+goal.md
+.DS_Store
+.gradle/
+.kotlin/
+.idea/
+**/build/
+**/.cxx/
+local.properties
+*.iml
+*.jks
+*.keystore
+.env
