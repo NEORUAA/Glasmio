@@ -1,0 +1,286 @@
+package io.github.neoruaa.glasmio.scaffold
+
+import io.github.neoruaa.glasmio.core.*
+import io.github.neoruaa.glasmio.glass.*
+import io.github.neoruaa.glasmio.ui.*
+import io.github.neoruaa.glasmio.icons.*
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.material3.Text
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawPlainBackdrop
+
+@Composable
+fun rememberGlasmioGridCollapseProgress(
+    gridState: LazyGridState,
+    collapseDistance: Dp = 56.dp,
+): Float {
+    val collapseDistancePx = with(LocalDensity.current) { collapseDistance.toPx().coerceAtLeast(1f) }
+    val progress by remember(gridState, collapseDistancePx) {
+        derivedStateOf {
+            if (gridState.firstVisibleItemIndex > 0) {
+                1f
+            } else {
+                (gridState.firstVisibleItemScrollOffset / collapseDistancePx).coerceIn(0f, 1f)
+            }
+        }
+    }
+    return progress
+}
+
+/**
+ * Fixed iOS navigation bar over a progressively blurred scroll source.
+ *
+ * The scrolling layer exports its rendered result to a dedicated backdrop. The toolbar is kept
+ * outside that layer, so the backdrop graph cannot recursively sample the toolbar itself.
+ */
+@Composable
+fun GlasmioPinnedListPage(
+    title: String,
+    bottomPadding: Dp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+    horizontalContentPadding: Dp = IosPageHorizontalPadding,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    listState: LazyListState = rememberLazyListState(),
+    showsLargeTitle: Boolean = true,
+    largeTitleHorizontalPadding: Dp = 4.dp,
+    verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(10.dp),
+    onNavigateBack: (() -> Unit)? = null,
+    navigateBackContentDescription: String = "Back",
+    actions: @Composable RowScope.() -> Unit = {},
+    actionsStyle: GlasmioToolbarActionStyle = GlasmioToolbarActionStyle.Merged,
+    actionsSeparationProgress: Float? = null,
+    backgroundColor: Color? = null,
+    backgroundBrush: Brush? = null,
+    bottomPaddingValues: PaddingValues? = null,
+    content: LazyListScope.() -> Unit,
+) {
+    val collapseDistancePx = with(LocalDensity.current) { 56.dp.toPx() }
+    val collapseProgress by remember(listState, showsLargeTitle) {
+        derivedStateOf {
+            if (!showsLargeTitle) {
+                1f
+            } else if (listState.firstVisibleItemIndex > 0) {
+                1f
+            } else {
+                (listState.firstVisibleItemScrollOffset / collapseDistancePx).coerceIn(0f, 1f)
+            }
+        }
+    }
+    GlasmioPinnedPage(
+        title = title,
+        subtitle = subtitle,
+        bottomPadding = bottomPadding,
+        modifier = modifier,
+        onNavigateBack = onNavigateBack,
+        navigateBackContentDescription = navigateBackContentDescription,
+        actions = actions,
+        actionsStyle = actionsStyle,
+        actionsSeparationProgress = actionsSeparationProgress,
+        collapseProgress = collapseProgress,
+        backgroundColor = backgroundColor,
+        backgroundBrush = backgroundBrush,
+    ) { contentPadding ->
+        val listContentPadding = remember(contentPadding, horizontalContentPadding, bottomPaddingValues) {
+            // Keep animated bottom insets in LazyColumn measurement, not page composition.
+            object : PaddingValues by contentPadding {
+                override fun calculateLeftPadding(layoutDirection: LayoutDirection): Dp = horizontalContentPadding
+
+                override fun calculateRightPadding(layoutDirection: LayoutDirection): Dp = horizontalContentPadding
+
+                override fun calculateBottomPadding(): Dp =
+                    contentPadding.calculateBottomPadding() +
+                        (bottomPaddingValues?.calculateBottomPadding() ?: 0.dp)
+            }
+        }
+        // A different scroll state owns a different measurement node and item provider.
+        key(listState) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = listContentPadding,
+                verticalArrangement = verticalArrangement,
+            ) {
+                if (showsLargeTitle) {
+                    item(key = "ios-large-title:$title") {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    alpha = 1f - collapseProgress
+                                    val scale = 1f - 0.04f * collapseProgress
+                                    scaleX = scale
+                                    scaleY = scale
+                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                                }
+                                .blur(6.dp * collapseProgress)
+                                .offset(y = (-10).dp)
+                                .padding(horizontal = largeTitleHorizontalPadding, vertical = 6.dp),
+                        ) {
+                            Text(
+                                text = title,
+                                style = IosTypography.largeTitle,
+                                fontWeight = FontWeight.Bold,
+                                color = LocalGlassColors.current.content,
+                            )
+                            subtitle?.let {
+                                Text(
+                                    text = it,
+                                    style = IosTypography.subheadline,
+                                    color = LocalGlassColors.current.secondaryContent,
+                                    modifier = Modifier.padding(top = 3.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+                content()
+            }
+        }
+    }
+}
+
+/**
+ * Fixed iOS navigation bar for pages whose body is not a single [LazyColumn].
+ *
+ * [content] is the only exported sample layer. All glass controls inside it continue to read
+ * [LocalGlassBackdrop], while the toolbar reads this dedicated page layer, preventing feedback.
+ */
+@Composable
+fun GlasmioPinnedPage(
+    title: String,
+    bottomPadding: Dp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding(),
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    onNavigateBack: (() -> Unit)? = null,
+    navigateBackContentDescription: String = "Back",
+    actions: @Composable RowScope.() -> Unit = {},
+    actionsStyle: GlasmioToolbarActionStyle = GlasmioToolbarActionStyle.Merged,
+    actionsSeparationProgress: Float? = null,
+    collapseProgress: Float = 1f,
+    backgroundColor: Color? = null,
+    topBarBlurProgress: Float = collapseProgress,
+    backgroundBrush: Brush? = null,
+    content: @Composable BoxScope.(PaddingValues) -> Unit,
+) {
+    val pageBackdrop = rememberLayerBackdrop()
+    val colors = LocalGlassColors.current
+    val appearance = LocalGlassAppearance.current
+    val pageBackground = backgroundColor ?: colors.groupedBackground
+    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val toolbarHeight = statusBarHeight + 62.dp
+    val contentPadding = PaddingValues(
+        start = IosPageHorizontalPadding,
+        top = toolbarHeight + 10.dp,
+        end = IosPageHorizontalPadding,
+        bottom = bottomPadding + 24.dp,
+    )
+
+    CompositionLocalProvider(LocalContentColor provides colors.content) {
+        Box(modifier.fillMaxSize()) {
+            // Keep the background inside the recorded draw chain so transparent content regions
+            // sample the real page surface instead of an empty backdrop.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(pageBackdrop) else Modifier)
+                    .then(
+                        if (backgroundBrush != null) Modifier.background(backgroundBrush)
+                        else Modifier.background(pageBackground),
+                    ),
+            ) {
+                // The fallback must share the body's bounds, never the fixed toolbar's layer.
+                GlasmioOverscrollHost { content(contentPadding) }
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(toolbarHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
+                    .align(Alignment.TopCenter)
+                    .graphicsLayer {
+                        alpha = topBarBlurProgress.coerceIn(0f, 1f)
+                    }
+                    .then(
+                        if (appearance.usesBackdrop) {
+                            Modifier.drawPlainBackdrop(
+                                backdrop = pageBackdrop,
+                                shape = { RectangleShape },
+                                effects = {
+                                    progressiveBackdropBlur(
+                                        maxRadius = 10.dp.toPx(),
+                                        tint = pageBackground,
+                                        tintIntensity = 0.78f,
+                                    )
+                                },
+                            )
+                        } else {
+                            Modifier.background(pageBackground.copy(alpha = 1f))
+                        },
+                    ),
+            )
+            CompositionLocalProvider(LocalGlassBackdrop provides pageBackdrop) {
+                GlasmioTopBar(
+                    title = title,
+                    subtitle = subtitle,
+                    modifier = Modifier.fillMaxWidth().statusBarsPadding().align(Alignment.TopCenter),
+                    collapseProgress = collapseProgress,
+                    navigation = onNavigateBack?.let { navigateBack ->
+                        {
+                            GlasmioIconButton(navigateBack) {
+                                SfIcon(
+                                    SfSymbol.ChevronBack,
+                                    navigateBackContentDescription,
+                                    mirrored = true,
+                                )
+                            }
+                        }
+                    },
+                    actions = actions,
+                    actionsStyle = actionsStyle,
+                    actionsSeparationProgress = actionsSeparationProgress,
+                )
+            }
+        }
+    }
+}
