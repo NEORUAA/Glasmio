@@ -307,6 +307,8 @@ class LiquidMenuFieldTexture {
     val height: Int get() = sampled?.height ?: 1
     val input: BitmapShader? get() = if (sampled != null) current?.shader else null
 
+    // RGBA_F16 storage requires the raw half-float bits, rather than numeric conversion.
+    @android.annotation.SuppressLint("HalfFloat")
     fun update(value: LiquidMenuGaussianField?, offset: Offset) {
         val previous = sampled
         sampled = value
