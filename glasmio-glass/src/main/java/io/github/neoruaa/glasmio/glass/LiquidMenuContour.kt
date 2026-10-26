@@ -116,8 +116,12 @@ class LiquidMenuContourWorkspace {
     private var size: Size? = null
     private var pathGeometry: LiquidMenuContour? = null
     private var pathSize: Size? = null
+    private var curveGeometry: LiquidMenuContour? = null
+    private var curveSize: Size? = null
     private var reusablePath: Path? = null
     private val points = FloatArray(SampleCount * 2)
+    private val tangents = FloatArray(SampleCount * 2)
+    private val controls = FloatArray(SampleCount * 4)
     private val radii = FloatArray(SampleCount)
     private var hasSeeds = false
     var fieldEvaluations = 0
@@ -170,19 +174,16 @@ class LiquidMenuContourWorkspace {
     fun path(contour: LiquidMenuContour, size: Size): Path {
         if (pathGeometry == contour && pathSize == size) return requireNotNull(reusablePath)
         vertices(contour, size)
+        val controls = controlPoints(contour, size)
         val path = reusablePath ?: Path().also { reusablePath = it }
         path.rewind()
         path.moveTo(points[0], points[1])
         repeat(SampleCount) { index ->
-            val a = (index + SampleCount - 1) % SampleCount * 2
-            val b = index * 2
             val c = (index + 1) % SampleCount * 2
-            val d = (index + 2) % SampleCount * 2
+            val control = index * 4
             path.cubicTo(
-                points[b] + (points[c] - points[a]) / 6f,
-                points[b + 1] + (points[c + 1] - points[a + 1]) / 6f,
-                points[c] - (points[d] - points[b]) / 6f,
-                points[c + 1] - (points[d + 1] - points[b + 1]) / 6f,
+                controls[control], controls[control + 1],
+                controls[control + 2], controls[control + 3],
                 points[c], points[c + 1],
             )
         }
@@ -190,6 +191,53 @@ class LiquidMenuContourWorkspace {
         pathGeometry = contour
         pathSize = size
         return path
+    }
+
+    internal fun controlPoints(contour: LiquidMenuContour, size: Size): FloatArray {
+        if (curveGeometry == contour && curveSize == size) return controls
+        vertices(contour, size)
+        repeat(SampleCount) { index ->
+            val offset = index * 2
+            val x = points[offset]
+            val y = points[offset + 1]
+            // Optical normals include ovalization. The physical curve must instead
+            // follow the actual zero field, including its Gaussian union when active.
+            val nx = contour.distance(x + TangentProbe, y) - contour.distance(x - TangentProbe, y)
+            val ny = contour.distance(x, y + TangentProbe) - contour.distance(x, y - TangentProbe)
+            val length = sqrt(nx * nx + ny * ny)
+            if (length > 0.000001f) {
+                tangents[offset] = -ny / length
+                tangents[offset + 1] = nx / length
+            } else {
+                val before = (index + SampleCount - 1) % SampleCount * 2
+                val after = (index + 1) % SampleCount * 2
+                val dx = points[after] - points[before]
+                val dy = points[after + 1] - points[before + 1]
+                val span = sqrt(dx * dx + dy * dy).coerceAtLeast(0.000001f)
+                tangents[offset] = dx / span
+                tangents[offset + 1] = dy / span
+            }
+        }
+        repeat(SampleCount) { index ->
+            val a = index * 2
+            val b = (index + 1) % SampleCount * 2
+            val dx = points[b] - points[a]
+            val dy = points[b + 1] - points[a + 1]
+            val chord = sqrt(dx * dx + dy * dy)
+            val dot = (tangents[a] * tangents[b] + tangents[a + 1] * tangents[b + 1]).coerceIn(-1f, 1f)
+            // Circular-arc handle length from this segment's chord and turning angle.
+            // Uniform polar samples have unequal physical spacing on tall menus, so
+            // neighboring chord lengths cannot set the current segment's tangents.
+            val handle = 2f * chord / (3f * (1f + sqrt((1f + dot) / 2f)))
+            val offset = index * 4
+            controls[offset] = points[a] + tangents[a] * handle
+            controls[offset + 1] = points[a + 1] + tangents[a + 1] * handle
+            controls[offset + 2] = points[b] - tangents[b] * handle
+            controls[offset + 3] = points[b + 1] - tangents[b + 1] * handle
+        }
+        curveGeometry = contour
+        curveSize = size
+        return controls
     }
 
     private fun solveRadius(
@@ -247,6 +295,7 @@ class LiquidMenuContourWorkspace {
     private companion object {
         const val SampleCount = 96
         const val RootTolerance = 1f / 32f
+        const val TangentProbe = RootTolerance * 4f
         val Directions = FloatArray(SampleCount * 2).apply {
             repeat(SampleCount) { index ->
                 val angle = index * (2.0 * PI / SampleCount)
@@ -272,14 +321,14 @@ class LiquidMenuGaussianField {
         private set
     var height: Int = 0
         private set
-    var rgba: FloatArray = FloatArray(0)
+    var rgba: FloatArray = EmptyBuffer
         private set
     var generation: Long = 0L
         private set
     private var geometry: LiquidMenuContour? = null
     private var active = false
-    private var raw = FloatArray(0)
-    private var horizontal = FloatArray(0)
+    private var raw = EmptyBuffer
+    private var horizontal = EmptyBuffer
     private val weights = FloatArray(17)
     private val nativeGeometry = FloatArray(14)
 
@@ -288,8 +337,7 @@ class LiquidMenuGaussianField {
         geometry = contour
         val sigma = contour.smoothing.coerceAtLeast(0f)
         if (sigma <= 0.000001f) {
-            active = false
-            return null
+            return deactivate()
         }
         step = max(2f, sigma / 4f)
         val localSigma = sigma / step
@@ -304,8 +352,7 @@ class LiquidMenuGaussianField {
         var radius = maximumRadius
         while (radius > 0 && weights[radius] < 0.002f) radius--
         if (radius == 0) {
-            active = false
-            return null
+            return deactivate()
         }
         sum = weights[0]
         for (index in 1..radius) sum += weights[index] * 2f
@@ -323,7 +370,13 @@ class LiquidMenuGaussianField {
         val rawSize = paddedWidth * paddedHeight * 3
         val horizontalSize = width * paddedHeight * 3
         val outputSize = width * height * 4
-        if (rgba.size < outputSize) rgba = FloatArray(outputSize)
+        if (rgba.size < outputSize) {
+            val capacity = bufferCapacity(rgba.size, outputSize)
+            // Every active texel is overwritten below. Drop the old backing before allocating
+            // its replacement so a GC during growth can reclaim it instead of retaining both.
+            rgba = EmptyBuffer
+            rgba = FloatArray(capacity)
+        }
 
         fun geometry(bounds: Rect?, radii: Offset, index: Int) {
             nativeGeometry[index] = bounds?.left ?: 0f
@@ -346,8 +399,16 @@ class LiquidMenuGaussianField {
         }
 
         // The portable JVM implementation is also the numerical reference for the JNI path.
-        if (raw.size < rawSize) raw = FloatArray(rawSize)
-        if (horizontal.size < horizontalSize) horizontal = FloatArray(horizontalSize)
+        if (raw.size < rawSize) {
+            val capacity = bufferCapacity(raw.size, rawSize)
+            raw = EmptyBuffer
+            raw = FloatArray(capacity)
+        }
+        if (horizontal.size < horizontalSize) {
+            val capacity = bufferCapacity(horizontal.size, horizontalSize)
+            horizontal = EmptyBuffer
+            horizontal = FloatArray(capacity)
+        }
 
         // The halo evaluates the actual analytic field, so convolution never samples an
         // artificial transparent or clamped boundary around the source orb or the menu.
@@ -407,6 +468,22 @@ class LiquidMenuGaussianField {
         return this
     }
 
+    private fun deactivate(): LiquidMenuGaussianField? {
+        val hadBuffers = rgba.isNotEmpty() || raw.isNotEmpty() || horizontal.isNotEmpty()
+        active = false
+        rgba = EmptyBuffer
+        raw = EmptyBuffer
+        horizontal = EmptyBuffer
+        // An open menu can remain at rest indefinitely. Its inactive Gaussian must not retain
+        // the dense transition grid or the native convolution scratch until the menu closes.
+        if (hadBuffers) LiquidMenuNativeField.release()
+        return null
+    }
+
+    private fun bufferCapacity(previous: Int, required: Int): Int =
+        maxOf(required.toLong(), previous.toLong() + maxOf(previous / 4, 4096))
+            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+
     fun distance(x: Float, y: Float): Float {
         val fx = ((x - origin.x) / step).coerceIn(0f, (width - 1).toFloat())
         val fy = ((y - origin.y) / step).coerceIn(0f, (height - 1).toFloat())
@@ -420,6 +497,10 @@ class LiquidMenuGaussianField {
         val c = rgba[index + width * 4]
         val d = rgba[index + width * 4 + 4]
         return (a + (b - a) * tx) * (1f - ty) + (c + (d - c) * tx) * ty
+    }
+
+    private companion object {
+        val EmptyBuffer = FloatArray(0)
     }
 }
 

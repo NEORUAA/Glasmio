@@ -4,7 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
@@ -16,10 +18,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -42,6 +47,7 @@ import io.github.neoruaa.glasmio.core.GlassAppearance
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.icons.SfSymbol
+import io.github.neoruaa.glasmio.glass.LiquidMenuMorphMotion
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
@@ -219,6 +225,169 @@ class NavigationRenderingTest {
         compose.runOnIdle { compact.floatValue = 1f }
         compose.onAllNodes(tab).assertCountEquals(1)
         compose.onNode(tab and hasContentDescription("Library")).assertIsSelected()
+    }
+
+    @Test
+    fun plainMenuClosingOpacityPreservesShadowBeyondEveryLogicalEdge() {
+        val motion = LiquidMenuMorphMotion()
+        val glassSourceReference = mutableStateOf(false)
+        var hostScreenOrigin = Offset.Zero
+        var targetScreenBounds: Rect? = null
+        var pixelDensity = 1f
+        compose.setContent {
+            pixelDensity = LocalDensity.current.density
+            GlasmioTheme(isDark = false) {
+                Box(
+                    Modifier.size(330.dp).background(Color.White)
+                        .testTag("closingMenuShadowHost")
+                        .onGloballyPositioned { hostScreenOrigin = it.localToScreen(Offset.Zero) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    GlasmioContextMenu(
+                        visible = true,
+                        compact = true,
+                        menuWidth = 160.dp,
+                        heightOverride = 100.dp,
+                        backdrop = emptyBackdrop(),
+                        exportChildBackdrop = false,
+                        morphMotion = motion,
+                        morphSourceHasGlassBackground = glassSourceReference.value,
+                        onMenuBoundsChanged = { targetScreenBounds = it },
+                    ) { }
+                }
+            }
+        }
+        compose.waitForIdle()
+        lateinit var logicalMenuBounds: Rect
+        compose.runOnIdle {
+            val target = requireNotNull(targetScreenBounds)
+            logicalMenuBounds = target.translate(-hostScreenOrigin)
+            val sourceSize = Size(84f * pixelDensity, 44f * pixelDensity)
+            val source = Rect(target.center - Offset(sourceSize.width, sourceSize.height) / 2f, sourceSize)
+            motion.initialize(source, target, 34f * pixelDensity, pixelDensity)
+            motion.retarget(true)
+            motion.advanceBy(3f)
+            motion.retarget(false)
+            motion.advanceBy(0.06f)
+            assertTrue("The fixed frame must exercise fractional closing material opacity",
+                motion.frame.contentProgress in 0.05f..0.99f)
+            val sourceLobe = requireNotNull(motion.frame.sourceLobe)
+            assertTrue("The reference source must remain inside the menu's incoming skin",
+                motion.frame.bounds.contains(sourceLobe.topLeft) && motion.frame.bounds.contains(sourceLobe.bottomRight))
+        }
+        compose.waitForIdle()
+        val actual = compose.onNodeWithTag("closingMenuShadowHost").captureToImage().toPixelMap()
+        // A fully enclosed glass source uses the same shadow geometry, with opacity
+        // applied directly to its native shadow node instead of the plain material group.
+        compose.runOnIdle { glassSourceReference.value = true }
+        compose.waitForIdle()
+        val reference = compose.onNodeWithTag("closingMenuShadowHost").captureToImage().toPixelMap()
+        assertEquals(reference.width, actual.width)
+        assertEquals(reference.height, actual.height)
+        val gap = 6f * pixelDensity
+        val band = 8f * pixelDensity
+        val span = 12f * pixelDensity
+        val menu = logicalMenuBounds
+        val strips = linkedMapOf(
+            "top" to Rect(menu.center.x - span, menu.top - gap - band, menu.center.x + span, menu.top - gap),
+            "right" to Rect(menu.right + gap, menu.center.y - span, menu.right + gap + band, menu.center.y + span),
+            "bottom" to Rect(menu.center.x - span, menu.bottom + gap, menu.center.x + span, menu.bottom + gap + band),
+            "left" to Rect(menu.left - gap - band, menu.center.y - span, menu.left - gap, menu.center.y + span),
+        )
+        strips.forEach { (edge, strip) ->
+            val left = strip.left.roundToInt()
+            val top = strip.top.roundToInt()
+            val right = strip.right.roundToInt()
+            val bottom = strip.bottom.roundToInt()
+            assertTrue("The $edge shadow sample must fit outside the logical menu in the capture host",
+                left >= 0 && top >= 0 && right <= actual.width && bottom <= actual.height && right > left && bottom > top)
+            var actualShade = 0.0
+            var referenceShade = 0.0
+            var totalError = 0.0
+            var maximumError = 0f
+            for (y in top until bottom) for (x in left until right) {
+                val expected = reference[x, y]
+                val observed = actual[x, y]
+                actualShade += (3f - observed.red - observed.green - observed.blue) / 3f
+                referenceShade += (3f - expected.red - expected.green - expected.blue) / 3f
+                val error = maxOf(abs(expected.red - observed.red), abs(expected.green - observed.green), abs(expected.blue - observed.blue))
+                totalError += error
+                maximumError = maxOf(maximumError, error)
+            }
+            val pixels = (right - left) * (bottom - top)
+            assertTrue("The native reference must contain a visible $edge shadow outside the logical menu",
+                referenceShade / pixels > 2.0 / 255.0)
+            assertTrue("Plain material opacity must retain the $edge shadow outside its menu-sized RenderNode",
+                actualShade / pixels > 2.0 / 255.0)
+            assertTrue("The $edge shadow must match native post-blur opacity: max=$maximumError, mean=${totalError / pixels}",
+                maximumError <= 3f / 255f && totalError / pixels <= 1.5 / 255.0)
+        }
+    }
+
+    @Test
+    fun popupShadowShellPreservesAnchorEdgesAboveAndBelow() {
+        val expanded = mutableStateOf(false)
+        val anchorAtBottom = mutableStateOf(false)
+        val anchorBounds = mutableStateOf<Rect?>(null)
+        val menuBounds = mutableStateOf<Rect?>(null)
+        val closedCount = mutableStateOf(0)
+        var pixelDensity = 1f
+        compose.setContent {
+            pixelDensity = LocalDensity.current.density
+            GlasmioTheme(isDark = false) {
+                Box(Modifier.fillMaxSize().padding(100.dp)) {
+                    GlasmioMenu(
+                        expanded = expanded.value,
+                        onExpandedChange = { expanded.value = it },
+                        itemCount = 3,
+                        modifier = Modifier.align(if (anchorAtBottom.value) Alignment.BottomEnd else Alignment.TopEnd),
+                        menuWidth = 238.dp,
+                        backdrop = emptyBackdrop(),
+                        exportChildBackdrop = false,
+                        onMenuBoundsChanged = { menuBounds.value = it },
+                        onClosed = { closedCount.value++ },
+                        anchor = {
+                            Box(Modifier.size(80.dp, 44.dp).onGloballyPositioned {
+                                anchorBounds.value = Rect(it.localToScreen(Offset.Zero), Size(it.size.width.toFloat(), it.size.height.toFloat()))
+                            })
+                        },
+                    ) { childBackdrop, close ->
+                        repeat(3) { index ->
+                            GlasmioMenuItem("Item ${index + 1}", close, backdrop = childBackdrop)
+                        }
+                    }
+                }
+            }
+        }
+        listOf(false, true).forEachIndexed { cycle, above ->
+            compose.runOnIdle {
+                assertEquals("The previous Popup must finish closing before moving its anchor", cycle, closedCount.value)
+                anchorAtBottom.value = above
+                menuBounds.value = null
+            }
+            compose.waitForIdle()
+            compose.runOnIdle { expanded.value = true }
+            compose.waitUntil(timeoutMillis = 10_000) { menuBounds.value != null }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val anchor = requireNotNull(anchorBounds.value)
+                val menu = requireNotNull(menuBounds.value)
+                assertTrue("The test anchor must leave the requested menu clear of horizontal clamping",
+                    anchor.right - 238f * pixelDensity >= 12f * pixelDensity)
+                assertEquals("The real Popup must retain its requested menu width", 238f * pixelDensity, menu.width, 1f)
+                assertEquals("The real Popup must retain its requested menu height", 152f * pixelDensity, menu.height, 1f)
+                // Popup positions use integer pixels; screen-coordinate callbacks use floats.
+                assertEquals("The shadow shell must preserve right alignment", anchor.right, menu.right, 1f)
+                if (above) {
+                    assertEquals("An upward Popup must end at its source's bottom edge", anchor.bottom, menu.bottom, 1f)
+                } else {
+                    assertEquals("A downward Popup must begin at its source's top edge", anchor.top, menu.top, 1f)
+                }
+                expanded.value = false
+            }
+            compose.waitUntil(timeoutMillis = 10_000) { closedCount.value == cycle + 1 }
+            compose.waitForIdle()
+        }
     }
 
 }

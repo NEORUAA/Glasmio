@@ -24,8 +24,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.requiredWidth
-import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -103,8 +103,12 @@ private val DropdownMorphSpring = spring<Float>(
 /** Overflow room around the menu so spring overshoot, velocity deformation, blur bleed and the
  *  drop shadow can draw past the resting bounds without being clipped by the popup host. The
  *  visible menu is offset back onto the anchor edge, so its position and physics are unchanged. */
-private val PopupMenuOvershootMarginStart = 64.dp
-private val PopupMenuOvershootMarginVertical = 32.dp
+// Match the material renderer's full three-sigma shadow support, including its offset.
+private val PopupMenuShadowMargin = NavigationGlassMaterial.RegularMedium.let {
+    it.shadowRadius * 1.5f + it.shadowOffsetY + 1.dp
+}
+private val PopupMenuOvershootMarginStart = maxOf(64.dp, PopupMenuShadowMargin)
+private val PopupMenuOvershootMarginVertical = maxOf(32.dp, PopupMenuShadowMargin)
 private val PopupMenuWidth = 238.dp
 
 /** The stable shell is larger than the resting menu so the spring overshoot (up to 1.12x)
@@ -170,21 +174,18 @@ private class IosPopupPositionProvider(
             visualHostWidthPx - targetMenuWidthPx
         }
         val x = menuLeft - menuLeftInHost
-        // The bottom-aligned inner host leaves one fixed margin above the resting menu.
-        // The spring overshoot space sits below it and must not shift the menu over its anchor.
-        val menuTopInHost = anchorOvershootVerticalPx
-        val visualY = if (forceBelowAnchor) {
-            anchorBounds.bottom - menuTopInHost
-        } else if (resolvedDirection) {
-            anchorBounds.bottom - visualHostHeightPx
-        } else {
-            anchorBounds.top
-        }.coerceIn(0, (windowSize.height - visualHostHeightPx).coerceAtLeast(0))
-        val y = if (forceBelowAnchor || resolvedDirection) {
-            visualY
-        } else {
-            visualY - anchorOvershootVerticalPx
+        // Clamp the visible menu, leaving its transparent shadow shell free to overflow
+        // the window. Its extra backing pixels must not change the native target position.
+        val menuTopInHost = if (resolvedDirection) {
+            visualHostHeightPx - targetMenuHeightPx
+        } else anchorOvershootVerticalPx
+        val requestedTop = when {
+            forceBelowAnchor -> anchorBounds.bottom
+            resolvedDirection -> anchorBounds.bottom - targetMenuHeightPx
+            else -> anchorBounds.top
         }
+        val menuTop = requestedTop.coerceIn(0, (windowSize.height - targetMenuHeightPx).coerceAtLeast(0))
+        val y = menuTop - menuTopInHost
         return IntOffset(x, y)
     }
 }
@@ -291,10 +292,10 @@ fun GlasmioContextMenu(
     val popupHostHeight = if (compact) menuHeight else PopupMenuOvershootMarginVertical * 2 + menuHeight * PopupMenuOvershootScale
     Box(
         modifier
-            // Keep the shell's intended width even when Android constrains the popup window.
-            // Start alignment prevents implicit centering from changing the visible offset.
-            .wrapContentWidth(androidx.compose.ui.AbsoluteAlignment.Left, unbounded = true)
-            .requiredWidth(popupHostWidth)
+            // Preserve the entire shadow shell even when it exceeds the popup window.
+            // Absolute alignment keeps its visible menu at the provider's resolved offset.
+            .wrapContentSize(androidx.compose.ui.AbsoluteAlignment.TopLeft, unbounded = true)
+            .requiredSize(width = popupHostWidth, height = popupHostHeight)
             // Keep the transition RenderEffect on the stable Popup host. A blur modifier
             // creates a bounded layer even with Unbounded edge treatment, so it must stay
             // outside the spring-sized menu to avoid exposing a menu-sized rectangle.
@@ -304,8 +305,7 @@ fun GlasmioContextMenu(
             )
             .graphicsLayer {
                 alpha = if (morphMotion != null && (!morphMotion.initialized || !morphSourceAcquired)) 0f else menuAlpha.coerceIn(0f, 1f)
-            }
-            .size(width = popupHostWidth, height = popupHostHeight),
+            },
     ) {
         Box(
             Modifier

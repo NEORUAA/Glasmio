@@ -31,7 +31,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asComposeRenderEffect
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -42,10 +41,10 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.ceil
-import kotlin.math.roundToInt
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.LayerBackdrop
@@ -67,6 +66,7 @@ fun LiquidMenuMorphSurface(
     sourceHasGlassBackground: Boolean = true,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
+    val localDensity = LocalDensity.current
     val colors = LocalGlassColors.current
     val source = rememberCrossWindowBackdrop(backdrop)
     val renderer = rememberGlassMorphRenderer(
@@ -87,7 +87,7 @@ fun LiquidMenuMorphSurface(
     val fieldTexture = remember { LiquidMenuFieldTexture() }
     val foreground = rememberGraphicsLayer()
     val sourceContents = rememberGraphicsLayer()
-    val materialPaint = remember { android.graphics.Paint() }
+    val materialOpacity = rememberGraphicsLayer()
     val drawCache = remember(motion) { LiquidMenuDrawCache() }
     val menuLayerBlock: GraphicsLayerScope.() -> Unit = {
         this.transformOrigin = transformOrigin
@@ -185,14 +185,7 @@ fun LiquidMenuMorphSurface(
                     maxOf(required.right, previousCapture.right), maxOf(required.bottom, previousCapture.bottom),
                 ) else previousCapture
                 drawCache.viewport = capture
-                // The native content channel dissolves the material when the destination
-                // is transparent. Keep the original Row foreground outside this opacity layer.
-                val canvas = drawContext.canvas.nativeCanvas
-                val materialLayer = if (!sourceHasGlassBackground && frame.contentProgress < 1f) {
-                    materialPaint.alpha = (255f * frame.contentProgress).roundToInt().coerceIn(0, 255)
-                    canvas.saveLayer(null, materialPaint)
-                } else -1
-                try {
+                fun DrawScope.drawMaterial() {
                     renderer.draw(
                         scope = this,
                         coordinates = host,
@@ -217,8 +210,48 @@ fun LiquidMenuMorphSurface(
                         isDark = colors.isDark,
                         sampleScale = sampleScale,
                     )
-                } finally {
-                    if (materialLayer >= 0) canvas.restoreToCount(materialLayer)
+                }
+                if (!sourceHasGlassBackground && frame.contentProgress < 1f) {
+                    // A saveLayer on the menu-sized RenderNode inherits its recording clip.
+                    // Give native material opacity its complete moving shadow domain instead.
+                    val preset = NavigationGlassMaterial.RegularMedium
+                    val shadowPadding = ceil(preset.shadowRadius.toPx() * 1.5f) + 1.dp.toPx()
+                    val shadowOffset = preset.shadowOffsetY.toPx()
+                    val required = Rect(
+                        bounds.left - shadowPadding,
+                        bounds.top - shadowPadding + minOf(shadowOffset, 0f),
+                        bounds.right + shadowPadding,
+                        bounds.bottom + shadowPadding + maxOf(shadowOffset, 0f),
+                    )
+                    val previous = drawCache.materialCapture
+                    val materialCapture = if (previous == null) required else Rect(
+                        minOf(previous.left, required.left), minOf(previous.top, required.top),
+                        maxOf(previous.right, required.right), maxOf(previous.bottom, required.bottom),
+                    )
+                    drawCache.materialCapture = materialCapture
+                    val surfaceSize = size
+                    materialOpacity.clip = true
+                    materialOpacity.alpha = frame.contentProgress
+                    materialOpacity.record(
+                        density = localDensity,
+                        layoutDirection = layoutDirection,
+                        size = IntSize(ceil(materialCapture.width).toInt(), ceil(materialCapture.height).toInt()),
+                    ) {
+                        val previousSize = drawContext.size
+                        drawContext.size = surfaceSize
+                        try {
+                            withTransform({ translate(-materialCapture.left, -materialCapture.top) }) {
+                                drawMaterial()
+                            }
+                        } finally {
+                            drawContext.size = previousSize
+                        }
+                    }
+                    withTransform({ translate(materialCapture.left, materialCapture.top) }) {
+                        drawLayer(materialOpacity)
+                    }
+                } else {
+                    drawMaterial()
                 }
                 // Clip in physical surface space. Scaling a clipped full-size menu would
                 // squeeze its corners and make the initial capsule rectangular.
@@ -311,12 +344,12 @@ private class LiquidMenuDrawCache {
     var recordedSourceBounds: Rect? = null
     var foregroundCapture: Rect? = null
     var viewport: Rect? = null
+    var materialCapture: Rect? = null
 }
 
 /** Signed FP16 data avoids color conversion, premultiplication and RGBA8 distance quantization. */
 class LiquidMenuFieldTexture {
     private class Buffer(val bitmap: Bitmap) {
-        val pixels: ByteBuffer = ByteBuffer.allocateDirect(bitmap.byteCount).order(ByteOrder.nativeOrder())
         val shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
             setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
         }
@@ -325,6 +358,7 @@ class LiquidMenuFieldTexture {
     private var current: Buffer? = null
     private var generation = Long.MIN_VALUE
     private var sampled: LiquidMenuGaussianField? = null
+    private var upload: ByteBuffer? = null
     var origin = Offset.Zero
         private set
     val step: Float get() = sampled?.step ?: 1f
@@ -337,7 +371,15 @@ class LiquidMenuFieldTexture {
     fun update(value: LiquidMenuGaussianField?, offset: Offset) {
         val previous = sampled
         sampled = value
-        if (value == null) return
+        if (value == null) {
+            // Runtime shaders bind the empty field below. Their older native display
+            // lists keep their own bitmap references until rendering has finished.
+            current = null
+            buffers.clear()
+            upload = null
+            generation = Long.MIN_VALUE
+            return
+        }
         origin = value.origin + offset
         if (previous === value && generation == value.generation) return
         generation = value.generation
@@ -359,7 +401,13 @@ class LiquidMenuFieldTexture {
         }
         buffers.add(buffer)
         current = buffer
-        val bytes = buffer.pixels
+        // copyPixelsFromBuffer copies synchronously; upload storage is not GPU-owned.
+        // One staging buffer serves all bitmap buckets instead of duplicating each.
+        if ((upload?.capacity() ?: 0) < buffer.bitmap.byteCount) {
+            upload = null
+            upload = ByteBuffer.allocateDirect(buffer.bitmap.byteCount).order(ByteOrder.nativeOrder())
+        }
+        val bytes = requireNotNull(upload)
         bytes.clear()
         val stride = buffer.bitmap.rowBytes
         if (!LiquidMenuNativeField.pack(value.rgba, value.width, value.height, stride, bytes)) {

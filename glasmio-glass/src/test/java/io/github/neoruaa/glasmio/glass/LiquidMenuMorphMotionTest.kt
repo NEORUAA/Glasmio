@@ -6,6 +6,7 @@ import androidx.compose.ui.geometry.Size
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertNull
 import org.junit.Test
 import kotlin.math.abs
 import kotlin.math.PI
@@ -13,6 +14,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.hypot
 import kotlin.math.ceil
+import kotlin.math.atan2
 
 class LiquidMenuMorphMotionTest {
     private val source = Rect(676f, 183f, 996f, 321f)
@@ -353,6 +355,156 @@ class LiquidMenuMorphMotionTest {
         assertTrue("Root certification uses fewer field evaluations than blind bisection",
             evaluations < previousEvaluations * 0.8)
         println("Liquid contour: $evaluations / $previousEvaluations field evaluations; max error $maximumError px")
+    }
+
+    @Test
+    fun gaussianFieldReusesGrowthCapacityAndReleasesInactiveBuffers() {
+        val field = LiquidMenuGaussianField()
+        fun activeMenu(width: Float) = LiquidMenuContour(
+            Rect(0f, 0f, width, 548f), Offset(34f, 34f), null, Offset.Zero, 1f,
+        )
+        // Exercise an actual growth before measuring retained capacity, as a menu does while
+        // expanding. Exact-size allocation would still replace the backing on the next +2px.
+        assertSame(field, field.update(activeMenu(236f)))
+        assertSame(field, field.update(activeMenu(238f)))
+        val backing = field.rgba
+        val grown = activeMenu(240f)
+        assertSame(field, field.update(grown))
+        assertSame("A small extent increase reuses the amortized backing", backing, field.rgba)
+        assertEquals("Gaussian convolution preserves a linear straight-edge distance",
+            -1f, field.distance(grown.incoming.center.x, 1f), 0.002f)
+
+        // Zero sigma and a positive sigma whose discrete kernel becomes identity are separate
+        // early-return paths. Both must release the dense transition grid while the menu rests.
+        listOf(0f, 0.01f).forEach { inactiveSigma ->
+            assertNull("Sigma $inactiveSigma has no active discrete Gaussian",
+                field.update(grown.copy(smoothing = inactiveSigma)))
+            assertTrue("Sigma $inactiveSigma releases the CPU backing", field.rgba.isEmpty())
+            assertSame("Reopening rebuilds the reusable field", field, field.update(grown))
+            assertEquals("Reopening after sigma $inactiveSigma keeps the physical field",
+                -1f, field.distance(grown.incoming.center.x, 1f), 0.002f)
+        }
+    }
+
+    @Test
+    fun restingMenuCornerTangentsAndCurvatureDoNotDependOnMenuHeight() {
+        val workspace = LiquidMenuContourWorkspace()
+        listOf(1f, 3f).forEach { density ->
+            listOf(152f, 437f, 532f, 548f, 578f).forEach { height ->
+                val bounds = Rect(0f, 0f, 238f * density, height * density)
+                val skin = LiquidMenuContour(bounds, Offset(34f * density, 34f * density), null, Offset.Zero, 0f)
+                val vertices = workspace.vertices(skin, bounds.size)
+                val controls = workspace.controlPoints(skin, bounds.size)
+                fun diagonalDifference(segment: Int, t: Double): Double {
+                    val (x, y) = cubicVector(vertices, controls, segment, t)
+                    return (bounds.right - x) - (bounds.bottom - y)
+                }
+                // The scalar corner is symmetric under exchanging its physical X/Y insets.
+                // Find that geometric diagonal independently of the polar sample locations.
+                val segment = (0 until 24).first {
+                    diagonalDifference(it, 0.0) <= 0.0 && diagonalDifference(it, 1.0) >= 0.0
+                }
+                var low = 0.0
+                var high = 1.0
+                repeat(48) {
+                    val t = (low + high) / 2.0
+                    if (diagonalDifference(segment, t) < 0.0) low = t else high = t
+                }
+                val t = (low + high) / 2.0
+                val (dx, dy) = cubicVector(vertices, controls, segment, t, derivative = 1)
+                val (ddx, ddy) = cubicVector(vertices, controls, segment, t, derivative = 2)
+                val angle = atan2(abs(dy), abs(dx)) * 180.0 / PI
+                val speed = hypot(dx, dy)
+                val curvature = abs(dx * ddy - dy * ddx) / (speed * speed * speed)
+                val label = "238x$height at density $density"
+                assertEquals("$label keeps the diagonal tangent symmetric", 45.0, angle, 0.75)
+                // Analytic one-sided curvature of the native scalar polynomial at r=34.
+                // It is not 1/r; tiny coefficient-fit error makes a central Hessian at the
+                // exact diagonal an unstable oracle, so use this independent analytic value.
+                val nativeCurvature = 0.03305453160755543 / density
+                assertEquals("$label keeps the native physical corner curvature",
+                    nativeCurvature, curvature, nativeCurvature * 0.15)
+            }
+        }
+    }
+
+    @Test
+    fun restingMenuStraightSegmentsStayInsideTheirOwnUnequallySpacedChords() {
+        val workspace = LiquidMenuContourWorkspace()
+        listOf(1f, 3f).forEach { density ->
+            listOf(152f, 437f, 532f, 548f, 578f).forEach { height ->
+                val bounds = Rect(0f, 0f, 238f * density, height * density)
+                val skin = LiquidMenuContour(bounds, Offset(34f * density, 34f * density), null, Offset.Zero, 0f)
+                val vertices = workspace.vertices(skin, bounds.size)
+                val controls = workspace.controlPoints(skin, bounds.size)
+                val cornerBand = 34f * density * 1.5286649465560913f + 0.125f
+                var straightSegments = 0
+                var shortestChord = Double.POSITIVE_INFINITY
+                var longestChord = 0.0
+                repeat(96) { segment ->
+                    val start = segment * 2
+                    val end = (segment + 1) % 96 * 2
+                    val x0 = vertices[start].toDouble()
+                    val y0 = vertices[start + 1].toDouble()
+                    val x1 = vertices[end].toDouble()
+                    val y1 = vertices[end + 1].toDouble()
+                    val vertical = abs(x0 - x1) < 0.08 &&
+                        (abs(x0) < 0.08 || abs(x0 - bounds.right) < 0.08) &&
+                        minOf(y0, y1) > cornerBand && maxOf(y0, y1) < bounds.bottom - cornerBand
+                    val horizontal = abs(y0 - y1) < 0.08 &&
+                        (abs(y0) < 0.08 || abs(y0 - bounds.bottom) < 0.08) &&
+                        minOf(x0, x1) > cornerBand && maxOf(x0, x1) < bounds.right - cornerBand
+                    if (!vertical && !horizontal) return@repeat
+                    straightSegments++
+                    val chord = hypot(x1 - x0, y1 - y0)
+                    shortestChord = minOf(shortestChord, chord)
+                    longestChord = maxOf(longestChord, chord)
+                    val label = "238x$height density $density segment $segment"
+                    val control = segment * 4
+                    listOf(controls[control] to controls[control + 1], controls[control + 2] to controls[control + 3]).forEach { (x, y) ->
+                        assertTrue("$label has finite controls", x.isFinite() && y.isFinite())
+                        assertTrue("$label keeps each control in its own X interval",
+                            x.toDouble() in (minOf(x0, x1) - 0.08)..(maxOf(x0, x1) + 0.08))
+                        assertTrue("$label keeps each control in its own Y interval",
+                            y.toDouble() in (minOf(y0, y1) - 0.08)..(maxOf(y0, y1) + 0.08))
+                    }
+                    repeat(9) { sample ->
+                        val (x, y) = cubicVector(vertices, controls, segment, sample / 8.0)
+                        assertTrue("$label does not overshoot its straight X interval",
+                            x in (minOf(x0, x1) - 0.08)..(maxOf(x0, x1) + 0.08))
+                        assertTrue("$label does not overshoot its straight Y interval",
+                            y in (minOf(y0, y1) - 0.08)..(maxOf(y0, y1) + 0.08))
+                    }
+                }
+                assertTrue("The fixture must exercise straight contour segments", straightSegments > 0)
+                assertTrue("Polar rays must exercise unequal physical chord lengths", longestChord > shortestChord * 1.2)
+            }
+        }
+    }
+
+    private fun cubicVector(
+        vertices: FloatArray,
+        controls: FloatArray,
+        segment: Int,
+        t: Double,
+        derivative: Int = 0,
+    ): Pair<Double, Double> {
+        val start = segment * 2
+        val end = (segment + 1) % (vertices.size / 2) * 2
+        val control = segment * 4
+        fun coordinate(axis: Int): Double {
+            val a = vertices[start + axis].toDouble()
+            val b = controls[control + axis].toDouble()
+            val c = controls[control + 2 + axis].toDouble()
+            val d = vertices[end + axis].toDouble()
+            return when (derivative) {
+                1 -> 3 * (1 - t) * (1 - t) * (b - a) + 6 * (1 - t) * t * (c - b) + 3 * t * t * (d - c)
+                2 -> 6 * (1 - t) * (c - 2 * b + a) + 6 * t * (d - 2 * c + b)
+                else -> (1 - t) * (1 - t) * (1 - t) * a + 3 * (1 - t) * (1 - t) * t * b +
+                    3 * (1 - t) * t * t * c + t * t * t * d
+            }
+        }
+        return coordinate(0) to coordinate(1)
     }
 
     private fun assertSingleSkin(skin: LiquidMenuContour, sourceHeight: Float, label: String) {

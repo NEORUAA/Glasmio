@@ -10,6 +10,7 @@ The [Apple iOS and iPadOS 27 design library](https://www.figma.com/design/AmwPTD
 | Stepper | `GlasmioStepper` | `5415:17699` | 92 × 32 dp, 46 dp action halves |
 | Text Field | `GlasmioTextField` | `553:23061` | 52 dp row, 16 dp horizontal inset |
 | Pop-up Button | `GlasmioPopUpButton` | `410:50568`, `410:50570` | 44 dp height, 18 sp Semibold 590 with 18 sp line height, 3 dp gap, 14 × 18 dp Medium symbol |
+| Menu container | `GlasmioContextMenu` | `I5707:51032;10411:18581` | 238 dp width, 34 dp corners with 0.6 smoothing at reference heights 437/532/578 dp |
 | Alert | `GlasmioAlertDialog` | `65:57149`, `12616:942` | 300 dp panel, 34 dp continuous corners, 14 dp outer inset, 19 dp field-to-action gap |
 | List row | `GlasmioListRow` | `550:50627`, `550:50515` | 52 dp single-line or 68 dp subtitle row, inset separators, 17 sp detail |
 | Section Title | `GlasmioSectionTitle` | `50:56535` | 39 dp minimum height, 16 dp horizontal inset, 9 dp bottom inset |

@@ -52,3 +52,15 @@ included in the glass contour; the incoming menu material follows the native con
 progress, leaving no outline or shadow around the restored text. Glass buttons keep
 their source material. Selection changes refresh the retained foreground and retarget
 the closing source bounds without restarting the physical channels.
+
+
+The physical contour uses geometric field tangents at its certified boundary samples.
+Uniform polar sampling gives unequal physical segment lengths on tall menus; fitting
+uniform Catmull–Rom controls can skew a corner's tangent despite subpixel position
+error. Each cubic therefore follows the local zero-field tangent and its own chord.
+The scalar field, optical normals, native spring channels and target radii are retained.
+
+Plain-source material opacity records into an explicit graphics layer that includes
+the material's shadow support, rather than a menu-sized canvas alpha layer. The
+transparent Popup shell preserves that backing outside the visible menu; placement
+constrains the visible menu and compensates the shell separately for each direction.
