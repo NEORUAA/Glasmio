@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,9 +28,12 @@ import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
@@ -659,6 +663,58 @@ class ComponentBehaviorTest {
         rule.waitUntil(10_000) { rule.onAllNodesWithText("Default").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithText("Recent").assertIsDisplayed()
         rule.runOnIdle { assertEquals(1, commits) }
+    }
+
+    @Test fun popUpButtonInheritsHostTypographyChanges() {
+        var updatedTypography by mutableStateOf(false)
+        content {
+            val hostTypography = MaterialTheme.typography
+            GlasmioTheme(
+                typography = hostTypography.copy(
+                    bodyLarge = hostTypography.bodyLarge.copy(
+                        fontSize = if (updatedTypography) 21.sp else 17.sp,
+                        lineHeight = if (updatedTypography) 28.sp else 22.sp,
+                        fontWeight = if (updatedTypography) FontWeight.Medium else FontWeight.Normal,
+                        letterSpacing = if (updatedTypography) 1.5.sp else 0.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                ),
+                appearance = GlassAppearance(reduceTransparency = true),
+            ) {
+                Text("Body sample", style = MaterialTheme.typography.bodyLarge)
+                GlasmioPopUpButton("Default", listOf("Default", "Recent"), {}, { it })
+            }
+        }
+
+        fun layoutFor(text: String): TextLayoutResult {
+            val layouts = mutableListOf<TextLayoutResult>()
+            rule.onNodeWithText(text, useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            return layouts.single()
+        }
+
+        fun assertMatchesBody(text: String) {
+            val body = layoutFor("Body sample").layoutInput.style
+            val actual = layoutFor(text).layoutInput.style
+            assertEquals("Font size must match body text", body.fontSize, actual.fontSize)
+            assertEquals("Font weight must match body text", body.fontWeight, actual.fontWeight)
+            assertEquals("Letter spacing must match body text", body.letterSpacing, actual.letterSpacing)
+            assertEquals("Font family must match body text", body.fontFamily, actual.fontFamily)
+            assertEquals("Line height must match body text", body.lineHeight, actual.lineHeight)
+        }
+
+        val initialBody = layoutFor("Body sample").layoutInput.style
+        assertMatchesBody("Default")
+        rule.runOnIdle { updatedTypography = true }
+        val updatedBody = layoutFor("Body sample").layoutInput.style
+        assertNotEquals(initialBody.fontSize, updatedBody.fontSize)
+        assertNotEquals(initialBody.fontWeight, updatedBody.fontWeight)
+        assertNotEquals(initialBody.letterSpacing, updatedBody.letterSpacing)
+        assertMatchesBody("Default")
+        rule.onNodeWithText("Default").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        assertMatchesBody("Recent")
+        pressSystemBack(rule)
+        rule.waitUntil(10_000) { rule.onAllNodesWithText("Recent").fetchSemanticsNodes().isEmpty() }
     }
 
     @Test fun searchEditsSubmitsAndKeepsDisabledInputInactive() {

@@ -9,7 +9,7 @@ The [Apple iOS and iPadOS 27 design library](https://www.figma.com/design/AmwPTD
 | Segmented Control | `GlasmioSegmentedControl` | `10460:170` | 32 dp compact container, 28 dp selected surface |
 | Stepper | `GlasmioStepper` | `5415:17699` | 92 × 32 dp, 46 dp action halves |
 | Text Field | `GlasmioTextField` | `553:23061` | 52 dp row, 16 dp horizontal inset |
-| Pop-up Button | `GlasmioPopUpButton` | `410:50568`, `410:50570` | 44 dp height, 18 sp Semibold 590 with 18 sp line height, 3 dp gap, 14 × 18 dp Medium symbol |
+| Pop-up Button | `GlasmioPopUpButton` | `410:50568`, `410:50570`, inline List variant | 44 dp touch height; inline label inherits host body size, weight and tracking; 3 dp gap and a 14 × 18 dp regular symbol |
 | Menu container | `GlasmioContextMenu` | `I5707:51032;10411:18581` | 238 dp width, 34 dp corners with 0.6 smoothing at reference heights 437/532/578 dp |
 | Edit Menu | `GlasmioTextSelectionMenu` | `5713:47505`, `12740:24185` | 44 dp compact toolbar, 36 dp More button, 56 dp expanded shortcut row; 24 dp from the 17 sp/20 dp text frame to the toolbar |
 | Text Selection | `GlasmioEditableText` | `I12740:24161;5711:35407`, `I12740:24161;5711:35410` | 16 dp lollipop, 2 dp stem, 8 dp center offset outside the selected line |

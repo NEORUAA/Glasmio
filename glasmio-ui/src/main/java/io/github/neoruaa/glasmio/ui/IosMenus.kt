@@ -812,12 +812,7 @@ fun <T> GlasmioPopUpButton(
             ) {
                 Text(
                     text = label(selected),
-                    style = IosTypography.body.copy(
-                        fontSize = 18.sp,
-                        lineHeight = 18.sp,
-                        letterSpacing = 0.sp,
-                        fontWeight = FontWeight(590),
-                    ),
+                    style = IosTypography.body,
                     color = if (enabled) LocalGlassColors.current.accent
                     else LocalGlassColors.current.secondaryContent,
                 )
@@ -830,7 +825,7 @@ fun <T> GlasmioPopUpButton(
                         tint = if (enabled) LocalGlassColors.current.accent
                         else LocalGlassColors.current.secondaryContent,
                         modifier = Modifier.size(width = 14.dp, height = 18.dp),
-                        weight = FontWeight(590),
+                        weight = FontWeight.Normal,
                         fontFeatureSettings = "'ss15' 1",
                     )
                 }

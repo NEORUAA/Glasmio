@@ -172,6 +172,8 @@ The menu owns its popup lifecycle while the application owns `expanded`. Render 
 `GlasmioCascadingMenu.itemHeight` and `separatorHeight` select row and section geometry without changing the default 44/12 dp menu. The Edit Menu uses Apple's 40/21 dp variant, with 60 dp for the explicit two-line Paste and Match Style row. `viewportBounds` constrains expanded menus in window pixels; their contents scroll when that viewport is shorter than the menu.
 
 Pop-up Buttons and Cascading Menus use the native source-preview morph by default.
+Inline Pop-up labels inherit the host's body typography, including font family,
+size, weight and letter spacing, while keeping a 44 dp interaction height.
 Standalone sources transfer their own foreground; toolbar sources retain the complete
 button group. For an external anchor, pass a `GlasmioMenuAnchorState` attached through
 `Modifier.glasmioMenuAnchor` to preserve its foreground throughout dismissal.
