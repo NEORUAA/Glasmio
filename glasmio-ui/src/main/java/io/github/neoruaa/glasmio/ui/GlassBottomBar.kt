@@ -1079,6 +1079,7 @@ private fun <T> NavigationTabContent(
     selectedColorFilter: State<ColorFilter>? = null,
     selectedIconTint: Color? = null,
     labelAlpha: (() -> Float)? = null,
+    rasterizeBeforeScale: Boolean = false,
 ) {
     val colors = LocalGlassColors.current
     val labelVisibility = labelAlpha?.invoke()?.coerceIn(0f, 1f) ?: 1f
@@ -1091,9 +1092,10 @@ private fun <T> NavigationTabContent(
         modifier = Modifier
             .padding(top = 3.dp * labelVisibility)
             .then(
-                if (selected && selectedColorFilter != null) {
+                if (selected && (selectedColorFilter != null || rasterizeBeforeScale)) {
                     Modifier.graphicsLayer {
-                        colorFilter = selectedColorFilter.value
+                        colorFilter = selectedColorFilter?.value
+                        if (rasterizeBeforeScale) compositingStrategy = CompositingStrategy.Offscreen
                     }
                 } else {
                     Modifier
@@ -1117,7 +1119,7 @@ private fun <T> NavigationTabContent(
             )
             .padding(top = 1.dp, bottom = 4.dp)
             .then(
-                if (labelAlpha != null || (selected && selectedColorFilter != null)) {
+                if (labelAlpha != null || (selected && selectedColorFilter != null) || rasterizeBeforeScale) {
                     Modifier.graphicsLayer {
                         if (labelAlpha != null) {
                             alpha = labelVisibility
@@ -1125,6 +1127,7 @@ private fun <T> NavigationTabContent(
                         if (selected) {
                             selectedColorFilter?.let { colorFilter = it.value }
                         }
+                        if (rasterizeBeforeScale) compositingStrategy = CompositingStrategy.Offscreen
                     }
                 } else {
                     Modifier
@@ -1217,16 +1220,7 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
         Column(
             modifier = Modifier
                 .width(selectedTabWidth)
-                .fillMaxHeight()
-                .then(
-                    if (selectedIconColorFilter == null) {
-                        // Keep native icon/text rasterization before the outer morph
-                        // scale, using one shared texture instead of two tint layers.
-                        Modifier.graphicsLayer {
-                            compositingStrategy = CompositingStrategy.Offscreen
-                        }
-                    } else Modifier,
-                ),
+                .fillMaxHeight(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -1236,6 +1230,9 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
                 selectedColorFilter = selectedIconColorFilter,
                 selectedIconTint = contentColor,
                 labelAlpha = labelAlpha,
+                // Match the filtered path's individual raster bounds before the tab
+                // scales, even when the opaque parent makes both inner tints redundant.
+                rasterizeBeforeScale = true,
             )
         }
     }
