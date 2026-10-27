@@ -63,13 +63,12 @@ GlasmioBackdropHost(
             ) {
                 GlasmioButton(onClick = onShowAlert) { Text("Show alert") }
             }
-            if (showAlert) {
-                GlasmioAlertDialog(
-                    title = "Ready",
-                    message = "The alert samples the page below.",
-                    onDismissRequest = onDismissAlert,
-                )
-            }
+            GlasmioAlertDialog(
+                visible = showAlert,
+                title = "Ready",
+                message = "The alert samples the page below.",
+                onDismissRequest = onDismissAlert,
+            )
         }
     },
 )

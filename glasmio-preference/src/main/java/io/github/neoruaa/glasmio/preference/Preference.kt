@@ -123,31 +123,32 @@ fun <T> GlasmioListPreference(
     var showDialog by rememberSaveable {
         mutableStateOf(false)
     }
-    if (showDialog) {
-        PreferenceListDialog(
-            title = title,
-            onDismiss = { showDialog = false }
-        ) {
-            itemsIndexed(values) { index, value ->
-                val selected = value == selectedValue
-                GlasmioListRow(
-                    title = valueText(value),
-                    modifier = Modifier.selectable(
-                        selected = selected,
-                        role = Role.RadioButton,
-                        onClick = {
+    PreferenceListDialog(
+        visible = showDialog,
+        title = title,
+        onDismiss = { showDialog = false }
+    ) {
+        itemsIndexed(values) { index, value ->
+            val selected = value == selectedValue
+            GlasmioListRow(
+                title = valueText(value),
+                modifier = Modifier.selectable(
+                    selected = selected,
+                    role = Role.RadioButton,
+                    onClick = {
+                        if (showDialog) {
                             onValueSelected(value)
                             showDialog = false
-                        },
-                    ),
-                    showTopSeparator = index > 0,
-                    trailing = {
-                        if (selected) {
-                            SfIcon("checkmark", null, size = 17.dp, tint = LocalGlassColors.current.accent)
                         }
                     },
-                )
-            }
+                ),
+                showTopSeparator = index > 0,
+                trailing = {
+                    if (selected) {
+                        SfIcon("checkmark", null, size = 17.dp, tint = LocalGlassColors.current.accent)
+                    }
+                },
+            )
         }
     }
 
@@ -231,19 +232,18 @@ fun GlasmioEditTextPreference(
         mutableStateOf(false)
     }
 
-    if (showDialog) {
-        PreferenceTextFieldDialog(
-            title = title,
-            initialTextFieldValue = TextFieldValue(
-                text = value,
-                selection = TextRange(value.length)
-            ),
-            singleLine = singleLine,
-            isInputValid = isInputValid,
-            onDone = onValueChange,
-            onDismiss = { showDialog = false }
-        )
-    }
+    PreferenceTextFieldDialog(
+        visible = showDialog,
+        title = title,
+        initialTextFieldValue = TextFieldValue(
+            text = value,
+            selection = TextRange(value.length)
+        ),
+        singleLine = singleLine,
+        isInputValid = isInputValid,
+        onDone = onValueChange,
+        onDismiss = { showDialog = false }
+    )
 
     GlasmioPreferenceEntry(
         modifier = modifier,

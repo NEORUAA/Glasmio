@@ -1194,28 +1194,26 @@ private fun MenusDemo(bottomPadding: Dp, onBack: () -> Unit, dark: Boolean, onDa
             onDismiss = { nestedMenu = false },
         )
     }
-    if (alert) {
-        GlasmioAlertDialog(
-            onDismissRequest = { alert = false },
-            title = "Save Changes?",
-            message = "Your changes will appear in this sample.",
-            buttons = listOf(
-                GlasmioAlertButtonSpec("Cancel", { alert = false }, GlasmioAlertButtonRole.Cancel),
-                GlasmioAlertButtonSpec("Save", { alert = false }),
-            ),
-        )
-    }
-    if (inputAlert) {
-        GlasmioAlertDialog(
-            onDismissRequest = { inputAlert = false },
-            title = "Name",
-            buttons = listOf(
-                GlasmioAlertButtonSpec("Cancel", { inputAlert = false }, GlasmioAlertButtonRole.Cancel),
-                GlasmioAlertButtonSpec("Done", { inputAlert = false }, enabled = name.text.isNotBlank()),
-            ),
-        ) {
-            GlasmioAlertFieldGroup { GlasmioAlertTextField(name, { name = it }, "Name") }
-        }
+    GlasmioAlertDialog(
+        visible = alert,
+        onDismissRequest = { alert = false },
+        title = "Save Changes?",
+        message = "Your changes will appear in this sample.",
+        buttons = listOf(
+            GlasmioAlertButtonSpec("Cancel", { alert = false }, GlasmioAlertButtonRole.Cancel),
+            GlasmioAlertButtonSpec("Save", { alert = false }),
+        ),
+    )
+    GlasmioAlertDialog(
+        visible = inputAlert,
+        onDismissRequest = { inputAlert = false },
+        title = "Name",
+        buttons = listOf(
+            GlasmioAlertButtonSpec("Cancel", { inputAlert = false }, GlasmioAlertButtonRole.Cancel),
+            GlasmioAlertButtonSpec("Done", { inputAlert = false }, enabled = name.text.isNotBlank()),
+        ),
+    ) {
+        GlasmioAlertFieldGroup { GlasmioAlertTextField(name, { name = it }, "Name") }
     }
 }
 

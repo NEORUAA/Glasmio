@@ -333,6 +333,138 @@ class ComponentBehaviorTest {
         rule.onNodeWithContentDescription("Minimum decrease").performClick().assertIsNotEnabled()
     }
 
+    @Test fun alertRetainsItsContentUntilTheExitAnimationFinishes() {
+        var visible by mutableStateOf(false)
+        var mounts = 0
+        var disposals = 0
+        content {
+            GlasmioAlertDialog(
+                visible = visible,
+                onDismissRequest = { visible = false },
+                title = "Retained alert",
+                buttons = listOf(GlasmioAlertButtonSpec("Close retained alert", { visible = false })),
+            ) {
+                DisposableEffect(Unit) {
+                    mounts++
+                    onDispose { disposals++ }
+                }
+            }
+        }
+        rule.onNode(isDialog()).assertDoesNotExist()
+        rule.runOnIdle { visible = true }
+        rule.onNodeWithText("Retained alert").assertIsDisplayed()
+        rule.runOnIdle { assertEquals(1, mounts); assertEquals(0, disposals) }
+
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithText("Close retained alert").performClick()
+            rule.mainClock.advanceTimeBy(160)
+            rule.onNode(isDialog()).assertExists()
+            rule.onNodeWithText("Close retained alert").assertDoesNotExist()
+            rule.runOnIdle { assertEquals(0, disposals) }
+
+            rule.mainClock.advanceTimeBy(1_000)
+            rule.onNode(isDialog()).assertDoesNotExist()
+            rule.runOnIdle { assertEquals(1, mounts); assertEquals(1, disposals) }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test fun reopeningAlertDuringExitKeepsTheSameContentAndCancelsRemoval() {
+        var visible by mutableStateOf(false)
+        var mounts = 0
+        var disposals = 0
+        var dismissals = 0
+        content {
+            GlasmioAlertDialog(
+                visible = visible,
+                onDismissRequest = { dismissals++; visible = false },
+                title = "Interruptible alert",
+                buttons = listOf(GlasmioAlertButtonSpec("Close interruptible alert", {
+                    dismissals++
+                    visible = false
+                })),
+            ) {
+                DisposableEffect(Unit) {
+                    mounts++
+                    onDispose { disposals++ }
+                }
+            }
+        }
+        rule.runOnIdle { visible = true }
+        rule.onNodeWithText("Interruptible alert").assertIsDisplayed()
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithText("Close interruptible alert").performClick()
+            rule.mainClock.advanceTimeBy(128)
+            rule.runOnIdle { visible = true }
+            rule.mainClock.advanceTimeByFrame()
+            rule.onNodeWithText("Interruptible alert").assertExists()
+            rule.onNodeWithText("Close interruptible alert").assertIsEnabled()
+            rule.mainClock.advanceTimeBy(1_000)
+            rule.onNodeWithText("Interruptible alert").assertIsDisplayed()
+            rule.runOnIdle {
+                assertEquals(1, mounts)
+                assertEquals(0, disposals)
+                assertEquals(1, dismissals)
+            }
+
+            rule.runOnIdle { visible = false }
+            rule.mainClock.advanceTimeBy(1_000)
+            rule.onNode(isDialog()).assertDoesNotExist()
+            rule.runOnIdle { assertEquals(1, disposals); assertEquals(1, dismissals) }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test fun preferenceEditorSubmitsOncePerOpeningEvenWhileItsExitIsRetained() {
+        var stored = "Initial name"
+        val commits = mutableListOf<String>()
+        content {
+            var value by remember { mutableStateOf(stored) }
+            GlasmioEditTextPreference(
+                title = { Text("Repeated editor") },
+                value = value,
+                onValueChange = { value = it; stored = it; commits += it },
+            )
+        }
+        val editable = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
+        fun editor() = rule.onNode(editable and hasAnyAncestor(isDialog()))
+
+        rule.onNodeWithText("Repeated editor").performClick()
+        editor().assertTextEquals("Initial name").performTextReplacement("First committed name")
+        val firstSubmit = checkNotNull(editor().fetchSemanticsNode().config[SemanticsActions.OnImeAction].action)
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.runOnIdle { firstSubmit(); firstSubmit() }
+            rule.mainClock.advanceTimeBy(128)
+            rule.onNode(isDialog()).assertExists()
+            rule.runOnIdle { assertEquals(listOf("First committed name"), commits) }
+            rule.mainClock.advanceTimeBy(1_000)
+            rule.onNode(isDialog()).assertDoesNotExist()
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+
+        rule.onNodeWithText("Repeated editor").performClick()
+        editor().assertTextEquals("First committed name").performTextReplacement("Second committed name")
+        val secondSubmit = checkNotNull(editor().fetchSemanticsNode().config[SemanticsActions.OnImeAction].action)
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.runOnIdle { secondSubmit(); secondSubmit() }
+            rule.mainClock.advanceTimeBy(1_000)
+            rule.onNode(isDialog()).assertDoesNotExist()
+            rule.runOnIdle {
+                assertEquals("Second committed name", stored)
+                assertEquals(listOf("First committed name", "Second committed name"), commits)
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
     @Test fun preferenceEditorKeepsItsDraftUntilValidConfirmation() {
         var stored = "Initial name"
         var commits = 0

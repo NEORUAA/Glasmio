@@ -60,7 +60,8 @@ internal class TextEditingDemoActions(
 internal fun textEditingDemoActions(value: MutableState<TextFieldValue>, backdrop: Backdrop): TextEditingDemoActions {
     val clipboard = LocalClipboardManager.current
     val accent = LocalGlassColors.current.accent
-    var linkSelection by remember { mutableStateOf<TextRange?>(null) }
+    var linkSelection by remember { mutableStateOf(TextRange.Zero) }
+    var linkDialogVisible by remember { mutableStateOf(false) }
     var link by remember { mutableStateOf(TextFieldValue("https://example.com")) }
     fun replace(replacement: String) {
         val current = value.value
@@ -78,7 +79,10 @@ internal fun textEditingDemoActions(value: MutableState<TextFieldValue>, backdro
             GlasmioCascadingMenuItem("Paste and Match\nStyle", "document.on.clipboard", onClick = {
                 clipboard.getText()?.text?.let(::replace)
             }),
-            GlasmioCascadingMenuItem("Add Link", "link", onClick = { linkSelection = value.value.selection }),
+            GlasmioCascadingMenuItem("Add Link", "link", onClick = {
+                linkSelection = value.value.selection
+                linkDialogVisible = true
+            }),
             GlasmioCascadingMenuItem("Replace…", "character.cursor.ibeam", separatorBefore = true, children = listOf(
                 GlasmioCascadingMenuItem("Hello", onClick = { replace("Hello") }),
                 GlasmioCascadingMenuItem("Welcome", onClick = { replace("Welcome") }),
@@ -94,27 +98,26 @@ internal fun textEditingDemoActions(value: MutableState<TextFieldValue>, backdro
         )
     }
     val dialog: @Composable () -> Unit = {
-        linkSelection?.let { range ->
-            GlasmioAlertDialog(
-                onDismissRequest = { linkSelection = null },
-                title = "Add Link",
-                backdrop = backdrop,
-                buttons = listOf(
-                    GlasmioAlertButtonSpec("Cancel", { linkSelection = null }),
-                    GlasmioAlertButtonSpec("Done", {
-                        val current = value.value
-                        val target = range.min.coerceIn(0, current.text.length)..range.max.coerceIn(0, current.text.length)
-                        value.value = current.copy(annotatedString = AnnotatedString.Builder(current.annotatedString).apply {
-                            addStringAnnotation("URL", link.text, target.first, target.last)
-                            addStyle(SpanStyle(color = accent, textDecoration = TextDecoration.Underline), target.first, target.last)
-                        }.toAnnotatedString())
-                        linkSelection = null
-                    }),
-                ),
-            ) {
-                GlasmioAlertFieldGroup {
-                    GlasmioAlertTextField(link, { link = it }, placeholder = "URL")
-                }
+        GlasmioAlertDialog(
+            visible = linkDialogVisible,
+            onDismissRequest = { linkDialogVisible = false },
+            title = "Add Link",
+            backdrop = backdrop,
+            buttons = listOf(
+                GlasmioAlertButtonSpec("Cancel", { linkDialogVisible = false }),
+                GlasmioAlertButtonSpec("Done", {
+                    val current = value.value
+                    val target = linkSelection.min.coerceIn(0, current.text.length)..linkSelection.max.coerceIn(0, current.text.length)
+                    value.value = current.copy(annotatedString = AnnotatedString.Builder(current.annotatedString).apply {
+                        addStringAnnotation("URL", link.text, target.first, target.last)
+                        addStyle(SpanStyle(color = accent, textDecoration = TextDecoration.Underline), target.first, target.last)
+                    }.toAnnotatedString())
+                    linkDialogVisible = false
+                }),
+            ),
+        ) {
+            GlasmioAlertFieldGroup {
+                GlasmioAlertTextField(link, { link = it }, placeholder = "URL")
             }
         }
     }

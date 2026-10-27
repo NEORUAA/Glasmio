@@ -204,7 +204,11 @@ fun MenuScreen() = ExampleHost {
 
 ## Alerts and sheets
 
-`GlasmioAlertButtonSpec` carries the action, role, and enabled state. `GlasmioBottomSheet` uses Material3's `SheetState`; the separate `GlasmioBottomSheetState` in Scaffold provides anchor-based motion for custom containers.
+`GlasmioAlertButtonSpec` carries the action, role, and enabled state. Keep `GlasmioAlertDialog` in composition and drive its `visible` state so the dialog remains mounted through its closing animation. `GlasmioBottomSheet` uses Material3's `SheetState`; the separate `GlasmioBottomSheetState` in Scaffold provides anchor-based motion for custom containers.
+
+Alerts enter from 1.2× scale using UIKit's 404 ms critical spring and dismiss with a fade.
+The panel and dimming view share the timing; reopening during dismissal retains the current
+presentation. See the [native motion reference](alert-motion.md) for the recovered parameters.
 
 ```kotlin
 @OptIn(ExperimentalMaterial3Api::class)
@@ -218,16 +222,15 @@ fun ModalScreen() = ExampleHost {
         Spacer(Modifier.height(16.dp))
         GlasmioButton(onClick = { sheet = true }) { Text("Show sheet") }
     }
-    if (alert) {
-        GlasmioAlertDialog(
-            title = "Save changes?",
-            onDismissRequest = { alert = false },
-            buttons = listOf(
-                GlasmioAlertButtonSpec("Cancel", { alert = false }, role = GlasmioAlertButtonRole.Cancel),
-                GlasmioAlertButtonSpec("Save", { alert = false }),
-            ),
-        )
-    }
+    GlasmioAlertDialog(
+        visible = alert,
+        title = "Save changes?",
+        onDismissRequest = { alert = false },
+        buttons = listOf(
+            GlasmioAlertButtonSpec("Cancel", { alert = false }, role = GlasmioAlertButtonRole.Cancel),
+            GlasmioAlertButtonSpec("Save", { alert = false }),
+        ),
+    )
     if (sheet) {
         GlasmioBottomSheet(onDismissRequest = { sheet = false }) {
             GlasmioSheetTopToolbar(title = "Details")

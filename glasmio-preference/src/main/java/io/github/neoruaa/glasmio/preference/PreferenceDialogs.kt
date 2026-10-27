@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -28,12 +29,14 @@ import io.github.neoruaa.glasmio.ui.GlasmioAlertTextField
 
 @Composable
 internal fun PreferenceListDialog(
+    visible: Boolean,
     title: @Composable () -> Unit,
     onDismiss: () -> Unit,
     content: LazyListScope.() -> Unit,
 ) {
     val maxHeight = LocalConfiguration.current.screenHeightDp.dp / 2
     GlasmioAlertDialog(
+        visible = visible,
         onDismissRequest = onDismiss,
         title = "",
         titleContent = title,
@@ -51,6 +54,7 @@ internal fun PreferenceListDialog(
 
 @Composable
 internal fun PreferenceTextFieldDialog(
+    visible: Boolean,
     title: @Composable () -> Unit,
     initialTextFieldValue: TextFieldValue,
     singleLine: Boolean,
@@ -63,15 +67,20 @@ internal fun PreferenceTextFieldDialog(
         mutableStateOf(initialTextFieldValue)
     }
     var submitted by remember { mutableStateOf(false) }
+    var sessionWasVisible by rememberSaveable { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
+    SideEffect {
+        if (!visible) sessionWasVisible = false
+    }
     fun submit() {
-        if (!submitted && isInputValid(value.text)) {
+        if (visible && !submitted && isInputValid(value.text)) {
             submitted = true
             onDone(value.text)
             onDismiss()
         }
     }
     GlasmioAlertDialog(
+        visible = visible,
         onDismissRequest = onDismiss,
         title = "",
         titleContent = title,
@@ -84,7 +93,7 @@ internal fun PreferenceTextFieldDialog(
             GlasmioAlertButtonSpec(
                 stringResource(android.R.string.ok),
                 ::submit,
-                enabled = !submitted && isInputValid(value.text),
+                enabled = isInputValid(value.text) && (!visible || !submitted),
             ),
         ),
     ) {
@@ -100,6 +109,15 @@ internal fun PreferenceTextFieldDialog(
                 keyboardActions = KeyboardActions(onDone = { submit() }),
             )
         }
+        LaunchedEffect(visible) {
+            if (visible) {
+                if (!sessionWasVisible) {
+                    value = initialTextFieldValue
+                    submitted = false
+                    sessionWasVisible = true
+                }
+                focus.requestFocus()
+            }
+        }
     }
-    LaunchedEffect(focus) { focus.requestFocus() }
 }

@@ -4,6 +4,7 @@ import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.icons.*
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,9 +32,11 @@ import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -43,7 +46,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -78,7 +85,12 @@ data class GlasmioAlertButtonSpec(
     val enabled: Boolean = true,
 )
 
-/** Figma node 65:57149. The alert samples the screen behind its dialog window. */
+/**
+ * Figma node 65:57149. The alert samples the screen behind its dialog window.
+ *
+ * Keep this call in composition and change [visible] to retain the window through the exit
+ * animation. Removing the call itself immediately removes the window.
+ */
 @Composable
 fun GlasmioAlertDialog(
     onDismissRequest: () -> Unit,
@@ -94,8 +106,29 @@ fun GlasmioAlertDialog(
         usePlatformDefaultWidth = false,
     ),
     titleContent: (@Composable () -> Unit)? = null,
+    visible: Boolean = true,
     content: @Composable ColumnScope.() -> Unit = {},
 ) {
+    val scale = remember { Animatable(IosAlertMotion.InitialScale) }
+    val opacity = remember { Animatable(0f) }
+    val dimming = remember { Animatable(0f) }
+    var presented by remember { mutableStateOf(visible) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            if (!presented) {
+                scale.snapTo(IosAlertMotion.InitialScale)
+                opacity.snapTo(0f)
+                dimming.snapTo(0f)
+                presented = true
+            }
+            IosAlertMotion.animate(true, scale, opacity, dimming)
+        } else if (presented) {
+            IosAlertMotion.animate(false, scale, opacity, dimming)
+            presented = false
+        }
+    }
+    if (!presented) return
+
     val colors = LocalGlassColors.current
     val dimAmount = if (colors.isDark) 0.2f else 0.08f
     val fullScreenProperties = DialogProperties(
@@ -108,19 +141,27 @@ fun GlasmioAlertDialog(
         windowType = properties.windowType,
         windowToken = properties.windowToken,
     )
-    Dialog(onDismissRequest = onDismissRequest, properties = fullScreenProperties) {
+    val dismiss = { if (visible) onDismissRequest() }
+    Dialog(onDismissRequest = dismiss, properties = fullScreenProperties) {
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        val focusManager = LocalFocusManager.current
+        SideEffect { window?.setWindowAnimations(0) }
+        LaunchedEffect(visible) {
+            if (!visible) focusManager.clearFocus(force = true)
+        }
         GlasmioTextEditingWindow(backdrop) {
             Box(Modifier.fillMaxSize()) {
                 Box(
                     Modifier
                         .fillMaxSize()
+                        .graphicsLayer { alpha = dimming.value }
                         .background(Color.Black.copy(alpha = dimAmount))
                         .then(
                             if (properties.dismissOnClickOutside) {
                                 Modifier.clickable(
                                     interactionSource = null,
                                     indication = null,
-                                    onClick = onDismissRequest,
+                                    onClick = dismiss,
                                 )
                             } else {
                                 Modifier
@@ -130,10 +171,18 @@ fun GlasmioAlertDialog(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime)),
+                        .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime))
+                        // Fade the viewport backing so the panel's exterior shadows stay inside
+                        // the alpha layer. A panel-sized offscreen layer would crop those shadows.
+                        .graphicsLayer {
+                            scaleX = scale.value
+                            scaleY = scale.value
+                            alpha = opacity.value
+                        },
                 ) {
                     GlasmioAlertSurface(
-                        modifier = modifier.align(Alignment.Center),
+                        modifier = modifier.align(Alignment.Center)
+                            .then(if (visible) Modifier else Modifier.clearAndSetSemantics {}),
                         backdrop = backdrop,
                         title = title,
                         message = message,
@@ -151,7 +200,7 @@ fun GlasmioAlertDialog(
                                         buttons.forEach { button ->
                                             GlasmioAlertButton(
                                                 text = button.label,
-                                                onClick = button.onClick,
+                                                onClick = { if (visible) button.onClick() },
                                                 modifier = Modifier.weight(1f),
                                                 role = button.role,
                                                 enabled = button.enabled,
@@ -168,7 +217,7 @@ fun GlasmioAlertDialog(
                                         buttons.forEach { button ->
                                             GlasmioAlertButton(
                                                 text = button.label,
-                                                onClick = button.onClick,
+                                                onClick = { if (visible) button.onClick() },
                                                 modifier = Modifier.fillMaxWidth(),
                                                 role = button.role,
                                                 enabled = button.enabled,
@@ -179,6 +228,15 @@ fun GlasmioAlertDialog(
                             }
                         }
                     }
+                }
+                if (!visible) {
+                    Box(Modifier.fillMaxSize().pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent().changes.forEach { it.consume() }
+                            }
+                        }
+                    })
                 }
             }
         }
