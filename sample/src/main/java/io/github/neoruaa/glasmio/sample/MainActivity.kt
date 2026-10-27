@@ -806,6 +806,7 @@ private fun ControlsDemo(layout: SamplePageLayout) {
     var step by rememberSaveable { mutableIntStateOf(3) }
     var text by rememberSaveable { mutableStateOf("") }
     var segment by rememberSaveable { mutableIntStateOf(0) }
+    var iconSegment by rememberSaveable { mutableIntStateOf(1) }
     var color by remember { mutableStateOf(Color(0xFF0088FF)) }
     var colorPicker by rememberSaveable { mutableStateOf(false) }
     DemoList(layout) {
@@ -833,8 +834,33 @@ private fun ControlsDemo(layout: SamplePageLayout) {
             }
         }
         item {
+            Section("Volume Slider") {
+                GlasmioVolumeSlider(value, { value = it }, Modifier.fillMaxWidth(), enabled = enabled)
+            }
+        }
+        item {
             Section("Segmented Control") {
                 GlasmioSegmentedControl(listOf(0 to "Day", 1 to "Week", 2 to "Month"), segment, { segment = it }, Modifier.fillMaxWidth())
+            }
+        }
+        item {
+            Section("Icon Segmented Control") {
+                GlasmioSegmentedControl(
+                    items = listOf(0 to "Muted", 1 to "Low", 2 to "Medium", 3 to "High"),
+                    selected = iconSegment,
+                    onSelected = { iconSegment = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    height = 50.dp,
+                    enabled = enabled,
+                    itemContent = { choice, _ ->
+                        SfIcon(when (choice) {
+                            0 -> "speaker.slash.fill"
+                            1 -> "speaker.wave.1.fill"
+                            2 -> "speaker.wave.2.fill"
+                            else -> "speaker.wave.3.fill"
+                        }, null, size = 25.dp)
+                    },
+                )
             }
         }
         item {
