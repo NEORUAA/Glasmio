@@ -109,8 +109,11 @@ internal val LocalLiquidTabScale = staticCompositionLocalOf { { 1f } }
 /** Shared compact icon endpoint for the bottom navigation and its adjacent search control. */
 val CompactBottomControlIconSize = 22.dp
 
+/** Compact touch surface shared by the navigation material and the search control. */
+val CompactBottomControlSize = 44.dp
+
 /** Resting height of the navigation material, excluding system insets. */
-val NavigationBarSurfaceHeight = 60.dp
+val NavigationBarSurfaceHeight = 64.dp
 
 private val ExpandedNavigationIconSize = 28.dp
 private val ExpandedNavigationItemHeight = NavigationBarSurfaceHeight - 8.dp

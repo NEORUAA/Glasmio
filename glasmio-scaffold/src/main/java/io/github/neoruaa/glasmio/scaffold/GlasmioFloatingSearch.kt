@@ -45,6 +45,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -62,9 +65,11 @@ import io.github.neoruaa.glasmio.glass.trackBackdropPosition
 import io.github.neoruaa.glasmio.icons.SfIcon
 import io.github.neoruaa.glasmio.icons.SfSymbol
 import io.github.neoruaa.glasmio.ui.CompactBottomControlIconSize
+import io.github.neoruaa.glasmio.ui.CompactBottomControlSize
 import io.github.neoruaa.glasmio.ui.GlasmioIconButton
 import io.github.neoruaa.glasmio.ui.GlasmioSearchToolbar
 import io.github.neoruaa.glasmio.ui.NavigationBarSurfaceHeight
+import kotlin.math.roundToInt
 
 /**
  * Coordinates a caller-owned search route, results overlay and floating input toolbar.
@@ -88,8 +93,9 @@ fun GlasmioFloatingSearch(
     autoFocus: Boolean = true,
     backdrop: Backdrop = LocalGlassBackdrop.current,
     extraBottomSpacing: Dp = 0.dp,
-    resultsBottomSpacing: Dp = 68.dp,
+    resultsBottomSpacing: Dp = 56.dp,
     handleBack: Boolean = false,
+    transition: GlasmioSearchTransition? = null,
     results: @Composable BoxScope.(PaddingValues) -> Unit = {},
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -164,6 +170,7 @@ fun GlasmioFloatingSearch(
     val resultsBackdrop = rememberLayerBackdrop()
     val toolbarBackdrop = rememberCombinedBackdrop(backdrop, resultsBackdrop)
     val usesBackdrop = LocalGlassAppearance.current.usesBackdrop
+    val morph = transition ?: rememberGlasmioSearchTransition(active)
     Box(modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().then(
             if (active && query.text.isNotEmpty()) Modifier.clearAndSetSemantics {} else Modifier,
@@ -186,29 +193,72 @@ fun GlasmioFloatingSearch(
                 }
             }
         }
-        AnimatedVisibility(
-            visible = active,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.BottomCenter),
+        SearchBarLayer(
+            active = active,
+            progress = morph.progressState,
+            toolbarPadding = toolbarPadding,
+            backdrop = toolbarBackdrop,
+            query = query,
+            onQueryChange = onQueryChange,
+            onSearch = {
+                focusManager.clearFocus()
+                keyboard?.hide()
+                currentOnSearch(it)
+            },
+            onCancel = dismiss,
+            cancelLabel = cancelLabel,
+            placeholder = placeholder,
+            autoFocus = active && autoFocus,
+        )
+    }
+}
+
+/**
+ * Grows the search capsule leftwards from the trailing search button. The navigation bar and
+ * this capsule share [GlasmioSearchTransition], so both sides of the swap follow one spring.
+ */
+@Composable
+private fun BoxScope.SearchBarLayer(
+    active: Boolean,
+    progress: State<Float>,
+    toolbarPadding: PaddingValues,
+    backdrop: Backdrop,
+    query: TextFieldValue,
+    onQueryChange: (TextFieldValue) -> Unit,
+    onSearch: (String) -> Unit,
+    onCancel: () -> Unit,
+    cancelLabel: String,
+    placeholder: String,
+    autoFocus: Boolean,
+) {
+    val value = progress.value
+    if (!active && value <= 0f) return
+    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(toolbarPadding)) {
+        Box(
+            Modifier.align(Alignment.BottomEnd)
+                .padding(horizontal = 8.dp)
+                .graphicsLayer { alpha = value.coerceIn(0f, 1f) }
+                .layout { measurable, constraints ->
+                    val collapsed = 48.dp.roundToPx()
+                    val maxWidth = constraints.maxWidth
+                    val width = (collapsed + (maxWidth - collapsed) * value)
+                        .roundToInt().coerceIn(0, maxWidth)
+                    val height = 48.dp.roundToPx()
+                    val placeable = measurable.measure(Constraints.fixed(width, height))
+                    layout(maxWidth, height) { placeable.place(maxWidth - width, 0) }
+                },
         ) {
-            CompositionLocalProvider(LocalGlassBackdrop provides toolbarBackdrop) {
+            CompositionLocalProvider(LocalGlassBackdrop provides backdrop) {
                 GlasmioSearchToolbar(
                     query = query,
                     onQueryChange = onQueryChange,
-                    onSearch = {
-                        focusManager.clearFocus()
-                        keyboard?.hide()
-                        currentOnSearch(it)
-                    },
-                    onCancel = dismiss,
+                    onSearch = onSearch,
+                    onCancel = onCancel,
                     cancelLabel = cancelLabel,
                     placeholder = placeholder,
-                    autoFocus = active && autoFocus,
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .padding(toolbarPadding)
-                        .offset { IntOffset(0, 4.dp.roundToPx()) },
+                    autoFocus = autoFocus,
+                    morphProgress = value,
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
         }
@@ -231,11 +281,13 @@ fun GlasmioFloatingSearchButton(
         contentAlignment = Alignment.CenterEnd,
     ) {
         val progress = compactProgress.value
+        val controlSize = NavigationBarSurfaceHeight -
+            (NavigationBarSurfaceHeight - CompactBottomControlSize) * progress
         GlasmioIconButton(
             onClick = onClick,
             backdrop = backdrop,
             style = GlassSurfaceStyle.Navigation,
-            modifier = Modifier.size(NavigationBarSurfaceHeight - 16.dp * progress),
+            modifier = Modifier.size(controlSize),
             morphProgress = compactProgress,
             morphCaptureWidth = NavigationBarSurfaceHeight,
         ) {

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
@@ -312,16 +313,19 @@ fun GlasmioSearchToolbar(
     style: GlassSurfaceStyle = GlassSurfaceStyle.Navigation,
     focusRequester: FocusRequester = remember { FocusRequester() },
     autoFocus: Boolean = true,
+    morphProgress: Float = 1f,
 ) {
     val colors = LocalGlassColors.current
     val backdrop = LocalGlassBackdrop.current
+    val progress = morphProgress.coerceIn(0f, 1f)
+    val contentReveal = ((progress - 0.25f) / 0.45f).coerceIn(0f, 1f)
+    val cancelReveal = ((progress - 0.35f) / 0.45f).coerceIn(0f, 1f)
     Row(
-        modifier.height(64.dp),
+        modifier.height(48.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         GlassSurface(
-            modifier = Modifier.weight(1f).height(56.dp),
+            modifier = Modifier.weight(1f).height(48.dp),
             backdrop = backdrop,
             shape = Capsule(),
             style = style,
@@ -332,25 +336,28 @@ fun GlasmioSearchToolbar(
             ) {
                 SfIcon("magnifyingglass", null, size = 21.dp, tint = colors.secondaryContent)
                 Spacer(Modifier.width(8.dp))
-                GlasmioEditableTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    modifier = Modifier.weight(1f).focusRequester(focusRequester),
-                    singleLine = true,
-                    textStyle = IosTypography.body.copy(color = colors.content),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.accent),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { onSearch(query.text) }),
-                    decorationBox = { inner ->
-                        if (query.text.isEmpty()) {
-                            Text(placeholder, style = IosTypography.body, color = colors.tertiaryContent)
-                        }
-                        inner()
-                    },
-                )
+                Box(Modifier.weight(1f).graphicsLayer { alpha = contentReveal }) {
+                    GlasmioEditableTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                        singleLine = true,
+                        textStyle = IosTypography.body.copy(color = colors.content),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(colors.accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { onSearch(query.text) }),
+                        decorationBox = { inner ->
+                            if (query.text.isEmpty()) {
+                                Text(placeholder, style = IosTypography.body, color = colors.tertiaryContent)
+                            }
+                            inner()
+                        },
+                    )
+                }
                 if (query.text.isNotEmpty()) {
                     Box(
-                        Modifier.size(32.dp).clickable { onQueryChange(TextFieldValue()) },
+                        Modifier.size(32.dp).graphicsLayer { alpha = contentReveal }
+                            .clickable { onQueryChange(TextFieldValue()) },
                         contentAlignment = Alignment.Center,
                     ) {
                         SfIcon("xmark.circle", null, size = 18.dp, tint = colors.secondaryContent)
@@ -358,13 +365,26 @@ fun GlasmioSearchToolbar(
                 }
             }
         }
-        GlasmioIconButton(
-            onClick = onCancel,
-            backdrop = backdrop,
-            style = style,
-            modifier = Modifier.size(56.dp),
+        Spacer(Modifier.width(8.dp * cancelReveal))
+        Box(
+            Modifier.width(48.dp * cancelReveal).height(48.dp)
+                .graphicsLayer {
+                    alpha = cancelReveal
+                    val scale = 0.85f + 0.15f * cancelReveal
+                    scaleX = scale
+                    scaleY = scale
+                },
+            contentAlignment = Alignment.Center,
         ) {
-            SfIcon("xmark", cancelLabel, size = 20.dp, tint = colors.content)
+            GlasmioIconButton(
+                onClick = onCancel,
+                backdrop = backdrop,
+                style = style,
+                modifier = Modifier.size(48.dp),
+                enabled = cancelReveal > 0.5f,
+            ) {
+                SfIcon("xmark", cancelLabel, size = 20.dp, tint = colors.content)
+            }
         }
     }
     LaunchedEffect(autoFocus) {

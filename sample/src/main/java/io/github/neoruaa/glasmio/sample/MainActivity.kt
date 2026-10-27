@@ -304,6 +304,7 @@ private fun SampleNavigation(
     var navigationBarVisible by rememberSaveable { mutableStateOf(true) }
     var usesMiuixTransitionEffects by remember { mutableStateOf(true) }
     val currentRoute = rememberUpdatedState(backStack.lastOrNull()?.sampleRouteName())
+    val searchTransition = rememberGlasmioSearchTransition(currentRoute.value == "Search")
     val scrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -382,6 +383,7 @@ private fun SampleNavigation(
             placeholder = "Search Components",
             cancelLabel = "Cancel",
             backdrop = navigationBackdrop,
+            transition = searchTransition,
             results = { padding -> SearchResults(searchQuery.text, padding, navigate) },
         ) {
             Box(Modifier.fillMaxSize().nestedScroll(scrollConnection)) {
@@ -506,13 +508,21 @@ private fun SampleNavigation(
                 }
                 }
                 val activeRoute = currentRoute.value
-                if (activeRoute != null && activeRoute in topLevelRoutes) {
+                val searchMorph = searchTransition.progressState.value.coerceIn(0f, 1f)
+                if (activeRoute != null && (activeRoute in topLevelRoutes || searchMorph > 0f)) {
                     GlasmioBackdropProvider(bottomBackdrop) {
                         SampleBottomBar(
                             selected = activeRoute,
                             onSelected = selectTab,
                             onSearch = { navigate("Search") },
-                            modifier = Modifier.align(Alignment.BottomCenter),
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                                .graphicsLayer {
+                                    alpha = 1f - searchMorph
+                                    val scale = 1f - 0.08f * searchMorph
+                                    scaleX = scale
+                                    scaleY = scale
+                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)
+                                },
                             backdrop = bottomBackdrop,
                             compactProgress = compactProgress,
                             onExpand = { navigationBarVisible = true },
