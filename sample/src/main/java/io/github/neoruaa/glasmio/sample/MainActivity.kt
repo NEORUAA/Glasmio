@@ -653,7 +653,6 @@ private val catalog = listOf(
     "Controls" to "slider.horizontal.3",
     "Navigation" to "rectangle.3.group",
     "Lists" to "list.bullet",
-    "Preferences" to "gear",
     "Search" to "magnifyingglass",
     "Menus" to "ellipsis",
     "Sheets" to "inset.filled.bottomthird.rectangle",
@@ -690,6 +689,8 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
 @Composable
 private fun MaterialsDemo(layout: SamplePageLayout) {
     var separated by rememberSaveable { mutableStateOf(false) }
+    var favorite by rememberSaveable { mutableStateOf(false) }
+    var menuExpanded by remember { mutableStateOf(false) }
     DemoList(layout) {
         items(NavigationGlassMaterial.entries, key = { it.name }) { material ->
             GlassSurface(
@@ -721,10 +722,27 @@ private fun MaterialsDemo(layout: SamplePageLayout) {
                 GlasmioGroupedList {
                     GlasmioListRow("Separate Actions", showTopSeparator = false, trailing = { GlasmioSwitch(separated, { separated = it }) })
                 }
-                GlasmioToolbarActionGroup(style = if (separated) GlasmioToolbarActionStyle.Separated else GlasmioToolbarActionStyle.Merged) {
-                    GlasmioIconButton(onClick = {}) { SfIcon("plus", "Add") }
-                    GlasmioIconButton(onClick = {}) { SfIcon("arrow.counterclockwise", "Reset") }
-                    GlasmioIconButton(onClick = {}) { SfIcon("heart", "Like") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    GlasmioToolbarActionGroup(style = if (separated) GlasmioToolbarActionStyle.Separated else GlasmioToolbarActionStyle.Merged) {
+                        GlasmioIconButton(onClick = {}) { SfIcon("plus", "Add") }
+                        GlasmioIconButton(onClick = { favorite = false }) { SfIcon("arrow.counterclockwise", "Reset") }
+                        GlasmioIconButton(onClick = { favorite = !favorite }) {
+                            SfIcon(if (favorite) "heart.fill" else "heart", if (favorite) "Unlike" else "Like")
+                        }
+                    }
+                    GlasmioMenu(
+                        expanded = menuExpanded,
+                        onExpandedChange = { menuExpanded = it },
+                        itemCount = 3,
+                        anchor = { open -> GlasmioIconButton(open) { SfIcon("ellipsis", "Example menu") } },
+                    ) { backdrop, close ->
+                        GlasmioMenuItem(if (separated) "Merge Actions" else "Separate Actions",
+                            { separated = !separated; close() }, systemName = if (separated) "checkmark" else null, backdrop = backdrop)
+                        GlasmioMenuItem(if (favorite) "Unlike" else "Like", { favorite = !favorite; close() },
+                            systemName = if (favorite) "heart.fill" else "heart", backdrop = backdrop)
+                        GlasmioMenuItem("Reset", { favorite = false; separated = false; close() },
+                            systemName = "arrow.counterclockwise", backdrop = backdrop)
+                    }
                 }
             }
         }
