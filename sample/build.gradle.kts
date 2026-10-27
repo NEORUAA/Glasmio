@@ -2,6 +2,8 @@ import java.io.File
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
@@ -30,7 +32,17 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
-    buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt")) } }
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+        create("demo") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
 }
 dependencies {
     implementation(project(":glasmio-scaffold"))
@@ -46,8 +58,11 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-/** Host-owned fonts are generated only into local debug assets. */
+/** Host-owned fonts are generated into sample debug and demo assets. */
 abstract class GenerateSymbolFontAssets : DefaultTask() {
+    @get:Input
+    abstract val requireFonts: Property<Boolean>
+
     @get:InputFile
     @get:Optional
     @get:PathSensitive(PathSensitivity.NONE)
@@ -63,6 +78,9 @@ abstract class GenerateSymbolFontAssets : DefaultTask() {
 
     @TaskAction
     fun generate() {
+        require(!requireFonts.get() || (sourceFont.isPresent && sourceItalicFont.isPresent)) {
+            "Demo builds require both glasmio.symbolFont and glasmio.italicFont."
+        }
         val output = outputDirectory.get().asFile
         output.deleteRecursively()
         output.mkdirs()
@@ -90,14 +108,27 @@ val symbolFontPath = providers.gradleProperty("glasmio.symbolFont")
 val italicFontPath = providers.gradleProperty("glasmio.italicFont")
     .orElse(localFontProperties.map { it.getProperty("glasmio.italicFont", "") }).map { it.trim() }.filter { it.isNotEmpty() }
 val generateSymbolFontAssets = tasks.register<GenerateSymbolFontAssets>("generateSymbolFontAssets") {
+    requireFonts.set(false)
     sourceFont.set(layout.file(symbolFontPath.map { File(it) }))
     sourceItalicFont.set(layout.file(italicFontPath.map { File(it) }))
     outputDirectory.set(layout.buildDirectory.dir("generated/symbol-font/debug/assets"))
+}
+val generateDemoSymbolFontAssets = tasks.register<GenerateSymbolFontAssets>("generateDemoSymbolFontAssets") {
+    requireFonts.set(true)
+    sourceFont.set(layout.file(symbolFontPath.map { File(it) }))
+    sourceItalicFont.set(layout.file(italicFontPath.map { File(it) }))
+    outputDirectory.set(layout.buildDirectory.dir("generated/symbol-font/demo/assets"))
 }
 androidComponents {
     onVariants(selector().withBuildType("debug")) { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(
             generateSymbolFontAssets,
+            GenerateSymbolFontAssets::outputDirectory,
+        )
+    }
+    onVariants(selector().withBuildType("demo")) { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            generateDemoSymbolFontAssets,
             GenerateSymbolFontAssets::outputDirectory,
         )
     }

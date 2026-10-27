@@ -98,7 +98,7 @@ val styles = glasmioTextStyles(
 A host-provided `Typography` remains an override when passed to
 `GlasmioTheme`; its own sizes and weights are retained unless the host also
 selects an explicit Dynamic Type category. Preset text styles inherit its
-role-specific font families. Glasmio does not bundle SF Pro. Presets retain their requested leading without
+role-specific font families. Library artifacts do not bundle SF Pro; the Demo supplies it at the application level. Presets retain their requested leading without
 trimming the first or last line. Android can reserve a slightly taller outer
 line box when the loaded font's rounded ascent and descent exceed that leading;
 the preset values remain unchanged and glyphs are not clipped.

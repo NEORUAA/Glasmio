@@ -10,7 +10,7 @@ All six libraries share version `0.1.0` and the Maven group `io.github.neoruaa.g
 
 [Download the Demo APK](https://github.com/NEORUAA/Glasmio/releases/download/demo-2026-10-27/Glasmio-demo.apk)
 
-Requires Android 13 (API 33) or newer. The installable preview uses system fonts and fallback icons; licensed Apple fonts can be supplied when building the sample locally.
+Requires Android 13 (API 33) or newer. The Demo includes SF Pro, SF Symbols, and real italic faces. Library artifacts contain no font files.
 
 ## Modules
 
@@ -43,17 +43,18 @@ Run the component behavior tests on an Android device or emulator:
 
 The sample demonstrates materials, controls, navigation, lists, preferences, text styles, search, menus, and sheets. Its Home, Materials, Settings, and About tabs share a navigation bar with a separate floating search control. Pages use collapsing titles and progressive edge blur. Root tabs fade between destinations; detail pages use Miuix transitions. It builds independently of MeiloX.
 
-To render the catalog with SF Symbols, supply your local symbol font for debug builds:
+Build the Demo with SF Pro and its real italic font:
 
 ```sh
-./gradlew :sample:assembleDebug "-Pglasmio.symbolFont=/absolute/path/SF Pro.ttf"
+./gradlew :sample:assembleDemo \
+  "-Pglasmio.symbolFont=/absolute/path/SF Pro.ttf" \
+  "-Pglasmio.italicFont=/absolute/path/SF-Pro-Italic.ttf"
+adb install -r sample/build/outputs/apk/demo/sample-demo.apk
 ```
 
-For the text-style catalog's real italic faces, also pass
-`-Pglasmio.italicFont=/absolute/path/SF-Pro-Italic.ttf`. Both optional fonts are
-debug-only Sample assets; neither is included in the library artifacts.
+Both font properties are required for Demo builds; packaging fails when either is missing. The Demo uses release optimizations and the debug signing key, with the same application ID as the sample.
 
-You can also set `glasmio.symbolFont` in the ignored root `local.properties`. The debug build generates a local font asset and installs one icon provider around the entire catalog. With the SF Pro variable font, the sample also selects text weight and optical size from that asset. Release artifacts and published libraries do not contain that font.
+You can also set `glasmio.symbolFont` and `glasmio.italicFont` in the ignored root `local.properties`. Debug builds accept the same optional properties and retain system-font and icon fallbacks when omitted. The generated sample assets install one icon provider around the entire catalog. With the SF Pro variable font, the sample also selects text weight and optical size from that asset. These sample fonts are not included in library artifacts.
 
 ## Use in an application
 
@@ -125,7 +126,7 @@ GlasmioIconProvider(symbolTypeface = symbolTypeface) {
 }
 ```
 
-The example uses `androidx.compose.ui.platform.LocalContext`, `androidx.core.content.res.ResourcesCompat`, and your application's `R`. Glasmio does not redistribute Apple fonts. Without a supplied font, semantic Material icons provide a visible fallback. A custom `GlasmioIconResolver` can supply your own vectors.
+The example uses `androidx.compose.ui.platform.LocalContext`, `androidx.core.content.res.ResourcesCompat`, and your application's `R`. Library artifacts contain no Apple font files. Without a supplied font, semantic Material icons provide a visible fallback. A custom `GlasmioIconResolver` can supply your own vectors.
 
 ## Documentation
 
