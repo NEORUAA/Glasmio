@@ -3,7 +3,9 @@ package io.github.neoruaa.glasmio.icons
 
 object SfSymbolCatalog {
     private val codePoints: Map<String, Int> = mapOf(
+        "accessibility" to 0x10057E,
         "angle" to 0x101461,
+        "app" to 0x10044B,
         "apple.terminal" to 0x100A7C,
         "arrow.backward" to 0x100C0C,
         "arrow.clockwise" to 0x100148,
@@ -27,6 +29,12 @@ object SfSymbolCatalog {
         "at" to 0x100177,
         "backward" to 0x100289,
         "backward.fill" to 0x10028A,
+        "battery.0percent" to 0x1006EA,
+        "battery.100percent" to 0x1006E8,
+        "battery.100percent.bolt" to 0x10088B,
+        "battery.25percent" to 0x1006E9,
+        "battery.50percent" to 0x100EB6,
+        "battery.75percent" to 0x100EB8,
         "bell" to 0x1002D9,
         "bell.badge" to 0x100756,
         "bell.slash" to 0x1002DD,
@@ -41,6 +49,7 @@ object SfSymbolCatalog {
         "bubble.left.and.bubble.right" to 0x1004A4,
         "calendar" to 0x100249,
         "camera" to 0x10031E,
+        "case" to 0x100BE1,
         "cat" to 0x10207E,
         "character" to 0x10014F,
         "character.book.closed" to 0x100AD5,
@@ -64,6 +73,7 @@ object SfSymbolCatalog {
         "circle" to 0x100000,
         "circle.circle.fill" to 0x100A02,
         "circle.dashed" to 0x1004DE,
+        "circle.dotted" to 0x101143,
         "circle.grid.2x2.fill" to 0x1007BF,
         "circle.grid.cross" to 0x1009F8,
         "circle.lefthalf.filled" to 0x100002,
@@ -72,6 +82,7 @@ object SfSymbolCatalog {
         "clock.fill" to 0x10042C,
         "cloud" to 0x1001C2,
         "cloud.fill" to 0x1001C3,
+        "command" to 0x100194,
         "crop" to 0x100373,
         "cross" to 0x1008DC,
         "cylinder.split.1x2" to 0x100853,
@@ -109,6 +120,7 @@ object SfSymbolCatalog {
         "globe.americas.fill" to 0x100D72,
         "guitars.fill" to 0x1007D1,
         "hammer" to 0x100644,
+        "hand.pinch.fill" to 0x1017F2,
         "hand.tap" to 0x100B01,
         "hand.thumbsup" to 0x10027F,
         "hand.thumbsup.fill" to 0x100280,
@@ -233,6 +245,8 @@ object SfSymbolCatalog {
         "sparkles" to 0x1001BF,
         "speaker" to 0x1002A0,
         "speaker.fill" to 0x1002A1,
+        "speaker.slash.fill" to 0x1002A3,
+        "speaker.wave.1.fill" to 0x1002A5,
         "speaker.wave.2.fill" to 0x1002A7,
         "speaker.wave.3.fill" to 0x1002A9,
         "square" to 0x100092,
@@ -275,6 +289,7 @@ object SfSymbolCatalog {
         "wrench.and.screwdriver" to 0x10090A,
         "xmark" to 0x100184,
         "xmark.circle" to 0x100060,
+        "xmark.circle.fill" to 0x100061,
     )
 
     val systemNames: Set<String> get() = codePoints.keys
