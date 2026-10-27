@@ -57,6 +57,13 @@ data class GlassDimensions(
 val GlassColors.segmentedControlBackground: Color
     get() = if (isDark) Color.White.copy(alpha = 0.12f) else Color(0x1F767680)
 
+/** UIKit's resolved semantic grays for nested filled controls. */
+val GlassColors.systemGray4: Color
+    get() = if (isDark) Color(0xFF3A3A3C) else Color(0xFFD1D1D6)
+
+val GlassColors.systemGray5: Color
+    get() = if (isDark) Color(0xFF2C2C2E) else Color(0xFFE5E5EA)
+
 /** iOS names for shared roles. Existing largeTitle/title2 aliases retain emphasized headlines. */
 object IosTypography {
     val fontFamily: FontFamily

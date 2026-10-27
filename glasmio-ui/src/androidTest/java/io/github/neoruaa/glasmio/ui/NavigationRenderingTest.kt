@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -117,6 +118,160 @@ import org.junit.runner.RunWith
 class NavigationRenderingTest {
     @get:Rule val compose = createComposeRule()
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
+
+    @Test
+    fun adaptiveGroupKeepsAcknowledgementsAndRoutesDragOutToMainItems() {
+        val actual = mutableStateOf<Float?>(null)
+        val mode = mutableStateOf("adaptive")
+        val enabled = mutableStateOf(true)
+        val adaptiveEnabled = mutableStateOf(true)
+        val discrete = mutableStateOf(false)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val modeRequests = mutableListOf<String>()
+        val strengthRequests = mutableListOf<Float>()
+        var finishes = 0
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioBackdropProvider(emptyBackdrop()) {
+                    CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                        GlasmioSegmentedControl(
+                            items = listOf("off" to "Off", "open" to "Open", "adaptive" to "Adaptive", "quiet" to "Quiet"),
+                            selected = mode.value, onSelected = { modeRequests += it },
+                            adaptiveItem = "adaptive", adaptiveValue = actual.value,
+                            adaptiveDiscrete = discrete.value,
+                            onAdaptiveValueChange = { strengthRequests += it },
+                            modifier = Modifier.width(360.dp).testTag("adaptive-group"),
+                            enabled = enabled.value, adaptiveEnabled = adaptiveEnabled.value,
+                            deferSelection = true, showLabels = true,
+                            hiddenItems = if (mode.value == "adaptive") setOf("off") else emptySet(),
+                            onAdaptiveValueChangeFinished = { finishes++ },
+                            adaptiveLabels = listOf("More", "Default", "Less"),
+                        )
+                    }
+                }
+            }
+        }
+        val group = compose.onNodeWithTag("adaptive-group")
+        val adaptive = compose.onNodeWithContentDescription("Adaptive")
+        assertEquals(ProgressBarRangeInfo.Indeterminate,
+            adaptive.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo])
+        adaptive.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(.4f)) }
+        compose.runOnIdle {
+            assertEquals(listOf(.4f), strengthRequests)
+            assertTrue(modeRequests.isEmpty())
+            assertEquals(null, actual.value)
+            assertEquals(1, finishes)
+            actual.value = .4f
+        }
+        adaptive.assertIsSelected()
+        assertEquals(.4f, adaptive.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo].current, .0001f)
+        group.performTouchInput {
+            down(Offset(width * 1.6f / 5f, 28.dp.toPx()))
+            moveTo(Offset(width * 2.29f / 5f, 28.dp.toPx()))
+        }
+        compose.runOnIdle {
+            assertEquals(.43f, strengthRequests.last(), .0001f)
+            assertEquals(1, finishes)
+            assertEquals(.4f, actual.value)
+            assertTrue(modeRequests.isEmpty())
+        }
+        assertEquals(.43f, adaptive.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo].current, .0001f)
+        group.performTouchInput { up() }
+        compose.runOnIdle { assertEquals(2, finishes) }
+        assertEquals(.4f, adaptive.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo].current, .0001f)
+        compose.runOnIdle { actual.value = .43f; direction.value = LayoutDirection.Rtl }
+        group.performTouchInput {
+            swipe(Offset(width * 3.4f / 5f, 28.dp.toPx()), Offset(width * 2.2f / 5f, 28.dp.toPx()))
+        }
+        compose.runOnIdle {
+            assertEquals(.6f, strengthRequests.last(), .0001f)
+            assertEquals(3, finishes)
+            assertTrue(modeRequests.isEmpty())
+            direction.value = LayoutDirection.Ltr
+        }
+        val beforeExit = compose.runOnIdle { strengthRequests.size }
+        group.performTouchInput {
+            down(Offset(width * 2.3f / 5f, 28.dp.toPx()))
+            moveTo(Offset(8.dp.toPx(), 28.dp.toPx()))
+            moveTo(Offset(width * 3f / 5f, 28.dp.toPx()))
+            moveTo(Offset(width - 8.dp.toPx(), 28.dp.toPx()))
+            up()
+        }
+        compose.runOnIdle {
+            assertEquals(listOf("open"), modeRequests)
+            assertEquals(beforeExit, strengthRequests.size)
+            assertEquals(3, finishes)
+            mode.value = "open"
+        }
+        group.performTouchInput {
+            swipe(Offset(width * 1.5f / 4f, 28.dp.toPx()), Offset(width * 3.5f / 4f, 28.dp.toPx()))
+        }
+        compose.runOnIdle {
+            assertEquals("Collapsed ordinary cells do not accept slider drags", listOf("open"), modeRequests)
+            mode.value = "adaptive"
+            enabled.value = false
+        }
+        adaptive.assertIsNotEnabled().performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(!it(0f)) }
+        group.performTouchInput { click(Offset(width * 2.5f / 5f, 28.dp.toPx())) }
+        compose.runOnIdle {
+            assertEquals(beforeExit, strengthRequests.size)
+            assertEquals(listOf("open"), modeRequests)
+            assertEquals(3, finishes)
+        }
+        compose.runOnIdle {
+            enabled.value = true
+            discrete.value = true
+            actual.value = .4f
+            strengthRequests.clear()
+            modeRequests.clear()
+        }
+        val discreteReport = adaptive.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
+        assertEquals(.4f, discreteReport.current, .0001f)
+        assertEquals(1, discreteReport.steps)
+        compose.runOnIdle { assertTrue("Changing capability never fabricates an incoming 50% report", strengthRequests.isEmpty()) }
+        listOf(.309f, .31f, .7f, .701f).forEach { requested ->
+            adaptive.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(requested)) }
+        }
+        compose.runOnIdle {
+            assertEquals(listOf(0f, .5f, 1f), strengthRequests)
+            strengthRequests.clear()
+        }
+        val beforeDiscreteDrag = compose.runOnIdle { finishes }
+        group.performTouchInput {
+            down(Offset(width * 1.6f / 5f, 28.dp.toPx()))
+            moveTo(Offset(width * 2.29f / 5f, 28.dp.toPx()))
+        }
+        compose.runOnIdle { assertEquals(listOf(.5f), strengthRequests); assertEquals(beforeDiscreteDrag, finishes) }
+        assertEquals(.5f, adaptive.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo].current, .0001f)
+        group.performTouchInput { moveTo(Offset(width * 2.8f / 5f, 28.dp.toPx())) }
+        compose.runOnIdle { assertEquals("Repeated movement inside one detent emits no duplicate preview", listOf(.5f), strengthRequests) }
+        group.performTouchInput { moveTo(Offset(width * 3.7f / 5f, 28.dp.toPx())); up() }
+        compose.runOnIdle {
+            assertEquals(listOf(.5f, 1f), strengthRequests)
+            assertEquals(beforeDiscreteDrag + 1, finishes)
+            assertEquals(.4f, actual.value)
+            assertTrue(modeRequests.isEmpty())
+        }
+        assertEquals(.4f, adaptive.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo].current, .0001f)
+        compose.runOnIdle {
+            actual.value = .5f
+            strengthRequests.clear()
+        }
+        adaptive.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(1f)) }
+        compose.runOnIdle { assertEquals(listOf(1f), strengthRequests); strengthRequests.clear() }
+        group.performTouchInput {
+            down(Offset(width * 2.5f / 5f, 28.dp.toPx()))
+            moveTo(Offset(width * 2.5f / 5f, 50.dp.toPx()))
+            cancel()
+        }
+        compose.runOnIdle {
+            assertTrue("A vertical scroll never writes an adaptive preview", strengthRequests.isEmpty())
+            adaptiveEnabled.value = false
+        }
+        adaptive.assertIsNotEnabled().performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(!it(0f)) }
+        group.performTouchInput { click(Offset(width * 3.7f / 5f, 28.dp.toPx())) }
+        compose.runOnIdle { assertTrue("A separately disabled child ignores taps", strengthRequests.isEmpty()) }
+    }
 
     @Test
     fun filledVolumeSliderHandlesNormalizedInputRtlAndDisabledProgress() {

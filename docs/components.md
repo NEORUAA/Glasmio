@@ -10,7 +10,7 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Text styles | `GlasmioTextStyles`, `glasmioTextStyles`, `rememberGlasmioTextStyles`, `IosTextStyle`, `IosTextVariant`, `IosDynamicTypeSize` |
 | Glass | `GlasmioBackdropHost`, `GlasmioBackdropProvider`, `GlassSurface`, `GlassSurfaceStyle`, `GlassEmphasis`, `rememberCrossWindowBackdrop`, `rememberSharedGlassBackdrop`, `rememberRasterizedBackdrop` |
 | Buttons | `GlasmioButton`, `GlasmioIconButton`, `GlasmioButtonSize`, `GlasmioButtonDefaults` |
-| Controls | `GlasmioSwitch`, `GlasmioSlider`, `GlasmioVolumeSlider`, `GlasmioStepper`, `GlasmioSegmentedControl`, `GlasmioScrollableTabRow`, `GlasmioColorPicker` |
+| Controls | `GlasmioSwitch`, `GlasmioSlider`, `GlasmioVolumeSlider`, `GlasmioAdaptiveSlider`, `GlasmioStepper`, `GlasmioSegmentedControl`, `GlasmioScrollableTabRow`, `GlasmioColorPicker` |
 | Input | `GlasmioTextField`, `GlasmioSearchBar`, `GlasmioSearchToolbar`, `GlasmioEditableText` |
 | Text editing | `GlasmioTextSelectionHost`, `GlasmioTextSelectionMenu`, `GlasmioTextSelectionLabels`, `GlasmioMagnifier`, `GlasmioLoupeMotion`, `GlasmioLoupeFlex`, `rememberGlasmioLoupeFollow`, `GlasmioLoupeFollowState` |
 | Lists | `GlasmioCard`, `GlasmioGroupedList`, `GlasmioListRow`, `GlasmioSectionTitle`, `GlasmioGroupedTableFooter`, `GlasmioListValuePill`, `GlasmioListSwipeActions`, `GlasmioListSwipeAction`, `GlasmioSwipeActionStyle`, `GlasmioReorderableGroup` |
@@ -129,6 +129,48 @@ GlasmioSegmentedControl(
     },
 )
 ```
+
+`GlasmioAdaptiveSlider` is a 56 dp continuous slider with nullable confirmed selection. Taps and
+dragging report normalized preview values through `onValueChange`; `onValueChangeFinished` marks a
+completed adjustment. A cancelled drag restores the confirmed preview without finishing. With
+`deferSelection = true`, the renderer owns the local draft during a gesture and returns to the
+external value after release. Values such as `0.4f` remain continuous in both geometry and progress
+accessibility. `labels`, `showLabels`, and `captionOverride` provide captions.
+
+For a device capability that supports only three positions, opt in with `discrete = true`, or
+`adaptiveDiscrete = true` on the grouped overload. Interaction selects `0f` below `.31f`, `1f`
+above `.7f`, and `.5f` between those bounds; repeated movement in one position emits no duplicate
+preview. The thumb uses the native value spring. Incoming reports remain unchanged, so a reported
+`0.4f` still displays 40% until the user interacts. The default remains continuous.
+
+The grouped `GlasmioSegmentedControl` overload expands its confirmed `adaptiveItem` to three
+ordinary cell widths within the same capsule. Main-item and adaptive-value callbacks remain
+separate. A drag must start in the expanded adaptive group; entering a 20 dp outer edge zone
+requests the neighboring main mode once and ends strength updates for that gesture. Collapsed
+ordinary cells are tap targets. `hiddenItems`
+controls capabilities independently of expansion. Its `showLabels` captions follow the animated
+cell widths; a nonblank `captionOverride` replaces the caption row at the same 5 dp gap.
+
+```kotlin
+GlasmioSegmentedControl(
+    items = modes,
+    selected = confirmedMode,
+    onSelected = ::requestMode,
+    adaptiveItem = adaptiveMode,
+    adaptiveValue = confirmedStrength,
+    onAdaptiveValueChange = ::requestStrength,
+    modifier = Modifier.fillMaxWidth(),
+    deferSelection = true,
+    showLabels = true,
+)
+```
+
+Expansion, hidden-item layout, value motion, and drag scale use the recovered native spring
+response/damping pairs. The adaptive thumb uses the existing Clear material, a separate white
+resting fill, and one sharp foreground glyph. Its recording source contains the track and
+stationary content. Ordinary modes retain a separate semantic-background matched pill. Interactive motion
+preserves velocity with the native response and damping; SwiftUI's nonzero transaction blend
+duration is not emulated.
 
 ## Text editing
 
