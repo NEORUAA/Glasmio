@@ -10,13 +10,22 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuData
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuItem
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
+import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuToolbarProvider
+import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuDataProvider
+import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuProvider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -28,19 +37,31 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.backdrops.emptyBackdrop
@@ -61,6 +82,9 @@ import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
 import io.github.neoruaa.glasmio.glass.glasmioMenuAnchor
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -72,6 +96,100 @@ import org.junit.runner.RunWith
 class NavigationRenderingTest {
     @get:Rule val compose = createComposeRule()
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
+
+    @Test
+    fun selectionMenuKeepsPendingActionAcrossLegacyToModernHandoff() {
+        val value = mutableStateOf(TextFieldValue("Hello World", TextRange(0, 5)))
+        var legacyExecutions = 0
+        var modernExecutions = 0
+        var modernDataReads = 0
+        var ownerCoordinates: LayoutCoordinates? = null
+        lateinit var legacy: TextToolbar
+        lateinit var modern: TextContextMenuProvider
+        lateinit var scope: CoroutineScope
+        val provider = object : TextContextMenuDataProvider {
+            override fun position(destinationCoordinates: LayoutCoordinates) = contentBounds(destinationCoordinates).topLeft
+            override fun contentBounds(destinationCoordinates: LayoutCoordinates) =
+                destinationCoordinates.localBoundingBoxOf(checkNotNull(ownerCoordinates))
+
+            override fun data(): TextContextMenuData {
+                modernDataReads++
+                return TextContextMenuData(listOf(
+                    TextContextMenuItem(TextContextMenuKeys.CopyKey, "Modern copy") {},
+                    TextContextMenuItem(TextContextMenuKeys.SelectAllKey, "Select All") {
+                        modernExecutions++
+                        value.value = value.value.copy(selection = TextRange(0, value.value.text.length))
+                    },
+                ))
+            }
+        }
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color.White)) },
+                    overlayContent = {
+                        GlasmioTextSelectionHost {
+                            val currentLegacy = LocalTextToolbar.current
+                            val currentModern = checkNotNull(LocalTextContextMenuToolbarProvider.current)
+                            val currentScope = rememberCoroutineScope()
+                            SideEffect {
+                                legacy = currentLegacy
+                                modern = currentModern
+                                scope = currentScope
+                            }
+                            // Keep the provider contract independent of editor focus and IME state.
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    value.value.text,
+                                    Modifier.testTag("selection-owner")
+                                        .onGloballyPositioned { ownerCoordinates = it },
+                                )
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        compose.onNodeWithTag("selection-owner").assertIsDisplayed()
+        compose.runOnIdle {
+            legacy.showMenu(
+                rect = checkNotNull(ownerCoordinates).boundsInRoot(),
+                onCopyRequested = {},
+                onPasteRequested = null,
+                onCutRequested = null,
+                onSelectAllRequested = {
+                    legacyExecutions++
+                    value.value = value.value.copy(selection = TextRange(0, value.value.text.length))
+                },
+            )
+        }
+        compose.onNodeWithContentDescription("More").assertIsDisplayed()
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.waitUntil(10_000) { compose.onNodeWithText("Select All").isDisplayed() }
+        compose.onNodeWithText("Select All").assertIsDisplayed()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithText("Select All")
+                .performSemanticsAction(SemanticsActions.OnClick) { it() }
+            compose.runOnIdle {
+                assertEquals("The legacy action must still be waiting for the closing animation", 0, legacyExecutions)
+                scope.launch(start = CoroutineStart.UNDISPATCHED) { modern.showTextContextMenu(provider) }
+            }
+            compose.mainClock.advanceTimeByFrame()
+            compose.runOnIdle { assertTrue("The modern provider must take over before the close finishes", modernDataReads > 0) }
+            compose.mainClock.advanceTimeBy(1_000)
+            compose.runOnIdle {
+                assertEquals("The action queued before the provider handoff must run exactly once", 1, legacyExecutions)
+                assertEquals("The new provider must not replay the old click", 0, modernExecutions)
+                assertEquals(TextRange(0, value.value.text.length), value.value.selection)
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
+            compose.runOnIdle { legacy.hide() }
+        }
+    }
 
     @Test
     fun menuTintReturnsToItsActualGlassAnchorAcrossSourceMaterials() {

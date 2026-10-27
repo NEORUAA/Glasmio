@@ -176,7 +176,6 @@ fun GlasmioEditableText(
     }
     val colors = LocalGlassColors.current
     SideEffect {
-        if (editor.value != value) android.util.Log.d("GlasmioTextTrace", "compose editor=${System.identityHashCode(editor)} selection=${value.selection} previous=${editor.value.selection}")
         if (editor.value.text != value.text) {
             editor.showHandles = false
             editor.dismissMenu()
@@ -187,7 +186,6 @@ fun GlasmioEditableText(
         editor.enabled = enabled
         editor.readOnly = readOnly
         editor.password = visualTransformation is PasswordVisualTransformation
-        if (editor.realWindowFocused != realWindow.isWindowFocused) android.util.Log.d("GlasmioTextTrace", "window editor=${System.identityHashCode(editor)} focused=${realWindow.isWindowFocused} menuOwns=${host.menuOwnsFocus}")
         editor.realWindowFocused = realWindow.isWindowFocused
         editor.density = density
         editor.reverseScroll = layoutDirection == LayoutDirection.Rtl
@@ -227,7 +225,6 @@ fun GlasmioEditableText(
         }
     }
     val fieldModifier = modifier.onFocusChanged {
-        android.util.Log.d("GlasmioTextTrace", "focus editor=${System.identityHashCode(editor)} focus=${it.isFocused} menuOwns=${host.menuOwnsFocus}")
         editor.focused = it.isFocused
         if (it.isFocused) host.activate(editor) else if (!host.menuOwnsFocus) editor.dismiss()
     }.onGloballyPositioned { editor.decoration = it; editor.positionVersion++ }
@@ -280,7 +277,6 @@ fun GlasmioEditableText(
         BasicTextField(
             value = value,
             onValueChange = { next ->
-                android.util.Log.d("GlasmioTextTrace", "change editor=${System.identityHashCode(editor)} ${editor.value.selection} -> ${next.selection} window=${editor.realWindowFocused} menuOwns=${host.menuOwnsFocus}")
                 val textEdited = editor.value.text != next.text
                 editor.value = next
                 if (!editor.touching && editor.draggingHandle == null) {
@@ -426,7 +422,6 @@ internal class GlasmioTextEditor(
         override fun showMenu(rect: Rect, onCopyRequested: (() -> Unit)?, onPasteRequested: (() -> Unit)?, onCutRequested: (() -> Unit)?, onSelectAllRequested: (() -> Unit)?) =
             showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested, null)
         override fun showMenu(rect: Rect, onCopyRequested: (() -> Unit)?, onPasteRequested: (() -> Unit)?, onCutRequested: (() -> Unit)?, onSelectAllRequested: (() -> Unit)?, onAutofillRequested: (() -> Unit)?) {
-            android.util.Log.d("GlasmioTextTrace", "native legacy editor=${System.identityHashCode(this@GlasmioTextEditor)} selectAll=${onSelectAllRequested != null} selection=${value.selection}")
             nativeLegacy = { toolbar.showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested, onAutofillRequested) }
             if (chromeVisible) nativeLegacy?.invoke()
         }
@@ -436,7 +431,6 @@ internal class GlasmioTextEditor(
     }
     val modernAdapter = object : TextContextMenuProvider {
         override suspend fun showTextContextMenu(dataProvider: TextContextMenuDataProvider) {
-            android.util.Log.d("GlasmioTextTrace", "native modern editor=${System.identityHashCode(this@GlasmioTextEditor)} provider=${System.identityHashCode(dataProvider)} selection=${value.selection}")
             nativeProvider = dataProvider
             if (chromeVisible) showNativeMenu()
             // The native request can be cancelled by false WindowInfo without cancelling the
@@ -569,7 +563,6 @@ internal class GlasmioTextEditor(
     }
 
     fun dismissMenu() {
-        android.util.Log.d("GlasmioTextTrace", "dismiss editor=${System.identityHashCode(this)} selection=${value.selection} focused=$focused window=$realWindowFocused menuOwns=${host.menuOwnsFocus}")
         interactionGeneration++
         settleJob?.cancel()
         settleJob = null
@@ -601,7 +594,6 @@ internal class GlasmioTextEditor(
     }
 
     private fun showFallbackMenu() {
-        android.util.Log.d("GlasmioTextTrace", "fallback show editor=${System.identityHashCode(this)} selection=${value.selection}")
         val bounds = handleRect(false) ?: return
         val root = coordinates?.takeIf { it.isAttached }?.let { it.findRootCoordinates() } ?: return
         val rect = Rect(root.screenToLocal(bounds.topLeft), root.screenToLocal(bounds.bottomRight))
@@ -620,9 +612,7 @@ internal class GlasmioTextEditor(
             onPasteRequested = if (!readOnly && clipboard.hasText()) ({ clipboard.getText()?.let { replace(it.text) }; dismissMenu() }) else null,
             onCutRequested = if (!readOnly && hasSelection && !password) ({ clipboard.setText(AnnotatedString(selectedText())); replace(""); dismissMenu() }) else null,
             onSelectAllRequested = if (value.text.isNotEmpty() && selection.length < value.text.length) ({
-                android.util.Log.d("GlasmioTextTrace", "fallback selectAll editor=${System.identityHashCode(this)} selection=${value.selection}")
                 val next = value.copy(selection = TextRange(0, value.text.length)); value = next; change(next); showHandles = true
-                android.util.Log.d("GlasmioTextTrace", "fallback selected editor=${System.identityHashCode(this)} selection=${value.selection}")
                 showMenuAfterGesture(fromHandle = true)
             }) else null,
         )

@@ -128,7 +128,6 @@ fun GlasmioTextSelectionMenu(
     val layoutDirection = LocalLayoutDirection.current
     val windowSize = LocalWindowInfo.current.containerSize
     DisposableEffect(moreExpanded) {
-        android.util.Log.d("GlasmioTextTrace", "more effect expanded=$moreExpanded editor=${System.identityHashCode(editingHost?.active)}")
         editingHost?.menuOwnsFocus = moreExpanded
         onDispose { if (moreExpanded) editingHost?.menuOwnsFocus = false }
     }
@@ -208,7 +207,7 @@ fun GlasmioTextSelectionMenu(
                 title = labels.more,
                 expandedDescription = labels.expanded,
                 collapsedDescription = labels.collapsed,
-                onDismiss = { android.util.Log.d("GlasmioTextTrace", "more dismiss"); moreExpanded = false },
+                onDismiss = { moreExpanded = false },
                 backdrop = backdrop,
                 menuAnchorState = menuAnchor,
                 useAccentIcons = false,
@@ -313,7 +312,7 @@ fun GlasmioTextSelectionHost(
                     .mapNotNull { key -> actions.firstOrNull { it.first == key } }
                 val primary = clipboard.ifEmpty { actions.take(3) }
                 val remaining = actions.filter { candidate -> primary.none { it.first == candidate.first } }.map { it.second }
-                key(session ?: legacy?.identity) {
+                key(session?.identity ?: legacy?.identity) {
                     GlasmioTextSelectionMenu(
                         selectionBounds = screenBounds,
                         primaryActions = primary.map { it.second },
@@ -329,7 +328,10 @@ fun GlasmioTextSelectionHost(
     }
 }
 
-private class SelectionMenuSession(val dataProvider: TextContextMenuDataProvider) : TextContextMenuSession {
+private class SelectionMenuSession(
+    val dataProvider: TextContextMenuDataProvider,
+    val identity: Any,
+) : TextContextMenuSession {
     val closed = CompletableDeferred<Unit>()
     override fun close() { closed.complete(Unit) }
 }
@@ -355,7 +357,9 @@ private class GlasmioSelectionToolbar : TextToolbar, TextContextMenuProvider {
 
     override suspend fun showTextContextMenu(dataProvider: TextContextMenuDataProvider) {
         mutator.mutate {
-            val request = SelectionMenuSession(dataProvider)
+            // A native provider may arrive after the fallback has opened. Keep the same
+            // presentation so its closing animation and pending action survive the handoff.
+            val request = SelectionMenuSession(dataProvider, legacy?.identity ?: Any())
             legacy = null
             session = request
             try { request.closed.await() } finally { if (session === request) session = null }
@@ -367,9 +371,10 @@ private class GlasmioSelectionToolbar : TextToolbar, TextContextMenuProvider {
     }
 
     override fun showMenu(rect: Rect, onCopyRequested: (() -> Unit)?, onPasteRequested: (() -> Unit)?, onCutRequested: (() -> Unit)?, onSelectAllRequested: (() -> Unit)?, onAutofillRequested: (() -> Unit)?) {
+        val identity = legacy?.identity ?: session?.identity ?: Any()
         session?.close()
         session = null
-        legacy = LegacySelectionMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested, onAutofillRequested, legacy?.identity ?: Any())
+        legacy = LegacySelectionMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested, onAutofillRequested, identity)
     }
 
     override fun hide() {
@@ -390,7 +395,7 @@ private fun modernTextActions(session: SelectionMenuSession): List<Pair<Any, Gla
                         title = component.label,
                         systemName = textActionSymbol(component.key),
                         separatorBefore = separated,
-                        onClick = { android.util.Log.d("GlasmioTextTrace", "modern action key=${component.key} session=${System.identityHashCode(session)}"); component.onClick(session); android.util.Log.d("GlasmioTextTrace", "modern action returned") },
+                        onClick = { component.onClick(session) },
                     ))
                     separated = false
                 }
@@ -403,9 +408,7 @@ private fun modernTextActions(session: SelectionMenuSession): List<Pair<Any, Gla
 private fun legacyTextActions(request: LegacySelectionMenu, labels: GlasmioTextSelectionLabels, hide: () -> Unit): List<Pair<Any, GlasmioCascadingMenuItem>> = buildList {
     fun addAction(key: Any, label: String, callback: (() -> Unit)?, close: Boolean = true) {
         if (callback != null) add(key to GlasmioCascadingMenuItem(label, textActionSymbol(key), onClick = {
-            android.util.Log.d("GlasmioTextTrace", "legacy action key=$key label=$label")
             callback()
-            android.util.Log.d("GlasmioTextTrace", "legacy action returned key=$key")
             if (close) hide()
         }))
     }
