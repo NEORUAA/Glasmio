@@ -23,6 +23,7 @@ Initial Android Compose framework extraction from MeiloX.
 - Return plain Pop-up menus to their live text source, preserve corner tangents on tall menus, and retain four-sided shadows through opening and dismissal.
 - Retain source-material shadows and interpolate backdrop frost and tint when glass menus return to their toolbar or button.
 - Add compact and expanded text editing menus, real 16 dp selection handles, and a Clear cursor magnifier adapted from AndroidLiquidGlass, with safe-area placement and spring following.
+- Match the caret loupe to UIKit's glass implementation: a 115 × 85 dp capsule at 1.25× lifted 75 dp above the finger, a 0.3 low-pass into a damping 0.7 / 0.2 s spring, a two-pass opening, a 0.23 s dismissal that collapses the sampled content towards 0.125×, acceleration-driven body deformation with UIKit's tanh soft clamp and live-bounds leading-edge drift, and a dormant line-break dismissal hook. `GlasmioMagnifier` exposes the timings as `GlasmioLoupeMotion`, `rememberGlasmioLoupeFollow` reuses the follower for other lenses, and `docs/ios-loupe-motion.zh-CN.md` records the recovered parameters.
 - Configure signed Maven artifacts, sources, API documentation, and automated Central publication.
 - Apache-2.0 license with third-party notices included in every published module.
 

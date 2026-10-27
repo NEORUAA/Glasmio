@@ -132,6 +132,7 @@ The example uses `androidx.compose.ui.platform.LocalContext`, `androidx.core.con
 
 - [Component catalog and examples](docs/components.md)
 - [Backdrop hosting and modal sampling](docs/backdrop.md)
+- [iOS glass loupe motion reference](docs/ios-loupe-motion.zh-CN.md) (Chinese)
 - [Migration from MeiloX](MIGRATION.md)
 - [Module and dependency boundaries](docs/migration-dependencies.md)
 - [Publishing](docs/releasing.md)
