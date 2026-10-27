@@ -6,6 +6,12 @@ An Android-first Jetpack Compose UI framework with Liquid Glass materials, conti
 
 All six libraries share version `0.1.0` and the Maven group `io.github.neoruaa.glasmio`.
 
+## Demo app
+
+[Download the Demo APK](https://github.com/NEORUAA/Glasmio/releases/download/demo-2026-10-27/Glasmio-demo.apk)
+
+Requires Android 13 (API 33) or newer. The installable preview uses system fonts and fallback icons; licensed Apple fonts can be supplied when building the sample locally.
+
 ## Modules
 
 | Artifact | Provides |
