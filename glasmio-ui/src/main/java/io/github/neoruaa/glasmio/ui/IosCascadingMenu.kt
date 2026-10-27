@@ -149,6 +149,7 @@ fun GlasmioCascadingMenu(
     }
 
     fun close(action: (() -> Unit)? = null) {
+        android.util.Log.d("GlasmioTextTrace", "cascade close open=$open action=${action != null}")
         if (!open) return
         pendingAction = action
         childExpanded = false
@@ -181,6 +182,7 @@ fun GlasmioCascadingMenu(
         morphFromAnchor = morphFromAnchor,
         viewportBounds = viewportBounds,
         onClosed = {
+            android.util.Log.d("GlasmioTextTrace", "cascade onClosed started=$started open=$open action=${pendingAction != null}")
             if (started && !open) {
                 onDismiss()
                 pendingAction?.invoke()

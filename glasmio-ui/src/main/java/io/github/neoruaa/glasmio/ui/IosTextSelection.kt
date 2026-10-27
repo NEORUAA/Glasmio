@@ -128,6 +128,7 @@ fun GlasmioTextSelectionMenu(
     val layoutDirection = LocalLayoutDirection.current
     val windowSize = LocalWindowInfo.current.containerSize
     DisposableEffect(moreExpanded) {
+        android.util.Log.d("GlasmioTextTrace", "more effect expanded=$moreExpanded editor=${System.identityHashCode(editingHost?.active)}")
         editingHost?.menuOwnsFocus = moreExpanded
         onDispose { if (moreExpanded) editingHost?.menuOwnsFocus = false }
     }
@@ -207,7 +208,7 @@ fun GlasmioTextSelectionMenu(
                 title = labels.more,
                 expandedDescription = labels.expanded,
                 collapsedDescription = labels.collapsed,
-                onDismiss = { moreExpanded = false },
+                onDismiss = { android.util.Log.d("GlasmioTextTrace", "more dismiss"); moreExpanded = false },
                 backdrop = backdrop,
                 menuAnchorState = menuAnchor,
                 useAccentIcons = false,
@@ -389,7 +390,7 @@ private fun modernTextActions(session: SelectionMenuSession): List<Pair<Any, Gla
                         title = component.label,
                         systemName = textActionSymbol(component.key),
                         separatorBefore = separated,
-                        onClick = { component.onClick(session) },
+                        onClick = { android.util.Log.d("GlasmioTextTrace", "modern action key=${component.key} session=${System.identityHashCode(session)}"); component.onClick(session); android.util.Log.d("GlasmioTextTrace", "modern action returned") },
                     ))
                     separated = false
                 }
@@ -402,7 +403,9 @@ private fun modernTextActions(session: SelectionMenuSession): List<Pair<Any, Gla
 private fun legacyTextActions(request: LegacySelectionMenu, labels: GlasmioTextSelectionLabels, hide: () -> Unit): List<Pair<Any, GlasmioCascadingMenuItem>> = buildList {
     fun addAction(key: Any, label: String, callback: (() -> Unit)?, close: Boolean = true) {
         if (callback != null) add(key to GlasmioCascadingMenuItem(label, textActionSymbol(key), onClick = {
+            android.util.Log.d("GlasmioTextTrace", "legacy action key=$key label=$label")
             callback()
+            android.util.Log.d("GlasmioTextTrace", "legacy action returned key=$key")
             if (close) hide()
         }))
     }
