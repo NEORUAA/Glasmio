@@ -28,8 +28,6 @@ import io.github.neoruaa.glasmio.icons.SfIcon
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -70,11 +68,7 @@ fun GlasmioPreferenceEntry(
         Row(
             modifier = Modifier.weight(1f)
                 .heightIn(min = minimumHeight)
-                .drawBehind {
-                    if (showTopSeparator) {
-                        drawLine(colors.separator, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx())
-                    }
-                }
+                .glasmioGroupedListSeparator(colors.separator, visible = showTopSeparator)
                 .alpha(if (isEnabled) 1f else 0.5f)
                 .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,

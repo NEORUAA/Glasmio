@@ -13,9 +13,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -27,6 +26,10 @@ import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
@@ -43,8 +46,41 @@ import kotlin.math.roundToInt
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import com.kyant.capsule.ContinuousRoundedRectangle
 
+
+private val LocalGroupedListCoordinates = staticCompositionLocalOf<State<LayoutCoordinates?>?> { null }
+
+/** Suppress only a separator placed on the framed group's actual top edge. */
+@Composable
+fun Modifier.glasmioGroupedListSeparator(
+    color: Color,
+    visible: Boolean = true,
+    horizontalInset: Dp = 0.dp,
+): Modifier {
+    if (!visible) return this
+    val group = LocalGroupedListCoordinates.current
+    var coordinates by remember(group) { mutableStateOf<LayoutCoordinates?>(null) }
+    var position by remember(group) { mutableStateOf(Offset.Unspecified) }
+    return this
+        .then(if (group != null) Modifier.onGloballyPositioned {
+            coordinates = it
+            // Coordinates are reused during keyed moves; the position invalidates drawing.
+            position = it.positionInRoot()
+        } else Modifier)
+        .drawBehind {
+            val owner = group?.value
+            val row = coordinates.takeIf { position.isSpecified }
+            val atTopEdge = owner != null && row != null && owner.isAttached && row.isAttached &&
+                owner.findRootCoordinates() === row.findRootCoordinates() &&
+                kotlin.math.abs(owner.localPositionOf(row, Offset.Zero).y) < 0.5f
+            if (!atTopEdge) {
+                val inset = horizontalInset.toPx()
+                drawLine(color, Offset(inset, 0f), Offset(size.width - inset, 0f), 1.dp.toPx())
+            }
+        }
+}
 
 /** Figma node 781:15374 grouped-list container. Use ordinary rows inside for GPU efficiency. */
 @Composable
@@ -60,6 +96,7 @@ fun GlasmioGroupedList(
         alpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f),
     )
     val shape = ContinuousRoundedRectangle(26.dp)
+    val groupCoordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
     Column(
         modifier
             .fillMaxWidth()
@@ -68,17 +105,7 @@ fun GlasmioGroupedList(
                     Modifier
                         .clip(shape)
                         .background(background, shape)
-                        .drawWithContent {
-                            drawContent()
-                            // Hide only the first merged row's inset separator. Clipping the
-                            // container prevents the cover leaking across the top corners.
-                            val inset = 16.dp.toPx()
-                            drawRect(
-                                color = background,
-                                topLeft = androidx.compose.ui.geometry.Offset(inset, 0f),
-                                size = Size((size.width - inset * 2f).coerceAtLeast(0f), 1.dp.toPx()),
-                            )
-                        }
+                        .onGloballyPositioned { groupCoordinates.value = it }
                 } else {
                     Modifier
                 },
@@ -88,6 +115,7 @@ fun GlasmioGroupedList(
             .padding(horizontal = 0.dp),
     ) {
         CompositionLocalProvider(
+            LocalGroupedListCoordinates provides if (framed) groupCoordinates else null,
             LocalMergedGlassCards provides true,
             LocalGroupedListIconColor provides colors.accent,
             LocalContentColor provides colors.content,
@@ -130,11 +158,9 @@ fun GlasmioListRow(
             Spacer(Modifier.width(12.dp))
         }
         Row(
-            Modifier.weight(1f).fillMaxHeight().drawBehind {
-                if (showTopSeparator) {
-                    drawLine(colors.separator, Offset.Zero, Offset(size.width, 0f), 1.dp.toPx())
-                }
-            }.alpha(if (enabled) 1f else 0.4f),
+            Modifier.weight(1f).fillMaxHeight()
+                .glasmioGroupedListSeparator(colors.separator, visible = showTopSeparator)
+                .alpha(if (enabled) 1f else 0.4f),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
@@ -201,7 +227,7 @@ fun GlasmioGroupedTableFooter(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         modifier = modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 6.dp),
-        style = IosTypography.body.copy(fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = (-0.08).sp),
+        style = IosTypography.body.copy(fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = GlasmioTheme.letterSpacing((-0.08).sp)),
         color = LocalGlassColors.current.secondaryContent,
     )
 }
@@ -319,7 +345,7 @@ fun GlasmioListSwipeAction(
     val captionStyle = IosTypography.body.copy(
         fontSize = 13.sp,
         lineHeight = 15.sp,
-        letterSpacing = 0.sp,
+        letterSpacing = GlasmioTheme.letterSpacing(0.sp),
         fontWeight = if (style == GlasmioSwipeActionStyle.SymbolAndLabelTall) FontWeight(510) else FontWeight.Normal,
     )
     val captionColor = if (colors.isDark) Color(0xFFEBEBF5).copy(alpha = 0.7f)

@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.progressSemantics
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,6 +59,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
@@ -69,6 +72,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceIn
@@ -529,21 +533,35 @@ fun GlasmioCard(
     )
 }
 
+/**
+ * A compact glass selector. Labels remain the accessibility names when [itemContent] supplies icons.
+ *
+ * A null or unmatched [selected] leaves every item unselected. With [deferSelection], a drag submits
+ * [onSelected] and returns to the confirmed [selected] until the caller updates it. Custom content
+ * is composed in the visible track, exported optical source, and fading resting-surface overlay.
+ */
 @Composable
 fun <T> GlasmioSegmentedControl(
     items: List<Pair<T, String>>,
-    selected: T,
+    selected: T?,
     onSelected: (T) -> Unit,
     modifier: Modifier = Modifier,
     backdrop: Backdrop = LocalGlassBackdrop.current,
     positionAnimation: Animatable<Float, AnimationVector1D>? = null,
+    height: Dp = 32.dp,
+    enabled: Boolean = true,
+    deferSelection: Boolean = false,
+    itemContent: (@Composable BoxScope.(value: T, selected: Boolean) -> Unit)? = null,
 ) {
     require(items.isNotEmpty())
+    require(height.value.isFinite() && height > 4.dp) { "Segment height must be finite and greater than 4 dp." }
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
     val isLight = !colors.isDark
-    val selectedIndex = items.indexOfFirst { it.first == selected }.coerceAtLeast(0)
+    val selectedIndex = if (selected == null) -1 else items.indexOfFirst { it.first == selected }
     val currentSelectedIndex by rememberUpdatedState(selectedIndex)
+    val currentEnabled by rememberUpdatedState(enabled)
+    val currentDeferSelection by rememberUpdatedState(deferSelection)
     val currentItems by rememberUpdatedState(items)
     val currentOnSelected by rememberUpdatedState(onSelected)
     val scope = rememberCoroutineScope()
@@ -553,12 +571,14 @@ fun <T> GlasmioSegmentedControl(
     val trackColor = colors.segmentedControlBackground.let {
         if (appearance.reduceTransparency) it.compositeOver(colors.elevatedBackground) else it
     }
+    val indicatorHeight = height - 4.dp
 
     // Same three-layer structure as LiquidBottomTabs:
-    // visible tabs -> invisible exported tabs with labels -> movable combined-backdrop lens.
+    // visible tabs -> invisible exported tabs with content -> movable combined-backdrop lens.
     val dragCoordinateSpace = remember { mutableStateOf<LayoutCoordinates?>(null) }
     BoxWithConstraints(
-        modifier.height(32.dp).onGloballyPositioned { dragCoordinateSpace.value = it },
+        modifier.height(height).selectableGroup().alpha(if (enabled) 1f else 0.45f)
+            .onGloballyPositioned { dragCoordinateSpace.value = it },
     ) {
         val density = LocalDensity.current
         val contentWidthPx = (constraints.maxWidth - with(density) { 4.dp.roundToPx() })
@@ -569,8 +589,8 @@ fun <T> GlasmioSegmentedControl(
         val trackPaddingPx = with(density) { 2.dp.toPx() }
         val textMeasurer = rememberTextMeasurer()
         val labelStyle = IosTypography.caption
-        val labelLayouts = remember(textMeasurer, items, selectedIndex, labelStyle, colors.content, tabWidthPx) {
-            items.mapIndexed { index, item ->
+        val labelLayouts = remember(textMeasurer, items, selectedIndex, labelStyle, colors.content, tabWidthPx, itemContent) {
+            if (itemContent != null) emptyList() else items.mapIndexed { index, item ->
                 textMeasurer.measure(
                     text = AnnotatedString(item.second),
                     style = labelStyle.copy(
@@ -586,7 +606,7 @@ fun <T> GlasmioSegmentedControl(
         val animation = remember(scope, items.size, isLtr, positionAnimation) {
             DampedDragAnimation(
                 animationScope = scope,
-                initialValue = selectedIndex.toFloat(),
+                initialValue = selectedIndex.coerceAtLeast(0).toFloat(),
                 valueRange = 0f..items.lastIndex.coerceAtLeast(1).toFloat(),
                 visibilityThreshold = 0.001f,
                 initialScale = 1f,
@@ -594,18 +614,22 @@ fun <T> GlasmioSegmentedControl(
                 dragCoordinateSpace = { dragCoordinateSpace.value },
                 sharedValueAnimation = positionAnimation,
                 horizontalDragOnly = true,
-                onDragStarted = { interactiveHighlight.startPress(it) },
+                onDragStarted = { if (currentEnabled) interactiveHighlight.startPress(it) },
                 onDragStopped = {
                     interactiveHighlight.endPress()
                     val target = targetValue.fastRoundToInt().fastCoerceIn(0, currentItems.lastIndex)
-                    currentOnSelected(currentItems[target].first)
-                    animateToValue(target.toFloat())
+                    if (currentEnabled) currentOnSelected(currentItems[target].first)
+                    val restingIndex = if (currentEnabled && !currentDeferSelection) target else currentSelectedIndex
+                    if (restingIndex >= 0) animateToValue(restingIndex.toFloat())
                 },
                 onDragCancelled = {
                     interactiveHighlight.endPress()
-                    animateToValue(currentSelectedIndex.toFloat(), animatePress = false)
+                    if (currentSelectedIndex >= 0) {
+                        animateToValue(currentSelectedIndex.toFloat(), animatePress = false)
+                    }
                 },
                 onDrag = { _, dragAmount ->
+                    if (!currentEnabled) return@DampedDragAnimation
                     updateValue(
                         (targetValue + dragAmount.x / currentTabWidthPx * if (isLtr) 1f else -1f)
                             .fastCoerceIn(0f, currentItems.lastIndex.toFloat()),
@@ -613,7 +637,10 @@ fun <T> GlasmioSegmentedControl(
                 },
             )
         }
-        LaunchedEffect(selectedIndex, animation) { animation.animateToValue(selectedIndex.toFloat()) }
+        LaunchedEffect(selectedIndex, enabled, animation) {
+            if (selectedIndex >= 0) animation.animateToValue(selectedIndex.toFloat(), animatePress = enabled)
+            if (!enabled) interactiveHighlight.endPress()
+        }
         val segmentedHighlightModifier = remember(interactiveHighlight, animation, isLtr, trackPaddingPx) {
             interactiveHighlight.highlightModifier(
                 positionProvider = { size ->
@@ -703,9 +730,9 @@ fun <T> GlasmioSegmentedControl(
                 .clip(Capsule())
                 .background(trackColor)
                 .drawBehind {
-                    if (appearance.reduceTransparency) {
+                    if (appearance.reduceTransparency && selectedIndex >= 0) {
                         val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
-                        val pillHeight = 28.dp.toPx()
+                        val pillHeight = indicatorHeight.toPx()
                         drawRoundRect(
                             color = if (isLight) Color.White else Color(0xFF636366),
                             topLeft = Offset(trackPaddingPx + visualIndex * tabWidthPx, trackPaddingPx),
@@ -719,8 +746,10 @@ fun <T> GlasmioSegmentedControl(
         ) {
             SegmentedTabContent(
                 items = items,
-                selected = selected,
+                selectedIndex = selectedIndex,
                 onSelected = onSelected,
+                enabled = enabled,
+                itemContent = itemContent,
             )
         }
 
@@ -730,7 +759,7 @@ fun <T> GlasmioSegmentedControl(
             Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth()
-                .height(SegmentedIndicatorHeight)
+                .height(indicatorHeight)
                 .clearAndSetSemantics { }
                 .alpha(0f)
                 .layerBackdrop(tabsBackdrop)
@@ -742,14 +771,16 @@ fun <T> GlasmioSegmentedControl(
         ) {
             SegmentedTabContent(
                 items = items,
-                selected = selected,
+                selectedIndex = selectedIndex,
                 onSelected = onSelected,
+                enabled = enabled,
+                itemContent = itemContent,
             )
         }
 
         // 3. The only drag surface. It sits over the selected cell, samples layer 2 and
         // becomes larger only while pressed; unselected cells remain tappable through layer 2.
-        Box(
+        if (selectedIndex >= 0) Box(
             Modifier
                 .graphicsLayer {
                     val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
@@ -757,8 +788,9 @@ fun <T> GlasmioSegmentedControl(
                     translationY = 2.dp.toPx()
                     transformOrigin = androidx.compose.ui.graphics.TransformOrigin.Center
                 }
-                .then(animation.modifier)
-                .height(SegmentedIndicatorHeight)
+                .then(if (enabled) animation.modifier else Modifier)
+                .height(indicatorHeight)
+                .clearAndSetSemantics { }
                 .layout { measurable, constraints ->
                     val width = tabWidthPx.fastRoundToInt()
                     val placeable = measurable.measure(
@@ -786,7 +818,37 @@ fun <T> GlasmioSegmentedControl(
                         }
                     }
                     .then(indicatorGlassModifier),
-            )
+            ) {
+                if (itemContent != null && appearance.usesBackdrop) {
+                    // The opaque resting fill covers its optical source. Restore the same
+                    // fixed-track content here, then yield to the source as refraction appears.
+                    Row(
+                        Modifier
+                            .fillMaxSize()
+                            .clip(Capsule())
+                            .graphicsLayer { alpha = 1f - animation.pressProgress }
+                            .layout { measurable, constraints ->
+                                val width = contentWidthPx.fastRoundToInt().coerceAtLeast(1)
+                                val placeable = measurable.measure(
+                                    constraints.copy(minWidth = width, maxWidth = width),
+                                )
+                                layout(constraints.maxWidth, constraints.maxHeight) {
+                                    val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
+                                    val left = (constraints.maxWidth - tabWidthPx) / 2f - visualIndex * tabWidthPx
+                                    placeable.place(left.fastRoundToInt(), 0)
+                                }
+                            },
+                    ) {
+                        SegmentedTabContent(
+                            items = items,
+                            selectedIndex = selectedIndex,
+                            onSelected = {},
+                            enabled = false,
+                            itemContent = itemContent,
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -794,32 +856,44 @@ fun <T> GlasmioSegmentedControl(
 @Composable
 private fun <T> androidx.compose.foundation.layout.RowScope.SegmentedTabContent(
     items: List<Pair<T, String>>,
-    selected: T,
+    selectedIndex: Int,
     onSelected: (T) -> Unit,
+    enabled: Boolean,
+    itemContent: (@Composable BoxScope.(value: T, selected: Boolean) -> Unit)?,
 ) {
     val colors = LocalGlassColors.current
-    items.forEach { (key, label) ->
-        val isSelected = key == selected
+    items.forEachIndexed { index, (key, label) ->
+        val isSelected = index == selectedIndex
         Box(
             Modifier
                 .weight(1f)
                 .fillMaxHeight()
                 .clip(Capsule())
-                .clickable(
+                .selectable(
+                    selected = isSelected,
+                    enabled = enabled,
                     interactionSource = null,
                     indication = null,
                     role = Role.Tab,
-                    onClick = { onSelected(key) },
-                ),
+                    onClick = { if (enabled) onSelected(key) },
+                )
+                .then(if (itemContent != null) Modifier.semantics { contentDescription = label } else Modifier),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
+            if (itemContent == null) Text(
                 label,
                 style = IosTypography.caption,
                 color = colors.content,
                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
-            )
+            ) else CompositionLocalProvider(
+                LocalContentColor provides colors.content,
+                LocalGlassContentColor provides colors.content,
+            ) {
+                Box(Modifier.clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
+                    itemContent(key, isSelected)
+                }
+            }
         }
     }
 }

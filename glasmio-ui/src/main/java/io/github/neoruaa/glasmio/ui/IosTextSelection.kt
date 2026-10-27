@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.sp
 import com.kyant.backdrop.Backdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import io.github.neoruaa.glasmio.core.IosTypography
+import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.glass.GlassSurface
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -181,7 +182,7 @@ fun GlasmioTextSelectionMenu(
                             .padding(start = if (index > 0) 16.dp else 0.dp, end = if (additionalItems.isNotEmpty() || index < primaryActions.lastIndex) 16.dp else 0.dp),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(action.title, style = IosTypography.subheadline.copy(fontSize = 15.sp, lineHeight = 18.sp, letterSpacing = (-0.6).sp),
+                        Text(action.title, style = IosTypography.subheadline.copy(fontSize = 15.sp, lineHeight = 18.sp, letterSpacing = GlasmioTheme.letterSpacing((-0.6).sp)),
                             color = colors.content.copy(alpha = if (action.enabled) 1f else 0.45f), maxLines = 1)
                     }
                 }

@@ -1,6 +1,10 @@
 package io.github.neoruaa.glasmio.ui
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -20,6 +24,9 @@ import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuProv
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
@@ -41,6 +48,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
@@ -50,8 +58,10 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextEquals
@@ -59,13 +69,17 @@ import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.backdrops.emptyBackdrop
@@ -102,6 +116,178 @@ import org.junit.runner.RunWith
 class NavigationRenderingTest {
     @get:Rule val compose = createComposeRule()
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
+
+    @Test
+    fun filledVolumeSliderHandlesNormalizedInputRtlAndDisabledProgress() {
+        val value = mutableFloatStateOf(0.25f)
+        val enabled = mutableStateOf(true)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val requests = mutableListOf<Float>()
+        var finishes = 0
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    GlasmioVolumeSlider(
+                        value = value.floatValue,
+                        onValueChange = { requests += it; value.floatValue = it },
+                        modifier = Modifier.width(300.dp).testTag("filled-volume"),
+                        enabled = enabled.value,
+                        onValueChangeFinished = { finishes++ },
+                    )
+                }
+            }
+        }
+        val slider = compose.onNodeWithTag("filled-volume")
+        fun assertLevel(expected: Float, expectedFinishes: Int) = compose.runOnIdle {
+            assertEquals(expected, value.floatValue, 0.01f)
+            assertEquals(expectedFinishes, finishes)
+            assertTrue(requests.all { it in 0f..1f })
+        }
+
+        slider.assertHeightIsEqualTo(52.dp).performTouchInput {
+            click(Offset(width * 0.75f, height / 2f))
+        }
+        assertLevel(0.75f, 1)
+        slider.performTouchInput {
+            swipe(Offset(width * 0.75f, height / 2f), Offset(width * 0.25f, height / 2f))
+        }
+        assertLevel(0.25f, 2)
+        val beforeVertical = compose.runOnIdle { requests.size }
+        slider.performTouchInput {
+            swipe(Offset(width / 2f, height * 0.1f), Offset(width / 2f, height * 0.9f))
+        }
+        assertLevel(0.25f, 2)
+        compose.runOnIdle { assertEquals(beforeVertical, requests.size) }
+
+        slider.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(1.5f)) }
+        assertLevel(1f, 3)
+        slider.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(0.6f)) }
+        assertLevel(0.6f, 4)
+
+        compose.runOnIdle { direction.value = LayoutDirection.Rtl }
+        slider.performTouchInput { click(Offset(width * 0.25f, height / 2f)) }
+        assertLevel(0.75f, 5)
+        slider.performTouchInput {
+            swipe(Offset(width * 0.25f, height / 2f), Offset(width * 0.75f, height / 2f))
+        }
+        assertLevel(0.25f, 6)
+
+        compose.runOnIdle { enabled.value = false }
+        val beforeDisabled = compose.runOnIdle { requests.size }
+        slider.assertIsNotEnabled().performTouchInput { click(Offset(width / 2f, height / 2f)) }
+        slider.performTouchInput {
+            swipe(Offset(width * 0.75f, height / 2f), Offset(width * 0.25f, height / 2f))
+        }
+        slider.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(!it(0.9f)) }
+        assertLevel(0.25f, 6)
+        compose.runOnIdle { assertEquals(beforeDisabled, requests.size) }
+    }
+
+    @Test
+    fun groupedSeparatorsPreservePressedTopEdgeAndFollowKeyedLayout() {
+        val rows = mutableStateListOf("First", "Second")
+        val framed = mutableStateOf(true)
+        val fieldFirst = mutableStateOf(false)
+        val pressedColor = Color(0xFFB8B8B8)
+        var density = 1f
+        compose.setContent {
+            density = LocalDensity.current.density
+            GlasmioTheme(isDark = false, appearance = GlassAppearance(reduceTransparency = true)) {
+                Box(Modifier.fillMaxSize().background(Color.White)) {
+                    GlasmioGroupedList(Modifier.width(300.dp).testTag("separator-group"), framed = framed.value) {
+                        rows.forEach { label ->
+                            key(label) {
+                                if (fieldFirst.value && label == rows.first()) {
+                                    GlasmioTextField("", {}, modifier = Modifier.testTag("first-field"))
+                                } else {
+                                    val interactions = remember { MutableInteractionSource() }
+                                    val pressed by interactions.collectIsPressedAsState()
+                                    GlasmioListRow(label, modifier = Modifier.testTag(label)
+                                        .background(if (pressed) pressedColor else Color.White)
+                                        .clickable(interactionSource = interactions, indication = null, onClick = {}))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fun colorError(a: Color, b: Color): Float = maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
+        fun assertTopMatchesRow(expected: Color) {
+            val pixels = compose.onNodeWithTag("separator-group").captureToImage().toPixelMap()
+            val x = pixels.width / 2
+            assertTrue("The first row background must reach its top edge without a painted cover or separator",
+                colorError(expected, pixels[x, 0]) < 3f / 255f)
+            assertTrue("The interior separator must remain visible",
+                colorError(pixels[x, (52f * density).roundToInt()], pixels[x, (56f * density).roundToInt()]) > .02f)
+        }
+
+        compose.onNodeWithTag("First").performTouchInput { down(center) }
+        assertTopMatchesRow(pressedColor)
+        compose.onNodeWithTag("First").performTouchInput { up() }
+        compose.runOnIdle { rows.add(0, rows.removeAt(rows.lastIndex)) }
+        assertTopMatchesRow(Color.White)
+        compose.runOnIdle { fieldFirst.value = true }
+        assertTopMatchesRow(Color.White)
+        compose.runOnIdle { framed.value = false }
+        val unframed = compose.onNodeWithTag("separator-group").captureToImage().toPixelMap()
+        assertTrue("Unframed groups retain the standalone TextField separator",
+            colorError(unframed[unframed.width / 2, 0], Color.White) > .02f)
+    }
+
+    @Test
+    fun segmentedControlKeepsDeferredSelectionAndUnknownDisabledSemantics() {
+        val selected = mutableStateOf<Int?>(null)
+        val enabled = mutableStateOf(true)
+        val position = Animatable(0f)
+        val requests = mutableListOf<Int>()
+        val items = listOf(0 to "Quiet", 1 to "Balanced", 2 to "Open")
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioBackdropProvider(emptyBackdrop()) {
+                    GlasmioSegmentedControl(
+                        items = items,
+                        selected = selected.value,
+                        onSelected = { requests += it },
+                        modifier = Modifier.width(300.dp).testTag("segmented"),
+                        positionAnimation = position,
+                        height = 50.dp,
+                        enabled = enabled.value,
+                        deferSelection = true,
+                        itemContent = { _, _ ->
+                            Canvas(Modifier.size(25.dp)) { drawCircle(Color.Black) }
+                        },
+                    )
+                }
+            }
+        }
+        compose.onNodeWithTag("segmented").assertHeightIsEqualTo(50.dp)
+        items.forEach { compose.onNodeWithContentDescription(it.second).assertIsNotSelected() }
+        compose.onNodeWithContentDescription("Balanced").performClick()
+        compose.runOnIdle { assertEquals(listOf(1), requests) }
+        items.forEach { compose.onNodeWithContentDescription(it.second).assertIsNotSelected() }
+
+        compose.runOnIdle { selected.value = 0 }
+        compose.onNodeWithContentDescription("Quiet").assertIsSelected()
+        compose.onNodeWithTag("segmented").performTouchInput {
+            swipe(Offset(width / 6f, height / 2f), Offset(width * 5f / 6f, height / 2f))
+        }
+        compose.runOnIdle {
+            assertEquals(listOf(1, 2), requests)
+            assertEquals(0f, position.value, 0.001f)
+        }
+        compose.onNodeWithContentDescription("Quiet").assertIsSelected()
+        compose.onNodeWithContentDescription("Open").assertIsNotSelected()
+
+        compose.runOnIdle { selected.value = 2; enabled.value = false }
+        compose.onNodeWithContentDescription("Open").assertIsSelected().assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Balanced")
+            .performSemanticsAction(SemanticsActions.OnClick) { it() }
+        compose.onNodeWithTag("segmented").performTouchInput {
+            swipe(Offset(width * 5f / 6f, height / 2f), Offset(width / 6f, height / 2f))
+        }
+        compose.runOnIdle { assertEquals(listOf(1, 2), requests) }
+    }
 
     @Test
     fun nativeSelectAllAdaptersUseTheLatestEditableValueAndCallback() {

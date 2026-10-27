@@ -10,7 +10,7 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Text styles | `GlasmioTextStyles`, `glasmioTextStyles`, `rememberGlasmioTextStyles`, `IosTextStyle`, `IosTextVariant`, `IosDynamicTypeSize` |
 | Glass | `GlasmioBackdropHost`, `GlasmioBackdropProvider`, `GlassSurface`, `GlassSurfaceStyle`, `GlassEmphasis`, `rememberCrossWindowBackdrop`, `rememberSharedGlassBackdrop`, `rememberRasterizedBackdrop` |
 | Buttons | `GlasmioButton`, `GlasmioIconButton`, `GlasmioButtonSize`, `GlasmioButtonDefaults` |
-| Controls | `GlasmioSwitch`, `GlasmioSlider`, `GlasmioStepper`, `GlasmioSegmentedControl`, `GlasmioScrollableTabRow`, `GlasmioColorPicker` |
+| Controls | `GlasmioSwitch`, `GlasmioSlider`, `GlasmioVolumeSlider`, `GlasmioStepper`, `GlasmioSegmentedControl`, `GlasmioScrollableTabRow`, `GlasmioColorPicker` |
 | Input | `GlasmioTextField`, `GlasmioSearchBar`, `GlasmioSearchToolbar`, `GlasmioEditableText` |
 | Text editing | `GlasmioTextSelectionHost`, `GlasmioTextSelectionMenu`, `GlasmioTextSelectionLabels`, `GlasmioMagnifier` |
 | Lists | `GlasmioCard`, `GlasmioGroupedList`, `GlasmioListRow`, `GlasmioSectionTitle`, `GlasmioGroupedTableFooter`, `GlasmioListValuePill`, `GlasmioListSwipeActions`, `GlasmioListSwipeAction`, `GlasmioSwipeActionStyle`, `GlasmioReorderableGroup` |
@@ -67,6 +67,11 @@ fun ExampleHost(content: @Composable () -> Unit) {
 
 Values belong to the caller. `GlasmioSlider` also accepts `onValueChangeFinished` for committing a drag or accessibility adjustment. `GlasmioStepper` disables actions at the ends of its range. Search takes `TextFieldValue` so selection and composition are preserved.
 
+`GlasmioVolumeSlider` uses a normalized `0f..1f` value in a 52 dp filled capsule. It provides
+local drag feedback, a changing speaker symbol, RTL input, keyboard adjustments, and progress
+accessibility. Supply its localized accessibility name through `modifier.semantics` and use
+`onValueChangeFinished` to commit an adjustment when needed.
+
 ```kotlin
 @Composable
 fun ControlsScreen() = ExampleHost {
@@ -102,6 +107,28 @@ fun ControlsScreen() = ExampleHost {
 ```
 
 Supply localized descriptions for icon-only actions and Stepper controls. Use `enabled = false` for disabled controls. Slider values and range endpoints must be finite, with an increasing range.
+
+`GlasmioSegmentedControl` keeps its 32 dp text layout by default. Set `height` and `itemContent`
+for taller icon segments; each pair's label remains its accessibility name. The content slot is
+rendered in both the optical source and the resting surface, so icons refract with the lens.
+`selected = null` (or a value absent from `items`) shows no selected surface. Use
+`deferSelection = true` when a device must confirm a request: releasing a drag calls `onSelected`
+and returns the lens to the last external selection until `selected` changes.
+
+```kotlin
+GlasmioSegmentedControl(
+    items = listOf(0 to "Quiet", 1 to "Balanced", 2 to "Open"),
+    selected = confirmedMode,
+    onSelected = ::requestMode,
+    modifier = Modifier.fillMaxWidth(),
+    height = 50.dp,
+    enabled = !requestPending,
+    deferSelection = true,
+    itemContent = { mode, selected ->
+        SfIcon(modeSymbols[mode], contentDescription = null, modifier = Modifier.size(25.dp))
+    },
+)
+```
 
 ## Text editing
 

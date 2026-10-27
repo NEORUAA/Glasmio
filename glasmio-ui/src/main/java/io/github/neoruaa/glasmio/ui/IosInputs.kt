@@ -19,11 +19,13 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
@@ -35,6 +37,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kyant.shapes.Capsule
@@ -53,21 +56,45 @@ fun GlasmioTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
+    var owned by remember { mutableStateOf(TextFieldValue(value)) }
+    var lastText by remember(value) { mutableStateOf(value) }
+    val current = owned.copy(text = value)
+    SideEffect { if (owned.selection != current.selection || owned.composition != current.composition) owned = current }
+    GlasmioTextField(
+        value = current,
+        onValueChange = { next ->
+            owned = next
+            if (next.text != lastText) { lastText = next.text; onValueChange(next.text) }
+        },
+        modifier = modifier,
+        placeholder = placeholder,
+        enabled = enabled,
+        trailing = trailing,
+        visualTransformation = visualTransformation,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+    )
+}
+
+@Composable
+fun GlasmioTextField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    enabled: Boolean = true,
+    trailing: (@Composable () -> Unit)? = null,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+) {
     val colors = LocalGlassColors.current
     val fieldTextStyle = IosTypography.body.copy(fontWeight = FontWeight(510))
     Row(
         modifier
             .fillMaxWidth()
             .height(52.dp)
-            .drawBehind {
-                val inset = 16.dp.toPx()
-                drawLine(
-                    colors.separator,
-                    androidx.compose.ui.geometry.Offset(inset, 0f),
-                    androidx.compose.ui.geometry.Offset(size.width - inset, 0f),
-                    1.dp.toPx(),
-                )
-            }
+            .glasmioGroupedListSeparator(colors.separator, horizontalInset = 16.dp)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -83,7 +110,7 @@ fun GlasmioTextField(
             keyboardOptions = keyboardOptions,
             keyboardActions = keyboardActions,
             decorationBox = { inner ->
-                if (value.isEmpty()) Text(placeholder, style = fieldTextStyle, color = colors.tertiaryContent)
+                if (value.text.isEmpty()) Text(placeholder, style = fieldTextStyle, color = colors.tertiaryContent)
                 inner()
             },
         )

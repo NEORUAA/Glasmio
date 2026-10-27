@@ -141,7 +141,7 @@ fun GlasmioButton(
         MaterialTheme.typography.labelLarge.copy(
             fontSize = if (it == GlasmioButtonSize.Small) 15.sp else 17.sp,
             lineHeight = 18.sp,
-            letterSpacing = 0.sp,
+            letterSpacing = GlasmioTheme.letterSpacing(0.sp),
             fontWeight = FontWeight(510),
         )
     }
