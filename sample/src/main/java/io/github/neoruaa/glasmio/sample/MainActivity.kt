@@ -81,6 +81,8 @@ import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.scene.Scene
+import io.github.neoruaa.glasmio.sample.navigation.SampleNavDisplay
+import io.github.neoruaa.glasmio.sample.navigation.SampleHeaderMotion
 import androidx.navigation3.ui.NavDisplay
 import androidx.navigation3.ui.NavDisplayTransitionEffects
 import androidx.navigation3.ui.defaultTransitionSpec
@@ -288,7 +290,7 @@ private fun SampleNavigation(
 ) {
     val backStack = rememberSaveable(
         saver = listSaver<SnapshotStateList<String>, String>(save = { it.toList() }, restore = { it.toMutableStateList() }),
-    ) { mutableStateListOf("Home") }
+    ) { mutableStateListOf(sampleEntryKey("Home")) }
     val homeListState = rememberLazyListState()
     val materialsListState = rememberLazyListState()
     val settingsListState = rememberLazyListState()
@@ -301,7 +303,7 @@ private fun SampleNavigation(
     var searchQuery by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     var navigationBarVisible by rememberSaveable { mutableStateOf(true) }
     var usesMiuixTransitionEffects by remember { mutableStateOf(true) }
-    val currentRoute = rememberUpdatedState(backStack.lastOrNull())
+    val currentRoute = rememberUpdatedState(backStack.lastOrNull()?.sampleRouteName())
     val scrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -326,27 +328,41 @@ private fun SampleNavigation(
     val currentPreferenceName by rememberUpdatedState(preferenceName)
     val currentPreferenceChoice by rememberUpdatedState(preferenceChoice)
     val navigate: (String) -> Unit = { route ->
-        if (backStack.lastOrNull() != route) {
-            usesMiuixTransitionEffects = backStack.lastOrNull() !in topLevelRoutes || route !in topLevelRoutes
-            backStack.add(route)
+        if (backStack.lastOrNull()?.sampleRouteName() != route) {
+            usesMiuixTransitionEffects = backStack.lastOrNull()?.sampleRouteName() !in topLevelRoutes || route !in topLevelRoutes
+            backStack.add(sampleEntryKey(route))
         }
     }
     val navigateBack: () -> Unit = {
         if (backStack.size > 1) {
-            val target = backStack[backStack.lastIndex - 1]
-            usesMiuixTransitionEffects = backStack.lastOrNull() !in topLevelRoutes || target !in topLevelRoutes
+            val target = backStack[backStack.lastIndex - 1].sampleRouteName()
+            usesMiuixTransitionEffects = backStack.lastOrNull()?.sampleRouteName() !in topLevelRoutes || target !in topLevelRoutes
             backStack.removeAt(backStack.lastIndex)
         }
     }
     val selectTab: (String) -> Unit = { route ->
-        if (backStack.lastOrNull() != route) {
-            usesMiuixTransitionEffects = backStack.lastOrNull() !in topLevelRoutes || route !in topLevelRoutes
+        if (backStack.lastOrNull()?.sampleRouteName() != route) {
+            usesMiuixTransitionEffects = backStack.lastOrNull()?.sampleRouteName() !in topLevelRoutes || route !in topLevelRoutes
             backStack.clear()
-            backStack.add("Home")
-            if (route != "Home") backStack.add(route)
+            backStack.add(sampleEntryKey("Home"))
+            if (route != "Home") backStack.add(sampleEntryKey(route))
         }
     }
     val navigationBackdrop = rememberLayerBackdrop()
+    val headerMotion = remember {
+        SampleHeaderMotion(backStack.last()) { from, to, pop ->
+            if ((from as? String)?.sampleRouteName() in topLevelRoutes && (to as? String)?.sampleRouteName() in topLevelRoutes) GlasmioNavigationOperation.Tab
+            else if (pop) GlasmioNavigationOperation.Pop else GlasmioNavigationOperation.Push
+        }
+    }
+    val headerEntries = remember { mutableMapOf<String, SampleHeaderEntry>() }
+    fun headerEntry(key: String): SampleHeaderEntry = headerEntries.getOrPut(key) {
+        SampleHeaderEntry()
+    }
+    SideEffect {
+        val frame = headerMotion.frame.value
+        headerEntries.keys.retainAll(backStack.toSet() + setOf(frame.fromEntryKey, frame.toEntryKey))
+    }
     val bottomBackdrop = rememberSharedGlassBackdrop(navigationBackdrop, navigationBackdrop)
     val editingValue = rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue("Hello World"))
@@ -369,8 +385,31 @@ private fun SampleNavigation(
             results = { padding -> SearchResults(searchQuery.text, padding, navigate) },
         ) {
             Box(Modifier.fillMaxSize().nestedScroll(scrollConnection)) {
+                GlasmioNavigationScaffold(
+                    motion = headerMotion,
+                    header = { entryKey ->
+                        val key = entryKey as String
+                        val route = key.sampleRouteName()
+                        val entry = headerEntry(key)
+                        val appearanceAction = GlasmioHeaderAction(
+                            key = "appearance.toggle", visualKey = if (dark) "sun.max" else "moon",
+                            contentDescription = if (dark) "Light appearance" else "Dark appearance",
+                            onClick = { currentOnDark(!currentDark) },
+                        ) { SfIcon(if (dark) "sun.max" else "moon", null) }
+                        GlasmioHeaderSpec(
+                            title = when (route) { "Home" -> "Glasmio"; "MaterialTab" -> "材质"; "SettingsTab" -> "Settings"; "About" -> "关于"; else -> route },
+                            leading = if (route in topLevelRoutes) emptyList() else listOf(GlasmioHeaderGroup("navigation", listOf(
+                                GlasmioHeaderAction("navigation.back", "chevron.backward", "Back", navigateBack) { SfIcon(SfSymbol.ChevronBack, null, mirrored = true) },
+                            ))),
+                            trailing = listOf(GlasmioHeaderGroup("primary", entry.actions ?: listOf(appearanceAction))),
+                            scrollState = entry.scroll,
+                        )
+                    },
+                ) { headerPadding ->
+                CompositionLocalProvider(LocalSampleBodyPadding provides headerPadding) {
                 Box(Modifier.fillMaxSize().glassBackdropSource(navigationBackdrop).trackBackdropPosition(navigationBackdrop)) {
-                    NavDisplay(
+                    SampleNavDisplay(
+                        motion = headerMotion,
                         backStack = backStack,
                         modifier = Modifier.fillMaxSize(),
                         onBack = navigateBack,
@@ -393,8 +432,11 @@ private fun SampleNavigation(
                                 blockInputDuringTransition = false,
                             )
                         },
-                        entryProvider = { route ->
-                            NavEntry(key = route, contentKey = route) {
+                        entryProvider = { entryKey ->
+                            NavEntry(key = entryKey, contentKey = entryKey) {
+                                val route = entryKey.sampleRouteName()
+                                val entryListState = rootListStates[route] ?: rememberLazyListState()
+                                CompositionLocalProvider(LocalSampleHeaderEntry provides headerEntry(entryKey)) {
                                 val wallpaper = route in wallpaperRoutes
                                 GlasmioBackdropHost(
                                     modifier = Modifier.fillMaxSize(),
@@ -408,9 +450,9 @@ private fun SampleNavigation(
                                             Box(Modifier.fillMaxSize()) {
                                                 Box(Modifier.fillMaxSize().glassBackdropSource(pageBackdrop).trackBackdropPosition(pageBackdrop)) {
                                                     if (route == "Lists") {
-                                                        ListDemo(onBack = navigateBack)
+                                                        ListDemo()
                                                     } else if (route == "Menus") {
-                                                        MenusDemo(bottomPadding, navigateBack, currentDark, currentOnDark)
+                                                        MenusDemo(bottomPadding, currentDark, currentOnDark)
                                                     } else {
                                                         val title = when (route) {
                                                             "Home" -> "Glasmio"
@@ -423,10 +465,7 @@ private fun SampleNavigation(
                                                             title = title,
                                                             bottomPadding = bottomPadding,
                                                             wallpaper = wallpaper,
-                                                            onBack = if (isTopLevel) null else navigateBack,
-                                                            dark = currentDark,
-                                                            onDark = currentOnDark,
-                                                            listState = rootListStates[route],
+                                                            listState = entryListState,
                                                             alwaysCompact = route == "Text Editing",
                                                             backgroundColor = if (route == "Text Editing") {
                                                                 if (LocalGlassColors.current.isDark) Color.Black else Color.White
@@ -459,9 +498,12 @@ private fun SampleNavigation(
                                         }
                                     },
                                 )
+                                }
                             }
                         },
                     )
+                }
+                }
                 }
                 val activeRoute = currentRoute.value
                 if (activeRoute != null && activeRoute in topLevelRoutes) {
@@ -482,7 +524,7 @@ private fun SampleNavigation(
     }
 }
 
-private fun Scene<String>.sampleRoute(): String? = entries.lastOrNull()?.contentKey as? String
+private fun Scene<String>.sampleRoute(): String? = entries.lastOrNull()?.contentKey?.let { (it as? String)?.sampleRouteName() }
 
 private fun AnimatedContentTransitionScope<Scene<String>>.usesRootTabTransition(): Boolean =
     initialState.sampleRoute() in topLevelRoutes && targetState.sampleRoute() in topLevelRoutes
@@ -517,13 +559,9 @@ private fun SamplePinnedPage(
     title: String,
     bottomPadding: Dp,
     wallpaper: Boolean,
-    onBack: (() -> Unit)?,
-    dark: Boolean,
-    onDark: (Boolean) -> Unit,
     listState: LazyListState? = null,
     alwaysCompact: Boolean = false,
     backgroundColor: Color = LocalGlassColors.current.groupedBackground,
-    actions: @Composable RowScope.() -> Unit = {},
     content: @Composable (SamplePageLayout) -> Unit,
 ) {
     val state = listState ?: rememberLazyListState()
@@ -534,18 +572,19 @@ private fun SamplePinnedPage(
             else (state.firstVisibleItemScrollOffset / collapseDistance).coerceIn(0f, 1f)
         }
     }
-    GlasmioPinnedPage(
-        title = title,
-        bottomPadding = bottomPadding,
-        onNavigateBack = onBack,
-        collapseProgress = if (alwaysCompact) 1f else progress,
+    val entry = LocalSampleHeaderEntry.current
+    val scroll = remember(state, alwaysCompact, collapseDistance) {
+        GlasmioHeaderScrollState({ if (alwaysCompact) 1f else if (state.firstVisibleItemIndex > 0) 1f else (state.firstVisibleItemScrollOffset / collapseDistance).coerceIn(0f, 1f) })
+    }
+    SideEffect { entry.scroll = scroll }
+    val hostPadding = LocalSampleBodyPadding.current
+    val bodyPadding = PaddingValues(
+        start = IosPageHorizontalPadding, top = hostPadding.calculateTopPadding(),
+        end = IosPageHorizontalPadding, bottom = bottomPadding + 24.dp,
+    )
+    GlasmioPageBody(
+        contentPadding = bodyPadding,
         backgroundColor = backgroundColor,
-        actions = {
-            GlasmioIconButton(onClick = { onDark(!dark) }) {
-                SfIcon(if (dark) "sun.max" else "moon", if (dark) "Light appearance" else "Dark appearance")
-            }
-            actions()
-        },
     ) { padding ->
         if (wallpaper) SampleBackdrop(true)
         content(SamplePageLayout(title, padding, state, progress))
@@ -867,7 +906,7 @@ private fun NavigationDemo(layout: SamplePageLayout) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ListDemo(onBack: () -> Unit) {
+private fun ListDemo() {
     var reordered by remember { mutableStateOf(listOf("First", "Second", "Third")) }
     var grid by rememberSaveable { mutableStateOf(false) }
     var entries by remember { mutableStateOf((1..24).toList()) }
@@ -905,18 +944,24 @@ private fun ListDemo(onBack: () -> Unit) {
     }
     val gridCollapseProgress = rememberGlasmioGridCollapseProgress(gridState)
     val collapseProgress = if (grid) gridCollapseProgress else listCollapseProgress
-    GlasmioPinnedPage(
-        title = "Lists",
-        onNavigateBack = onBack,
-        collapseProgress = collapseProgress,
-        actions = {
-            GlasmioIconButton(onClick = refresh, enabled = !refreshing) {
-                SfIcon("arrow.clockwise", "Refresh")
-            }
-            GlasmioIconButton(onClick = { grid = !grid }) {
-                SfIcon(if (grid) "list.bullet" else "rectangle.grid.2x2", if (grid) "Show list" else "Show grid")
-            }
-        },
+    val headerEntry = LocalSampleHeaderEntry.current
+    val currentCollapse = rememberUpdatedState(collapseProgress)
+    val headerScroll = remember { GlasmioHeaderScrollState({ currentCollapse.value }) }
+    val currentRefresh = rememberUpdatedState(refresh)
+    val headerActions = remember(grid, refreshing) {
+        val layoutSymbol = if (grid) "list.bullet" else "rectangle.grid.2x2"
+        listOf(
+            GlasmioHeaderAction("list.refresh", "arrow.clockwise", "Refresh", { currentRefresh.value() }, enabled = !refreshing) { SfIcon("arrow.clockwise", null) },
+            GlasmioHeaderAction("list.layout", if (grid) "list.bullet" else "rectangle.grid.2x2", if (grid) "Show list" else "Show grid", { grid = !grid }) {
+                SfIcon(layoutSymbol, null)
+            },
+        )
+    }
+    SideEffect { headerEntry.scroll = headerScroll; headerEntry.actions = headerActions }
+    val headerPadding = LocalSampleBodyPadding.current
+    GlasmioPageBody(
+        PaddingValues(start = IosPageHorizontalPadding, top = headerPadding.calculateTopPadding(), end = IosPageHorizontalPadding,
+            bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp),
     ) { padding ->
         Box(
             Modifier.fillMaxSize().pullToRefresh(
@@ -1133,34 +1178,29 @@ private fun SearchResults(query: String, padding: PaddingValues, onOpen: (String
 }
 
 @Composable
-private fun MenusDemo(bottomPadding: Dp, onBack: () -> Unit, dark: Boolean, onDark: (Boolean) -> Unit) {
+private fun MenusDemo(bottomPadding: Dp, dark: Boolean, onDark: (Boolean) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     var selection by rememberSaveable { mutableStateOf("Default") }
     var alert by rememberSaveable { mutableStateOf(false) }
     var inputAlert by rememberSaveable { mutableStateOf(false) }
     var nestedMenu by remember { mutableStateOf(false) }
     val nestedAnchor = rememberGlasmioMenuAnchorState()
+    val toolbarAnchor = rememberGlasmioMenuAnchorState()
+    val headerEntry = LocalSampleHeaderEntry.current
+    val headerActions = remember(dark, toolbarAnchor) {
+        listOf(
+            GlasmioHeaderAction("appearance.toggle", if (dark) "sun.max" else "moon", if (dark) "Light appearance" else "Dark appearance", { onDark(!dark) }) {
+                SfIcon(if (dark) "sun.max" else "moon", null)
+            },
+            GlasmioHeaderAction("menu.options", "ellipsis", "Menu", { expanded = true }, menuAnchor = toolbarAnchor) { SfIcon("ellipsis", null) },
+        )
+    }
+    SideEffect { headerEntry.actions = headerActions }
     var name by remember { mutableStateOf(TextFieldValue("")) }
     SamplePinnedPage(
         title = "Menus",
         bottomPadding = bottomPadding,
         wallpaper = false,
-        onBack = onBack,
-        dark = dark,
-        onDark = onDark,
-        actions = {
-            GlasmioMenu(
-                expanded = expanded,
-                onExpandedChange = { expanded = it },
-                itemCount = 4,
-                anchor = { open -> GlasmioIconButton(onClick = open) { SfIcon("ellipsis", "Menu") } },
-            ) { backdrop, close ->
-                GlasmioMenuItem("Favorite", { selection = "Favorite"; close() }, systemName = "heart", backdrop = backdrop)
-                GlasmioMenuItem("Duplicate", { selection = "Duplicate"; close() }, systemName = "plus.square.on.square", backdrop = backdrop)
-                GlasmioMenuItem("Unavailable", {}, enabled = false, backdrop = backdrop)
-                GlasmioMenuItem("Delete", { selection = "Delete"; close() }, destructive = true, systemName = "trash", backdrop = backdrop)
-            }
-        },
     ) { layout ->
         DemoList(layout) {
             item {
@@ -1176,6 +1216,16 @@ private fun MenusDemo(bottomPadding: Dp, onBack: () -> Unit, dark: Boolean, onDa
                 GlasmioButton(onClick = { nestedMenu = true }, modifier = Modifier.glasmioMenuAnchor(nestedAnchor), size = GlasmioButtonSize.Medium) { Text("Cascading Menu") }
             }
         }
+    }
+    GlasmioMenu(
+        expanded = expanded, onExpandedChange = { expanded = it }, itemCount = 4,
+        menuAnchorState = toolbarAnchor, externalAnchorBounds = toolbarAnchor.bounds,
+        anchor = {},
+    ) { backdrop, close ->
+        GlasmioMenuItem("Favorite", { selection = "Favorite"; close() }, systemName = "heart", backdrop = backdrop)
+        GlasmioMenuItem("Duplicate", { selection = "Duplicate"; close() }, systemName = "plus.square.on.square", backdrop = backdrop)
+        GlasmioMenuItem("Unavailable", {}, enabled = false, backdrop = backdrop)
+        GlasmioMenuItem("Delete", { selection = "Delete"; close() }, destructive = true, systemName = "trash", backdrop = backdrop)
     }
     if (nestedMenu) {
         GlasmioCascadingMenu(

@@ -1,6 +1,6 @@
 # iOS 固定 Header 与跨页 morph 改造方案
 
-> 状态：设计与分析，尚未实现。基线：`cf57af9c63b7e7a27ee9c12b1602dc3d59df6b54`。本文件说明 Glasmio 的代码改造；动画表现与参数单独收录在 `docs/ios-header-motion.zh-CN.md`。以下新增类型名均为建议 API。
+> 状态：导航级实现已落地，具体行为与验证边界见第 8 节。以下第 1–7 节保留设计基线 `cf57af9c63b7e7a27ee9c12b1602dc3d59df6b54` 的分析与验收目标。动画表现与参数单独收录在 `docs/ios-header-motion.zh-CN.md`。
 
 ## 1. 当前问题与目标结构
 
@@ -304,3 +304,38 @@ translationKick.returnDelay = 0.15
 建议几何验收目标：稳定锚点漂移不超过 `0.5` 个逻辑单位；其余动态位置与轮廓误差在同尺度对齐后控制在 `1` 个逻辑单位以内，主要阶段时序误差不超过一个显示帧。它们是本项目建议阈值，不是 Apple 规范。
 
 “1:1”需要同时满足布局、运动模型、内容合成、玻璃采样与手势行为。只改固定层级可以解决随页移动；完整 morph 还需要本文其余状态与渲染改造。原生 shader、所有交互分支和不同系统版本未全部验证前，不应宣称逐像素等价。
+
+## 8. 实现记录与验证边界（2026-10-27）
+
+### 8.1 实际落点
+
+- `glasmio-scaffold/.../GlasmioNavigationScaffold.kt`：公开的 `GlasmioHeaderSpec`、group/action、只读 motion/frame 契约、正文 capture 和常驻 Header。`GlasmioPageBody` 供导航正文使用，原 `GlasmioPinnedPage` 也复用该 body-only 实现。
+- `glasmio-scaffold/.../HeaderMotion.kt`：精确阻尼振子积分、保留位置/速度的 retarget、互补初值的双通道 pulse、独立宽高回落；16dp 与 10dp 均由当前 density 转换。
+- `glasmio-glass/.../IosToolbarActionGroup.kt`：新增可接收 presentation 几何的 `GlasmioToolbarActionHost`；现有 `GlasmioToolbarActionGroup` 继续包装它。导航使用原有 `navigationGlassBackground`、连续轮廓、`GlassSurface`、`InteractiveHighlight` 和完整 group portal，材质、触点高光、拖拽形变及菜单 source 接管共用原来的实现。
+- `sample/.../navigation/`：维护 Miuix 0.9.3 的单栏导航驱动与 easing，保留版权头，复用公开 scene/runtime API。该封装不支持 overlay/shared-element/multi-pane，并保留 sample 当前依赖所需的 lifecycle cap 兼容代码。页面角裁切使用公开圆角 Shape 兼容实现，不宣称与 Miuix squircle 逐像素一致。
+- `sample/.../MainActivity.kt`：使用 saveable 的 `route#UUID` 作为 entry 实例 key 和 contentKey；通用页面、Lists、Menus 均改用外置 Header。列表状态继续由 entry 内的 `rememberLazyListState` 或已有根 tab 状态持有；菜单状态与操作回调仅在当前 stack 和活动两端范围保留。
+
+初版曾绕开原 toolbar 的材质与按压实现，并错误地把菜单绑定为 standalone action。该实现已删除。当前点击没有矩形按压背景；菜单从整组玻璃及全部前景展开，单独保留 trigger 的 through bounds。默认 24dp 单图标使用 44×44dp 槽位与圆形轮廓，多按钮组保留连续胶囊；文字操作继续按内容测量。组透明度合成层和前景模糊层分别保留绘制 outsets，防止退出时放大的圆形、阴影和模糊被原始方形槽位截断；退出回归比较原槽位外的实际像素，并检查对角处仍露出背景。物理轨道的展示值使用 Compose snapshot state，使 GPU 图层的 alpha/scale/blur 能按帧失效；额外的像素测试防止新前景永久停在零透明度。
+
+### 8.2 时钟、快照与兼容策略
+
+适配器在实际 `animateTo`、`seekTo`、取消 `snapTo` 分支发布阶段和逻辑端点。frame 的 `playTimeNanos` 直接读取 `roundToLong(SeekableTransitionState.fraction × Transition.totalDurationNanos)`，与 Compose 的公开 seek 计算一致。它是可回退、可非线性变化的坐标，不作为物理积分的 elapsed time。Header 的积分使用与 body 同源的 Compose 单调帧时钟，接受真实 tracking 目标，并在 body 完成后继续保留自己的尾段。
+
+相同 actionKey/visualKey 不重建前景；变化时旧新前景同时存在，旧图层保留 GPU 录制和测量宽度。取消/中断从当前展示值和速度接续。body 提交后可以将公开 frame 归一到 idle entry，Header 内部继续持有退出快照；旧快照完成后删除，只有当前 owner 注册点击和语义。
+
+主 delay 的原生调度尚未闭合，因此当前策略是在实际导航驱动发布时起步，不推导一个系统 delay。kick 只取同组语义匹配成员的本地位移平均值除以 6，采用已知的 kick/return spring 与 delay；完整系统成员选择规则仍未知。交互采用真实手势 progress 与 `.2/0` 跟踪 spring，取消保留物理速度；这属于明确的兼容映射，不是已验证的 UIKit 全分支复刻。gestureVelocity 由有效事件时间戳差计算，零/重复时间戳以单调到达时间差回退。
+
+正文保留 Miuix 的页面 pacing，默认普通转场仍为 500ms；没有把它改称为原生 350ms。减少动画时读取 Compose MotionDurationScale；0 时取消空间 pulse/blur 并收敛到目标，其余比例缩放积分时间。
+
+### 8.3 已执行验证
+
+在 `emulator-5554` 的 Android 17 / MIUI 模拟器执行，未以模拟器结果替代真实硬件性能或 UIKit 手势对照。
+
+- scaffold 单测 6 项通过，含新增 4 项 Header 物理模型测试：60/120Hz 积分一致、中断速度连续、pulse 超调与宽高错开、连续触发不重置通道。
+- glass 单测 24 项通过。
+- `:sample:assembleDebug`、`:sample:assembleDebugAndroidTest`、`:sample:lintDebug` 通过。
+- `NavigationHeaderTest` 8 项及 `NavigationClockTest` 1 项通过：正文移动而屏幕锚点稳定、同视觉不重新挂载、1↔2↔3 与文字按钮、显隐、取消/快速反向、单一交互 owner、原按压物理、整组 source/portal、背景从红到蓝的实时像素采样、新前景从零透明度进入后的实际像素可见性、真实导航 tracking/cancel/commit 与 seek clock。
+- 现有 `SampleNavigationBehaviorTest` 的菜单打开/选择/关闭/重新打开/系统返回，以及滚动折叠标题/根 tab 切换两项通过。
+- 额外查看了实际 sample 的按住按钮与菜单截图，确认按压限定在玻璃轮廓、菜单使用完整连接组作为 source。
+
+测试中使用 AndroidX Back dispatcher 注入 predictive back 事件，未完成真实触摸速度与 UIKit 原生手势的一对一动态对照。RTL、不同字体缩放、系统动画缩放组合、各设备刷新率与逐帧原生误差阈值尚未完成矩阵验收；不能据本轮通过的测试宣称全场景或逐像素 1:1。

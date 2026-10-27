@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.foundation.shape.CornerSize
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -342,6 +343,21 @@ fun GlasmioToolbarActionGroup(
     separationProgress: Float? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
+    GlasmioToolbarActionHost(modifier, style, separationProgress) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, content = content)
+    }
+}
+
+/** Stable-layout host sharing the existing material, press physics and complete menu portal. */
+@Composable
+fun GlasmioToolbarActionHost(
+    modifier: Modifier = Modifier,
+    style: GlasmioToolbarActionStyle = GlasmioToolbarActionStyle.Merged,
+    separationProgress: Float? = null,
+    presentationBounds: (() -> Rect)? = null,
+    presentationTransform: (() -> ToolbarActionTransform)? = null,
+    content: @Composable () -> Unit,
+) {
     val styleProgress by animateFloatAsState(
         targetValue = if (style == GlasmioToolbarActionStyle.Separated) 1f else 0f,
         animationSpec = spring(dampingRatio = 0.86f, stiffness = 380f),
@@ -353,6 +369,8 @@ fun GlasmioToolbarActionGroup(
     val group = remember(density, foregroundLayer) {
         ToolbarActionGroup(with(density) { 8.dp.toPx() }, density, progress, foregroundLayer)
     }
+    group.presentationBounds = presentationBounds
+    group.presentationTransform = presentationTransform
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
     group.appearance = appearance
@@ -373,7 +391,7 @@ fun GlasmioToolbarActionGroup(
     val backdrop = LocalGlassBackdrop.current
     val runs = group.sharedRuns()
     Box(modifier.onGloballyPositioned(group::updateCoordinates)) {
-        runs.forEach { run -> key(run.first(), run.last()) {
+        runs.forEach { run -> key(if (presentationBounds != null && progress.value == 0f) group else run.first() to run.last()) {
             val material = run.first().material
             val navigationMaterial = material.color == null && material.sampleBackdrop && appearance.usesBackdrop
             val innerShadows = rememberNavigationInnerShadows(navigationMaterial)
@@ -418,7 +436,7 @@ fun GlasmioToolbarActionGroup(
             }.then(background))
         } }
         CompositionLocalProvider(LocalIosToolbarActionGroup provides group) {
-            Row(
+            Box(
                 modifier = Modifier.drawWithContent {
                     if (size.width <= 0f || size.height <= 0f) {
                         drawContent()
@@ -432,9 +450,7 @@ fun GlasmioToolbarActionGroup(
                     if (hidden == null) drawLayer(foregroundLayer)
                     else clipPath(hidden, clipOp = ClipOp.Difference) { drawLayer(foregroundLayer) }
                 },
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                content = content,
+                content = { content() },
             )
         }
     }
@@ -485,7 +501,7 @@ class ToolbarActionMember(
     }
 
     val sharesSurface: Boolean
-        get() = group.connectedRun(this).size > 1
+        get() = group.connectedRun(this).size > 1 || group.presentationBounds != null
 
     fun updateCoordinates(value: LayoutCoordinates) {
         coordinates = value
@@ -542,6 +558,8 @@ class ToolbarActionGroup(
     val separationProgress: State<Float>,
     private val foregroundLayer: GraphicsLayer,
 ) {
+    var presentationBounds: (() -> Rect)? by mutableStateOf(null)
+    var presentationTransform: (() -> ToolbarActionTransform)? by mutableStateOf(null)
     internal var materialPaint: (DrawScope.(ToolbarActionMaterial, Float) -> Unit)? = null
     internal var appearance = GlassAppearance()
     private val pressScope = GraphicsLayerBlockScope()
@@ -567,7 +585,7 @@ class ToolbarActionGroup(
         }
     }
     private val sharedRunsState = derivedStateOf(structuralEqualityPolicy()) {
-        connectedRuns.value.filter { it.size > 1 }
+        connectedRuns.value.filter { it.size > 1 || presentationBounds != null }
     }
 
     fun updateCoordinates(value: LayoutCoordinates) {
@@ -585,8 +603,9 @@ class ToolbarActionGroup(
             val previousMember = result.lastOrNull()?.lastOrNull()
             val previous = previousMember?.bounds
             val bounds = member.bounds!!
-            if (previous != null && previousMember.material == member.material && abs(bounds.left - previous.right - gap) <= 2f &&
-                abs(bounds.center.y - previous.center.y) <= 2f && abs(bounds.height - previous.height) <= 2f
+            if (previous != null && previousMember.material == member.material &&
+                (presentationBounds != null || (abs(bounds.left - previous.right - gap) <= 2f &&
+                abs(bounds.center.y - previous.center.y) <= 2f && abs(bounds.height - previous.height) <= 2f))
             ) {
                 result.last().add(member)
             } else {
@@ -642,7 +661,7 @@ class ToolbarActionGroup(
     }
 
     fun foregroundPortal(run: List<ToolbarActionMember>): ToolbarMenuPortal? {
-        if (run.size == 1) {
+        if (run.size == 1 && presentationBounds == null) {
             // A standalone control draws its own glass inside the Row. Transfer only
             // its live content layer, before the press transform, without replaying glass.
             val member = run.single()
@@ -702,7 +721,8 @@ class ToolbarActionGroup(
         val base = member.bounds ?: return ToolbarActionTransform()
         val run = connectedRun(member)
         val active = run.maxBy { it.highlight.pressProgress }
-        val pressed = transform(if (run.size > 1) bounds(run) else base, active.highlight)
+        val pressed = transform(if (run.size > 1 || presentationBounds != null) bounds(run) else base, active.highlight)
+            .followedBy(presentationTransform?.invoke() ?: ToolbarActionTransform())
         val family = runs().firstOrNull { member in it } ?: return pressed
         if (family.size < 2) return pressed
         val progress = maxOf(separationProgress.value,
@@ -732,6 +752,9 @@ class ToolbarActionGroup(
     }
 
     fun bounds(run: List<ToolbarActionMember>): Rect {
+        if (run.isNotEmpty() && separationProgress.value == 0f &&
+            run.size == members.count { it.bounds?.isEmpty == false }
+        ) presentationBounds?.let { return it() }
         var left = Float.POSITIVE_INFINITY
         var top = Float.POSITIVE_INFINITY
         var right = Float.NEGATIVE_INFINITY
@@ -756,6 +779,9 @@ class ToolbarActionGroup(
     }
 
     fun shape(run: List<ToolbarActionMember>, separation: Float): Shape {
+        if (presentationBounds != null && separation == 0f) {
+            return if (run.size == 1) CircleShape else ToolbarContinuousShape
+        }
         val origin = bounds(run).topLeft
         return ToolbarActionShape(listOf(run.map { member ->
             member.bounds?.let { bounds ->

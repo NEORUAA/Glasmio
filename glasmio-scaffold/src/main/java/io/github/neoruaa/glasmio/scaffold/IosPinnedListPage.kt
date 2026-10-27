@@ -221,18 +221,14 @@ fun GlasmioPinnedPage(
         Box(modifier.fillMaxSize()) {
             // Keep the background inside the recorded draw chain so transparent content regions
             // sample the real page surface instead of an empty backdrop.
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(pageBackdrop) else Modifier)
-                    .then(
-                        if (backgroundBrush != null) Modifier.background(backgroundBrush)
-                        else Modifier.background(pageBackground),
-                    ),
-            ) {
-                // The fallback must share the body's bounds, never the fixed toolbar's layer.
-                GlasmioOverscrollHost { content(contentPadding) }
-            }
+            GlasmioPageBody(
+                contentPadding = contentPadding,
+                modifier = Modifier.fillMaxSize()
+                    .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(pageBackdrop) else Modifier),
+                backgroundColor = pageBackground,
+                backgroundBrush = backgroundBrush,
+                content = content,
+            )
             Box(
                 Modifier
                     .fillMaxWidth()
