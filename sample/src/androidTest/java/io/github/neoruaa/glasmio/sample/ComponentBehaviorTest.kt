@@ -234,6 +234,161 @@ class ComponentBehaviorTest {
         rule.runOnIdle { assertEquals("Hello World", value.text) }
     }
 
+    @Test fun multilineEditorWrapsScrollsAndKeepsItsCustomSelectionChrome() {
+        val text = (1..24).joinToString("\n") { "Line $it: editable text that wraps within this narrow editor." }
+        var value by mutableStateOf(TextFieldValue(text))
+        editingContent {
+            GlasmioEditableText(
+                value, { value = it }, Modifier.width(220.dp).height(160.dp).testTag("multiline-editor"),
+                singleLine = false,
+                keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
+            )
+        }
+        val layout = longPressWord("multiline-editor")
+        assertTrue("Text must wrap as well as honor explicit newlines", layout.lineCount > 24)
+        rule.onNodeWithContentDescription("Selection start").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Selection end").assertIsDisplayed()
+        val field = rule.onNodeWithTag("multiline-editor")
+        val scroll = field.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertTrue("Long text must have a vertical scroll range", scroll.maxValue() > 0f)
+        val before = scroll.value()
+        field.performTouchInput { swipeUp() }
+        rule.waitUntil(5_000) { scroll.value() > before }
+        rule.onNodeWithContentDescription("Selection start").assertDoesNotExist()
+    }
+
+    @Test fun multilineSelectionHandleCrossesLinesAndTheOppositeEndpoint() {
+        var value by mutableStateOf(TextFieldValue("Hello World\nSecond line\nThird line"))
+        editingContent {
+            GlasmioEditableText(
+                value, { value = it }, Modifier.fillMaxWidth().height(200.dp).testTag("multiline-handles"),
+                singleLine = false,
+                keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
+            )
+        }
+        val layout = longPressWord("multiline-handles")
+        val origin = layout.getCursorRect(5).center
+        val target = layout.getCursorRect(18).center
+        val endHandle = rule.onNodeWithContentDescription("Selection end")
+        endHandle.performTouchInput {
+            down(center)
+            moveBy(target - origin, delayMillis = 160)
+            up()
+        }
+        rule.runOnIdle { assertEquals(TextRange(0, 18), value.selection) }
+        val crossing = layout.getCursorRect(2).center
+        val startHandle = rule.onNodeWithContentDescription("Selection start")
+        startHandle.performTouchInput {
+            down(center)
+            moveBy(layout.getCursorRect(23).center - layout.getCursorRect(0).center, delayMillis = 160)
+            moveBy(crossing - layout.getCursorRect(23).center, delayMillis = 160)
+            up()
+        }
+        rule.runOnIdle { assertEquals(TextRange(2, 18), value.selection) }
+        rule.onNodeWithContentDescription("Selection start").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Selection end").assertIsDisplayed()
+    }
+
+    @Test fun multilineHandleAutoScrollsAtBothVerticalEdges() {
+        val text = (1..40).joinToString("\n") { "Line $it editable text" }
+        var value by mutableStateOf(TextFieldValue(text))
+        editingContent {
+            GlasmioEditableText(
+                value, { value = it }, Modifier.fillMaxWidth().height(160.dp).testTag("edge-multiline"),
+                singleLine = false,
+                keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
+            )
+        }
+        val layout = longPressWord("edge-multiline")
+        val field = rule.onNodeWithTag("edge-multiline")
+        val bounds = field.fetchSemanticsNode().boundsInRoot
+        val scroll = field.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        val endHandle = rule.onNodeWithContentDescription("Selection end")
+        val origin = layout.getCursorRect(value.selection.end).center
+        val bottom = Offset(bounds.width - 1f, bounds.height - 1f)
+        rule.mainClock.autoAdvance = false
+        try {
+            endHandle.performTouchInput {
+                down(center)
+                moveBy(bottom - origin, delayMillis = 160)
+            }
+            rule.mainClock.advanceTimeBy(1_800)
+            rule.runOnIdle {
+                assertEquals("Holding the lower edge must reach the scroll limit", scroll.maxValue(), scroll.value(), 1f)
+                assertEquals("The endpoint must reach the final character", text.length, value.selection.max)
+            }
+            endHandle.performTouchInput { moveBy(Offset(-bounds.width + 2f, -bounds.height + 2f), delayMillis = 160) }
+            rule.mainClock.advanceTimeBy(1_800)
+            rule.runOnIdle {
+                assertEquals("Holding the upper edge must reach the start", 0f, scroll.value(), 1f)
+                assertEquals(TextRange.Zero, value.selection)
+            }
+        } finally {
+            endHandle.performTouchInput { up() }
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test fun changingLineModeWhileFocusedKeepsCustomEditingChrome() {
+        var value by mutableStateOf(TextFieldValue("Hello World\nSecond line"))
+        var singleLine by mutableStateOf(true)
+        editingContent {
+            GlasmioEditableText(
+                value, { value = it }, Modifier.fillMaxWidth().height(160.dp).testTag("switching-editor"),
+                singleLine = singleLine,
+                keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
+            )
+        }
+        val field = rule.onNodeWithTag("switching-editor")
+        field.performClick().assertIsFocused()
+        rule.runOnIdle { singleLine = false }
+        field.assertIsFocused()
+        longPressWord("switching-editor")
+        rule.onNodeWithContentDescription("Selection start").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Selection end").assertIsDisplayed()
+        rule.runOnIdle { singleLine = true }
+        field.assertIsFocused()
+        longPressWord("switching-editor")
+        rule.onNodeWithContentDescription("Selection start").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Selection end").assertIsDisplayed()
+    }
+
+    @Test fun multilineMaxLinesLimitsTheViewportWithoutTruncatingItsText() {
+        var value by mutableStateOf(TextFieldValue("First line\nSecond line\nThird line\nFourth line"))
+        var layout: TextLayoutResult? = null
+        editingContent {
+            GlasmioEditableText(
+                value, { value = it }, Modifier.fillMaxWidth().testTag("limited-multiline"),
+                singleLine = false, maxLines = 2,
+                keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
+                onTextLayout = { layout = it },
+            )
+        }
+        val field = rule.onNodeWithTag("limited-multiline")
+        val bounds = field.fetchSemanticsNode().boundsInRoot
+        rule.runOnIdle {
+            val result = requireNotNull(layout)
+            assertEquals(4, result.lineCount)
+            assertEquals(result.getLineBottom(1), bounds.height, 1f)
+        }
+        val scroll = field.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertTrue(scroll.maxValue() > 0f)
+        field.performClick()
+        field.performSemanticsAction(SemanticsActions.SetSelection) { it(value.text.length, value.text.length, false) }
+        rule.waitUntil(5_000) { scroll.value() > 0f }
+    }
+
+    @Test fun textEditingDemoAcceptsFocusFromItsBlankAreaAndKeepsNewlines() {
+        val value = mutableStateOf(TextFieldValue("Hello World"))
+        editingContent {
+            Box(Modifier.fillMaxSize()) { TextEditingDemo(value, PaddingValues()) }
+        }
+        val field = rule.onNodeWithContentDescription("Editable text")
+        field.performTouchInput { click(Offset(center.x, height - 32f)) }
+        field.assertIsFocused().performTextInput("\nSecond paragraph")
+        rule.runOnIdle { assertEquals("Hello World\nSecond paragraph", value.value.text) }
+    }
+
     @Test fun selectionMenuFitsBelowTopAndAboveBottomSafeDrawingEditors() {
         var upper by mutableStateOf(TextFieldValue("Upper edge"))
         var lower by mutableStateOf(TextFieldValue("Lower edge"))

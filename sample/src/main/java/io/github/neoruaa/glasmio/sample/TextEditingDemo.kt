@@ -3,8 +3,9 @@ package io.github.neoruaa.glasmio.sample
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
@@ -38,12 +39,14 @@ import io.github.neoruaa.glasmio.ui.GlasmioEditableText
 @Composable
 internal fun TextEditingDemo(value: MutableState<TextFieldValue>, padding: PaddingValues) {
     val colors = LocalGlassColors.current
-    Box(Modifier.fillMaxSize().background(if (colors.isDark) Color.Black else Color.White).padding(padding)) {
+    Box(Modifier.fillMaxSize().background(if (colors.isDark) Color.Black else Color.White)
+        .padding(padding).consumeWindowInsets(padding).imePadding()) {
         GlasmioEditableText(
             value = value.value,
             onValueChange = { value.value = it },
             textStyle = IosTypography.body.copy(color = colors.content, lineHeight = 20.sp),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 16.dp)
+            singleLine = false,
+            modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 16.dp)
                 .semantics { contentDescription = "Editable text" },
         )
     }

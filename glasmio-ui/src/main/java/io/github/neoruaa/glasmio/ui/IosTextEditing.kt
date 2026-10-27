@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -26,6 +27,7 @@ import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuData
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuProvider
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -76,12 +78,14 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
@@ -134,9 +138,10 @@ internal fun GlasmioTextEditingWindow(backdrop: Backdrop, content: @Composable (
 }
 
 /**
- * A plain editable text surface. Inside [GlasmioTextSelectionHost], single-line fields use
- * window-local iOS editing chrome; without that host, Foundation renders its native chrome.
- * Multiline fields retain Foundation's native scrolling and selection implementation.
+ * A plain editable text surface with window-local iOS editing chrome inside
+ * [GlasmioTextSelectionHost]. Single-line fields scroll horizontally; multiline fields wrap
+ * and scroll vertically within their height constraints and [maxLines]. Without a matching
+ * host, Foundation renders its native editing chrome.
  */
 @Composable
 fun GlasmioEditableText(
@@ -155,9 +160,10 @@ fun GlasmioEditableText(
     onTextLayout: (TextLayoutResult) -> Unit = {},
     decorationBox: @Composable (innerTextField: @Composable () -> Unit) -> Unit = { it() },
 ) {
+    require(maxLines > 0) { "maxLines must be positive." }
     val host = LocalGlasmioTextEditingHost.current
     val view = LocalView.current
-    if (host == null || host.windowView !== view.rootView || !singleLine) {
+    if (host == null || host.windowView !== view.rootView) {
         BasicTextField(value, onValueChange, modifier, enabled, readOnly, textStyle,
             keyboardOptions, keyboardActions, singleLine, maxLines,
             visualTransformation = visualTransformation, onTextLayout = onTextLayout,
@@ -197,7 +203,8 @@ fun GlasmioEditableText(
         editor.password = visualTransformation is PasswordVisualTransformation
         editor.realWindowFocused = realWindow.isWindowFocused
         editor.density = density
-        editor.reverseScroll = layoutDirection == LayoutDirection.Rtl
+        editor.singleLine = singleLine
+        editor.reverseScroll = singleLine && layoutDirection == LayoutDirection.Rtl
     }
     DisposableEffect(editor) {
         onDispose {
@@ -214,6 +221,10 @@ fun GlasmioEditableText(
             if (!editor.chromeVisible) editor.dismiss()
         }
     }
+    LaunchedEffect(editor, singleLine) {
+        editor.dismiss()
+        scroll.scrollTo(0)
+    }
     LaunchedEffect(editor, value.text, value.selection, editor.focused) {
         editor.blink = true
         while (isActive && editor.focused) {
@@ -221,14 +232,14 @@ fun GlasmioEditableText(
             editor.blink = !editor.blink
         }
     }
-    LaunchedEffect(editor, value.text, value.selection, editor.layout, editor.focused) {
+    LaunchedEffect(editor, value.text, value.selection, editor.layout, editor.focused, editor.viewportSize, singleLine) {
         if (editor.focused && enabled && editor.pointerScreen == null) {
             withFrameNanos { }
             editor.cursorRect(value.selection.end)?.let { bringIntoView.bringIntoView(it) }
         }
     }
-    LaunchedEffect(editor, editor.pointerScreen != null) {
-        while (isActive && editor.pointerScreen != null && editor.chromeVisible) {
+    LaunchedEffect(editor, editor.draggingHandle) {
+        while (isActive && editor.draggingHandle != null && editor.chromeVisible) {
             withFrameNanos { }
             editor.scrollAtEdge()
         }
@@ -304,19 +315,42 @@ fun GlasmioEditableText(
             textStyle = textStyle,
             keyboardOptions = keyboardOptions,
             keyboardActions = keyboardActions,
-            singleLine = true,
-            maxLines = 1,
+            singleLine = singleLine,
+            // The decoration owns scrolling and must see the entire text layout.
+            maxLines = if (singleLine) 1 else Int.MAX_VALUE,
             visualTransformation = visualTransformation,
             onTextLayout = { editor.layout = it; onTextLayout(it) },
             cursorBrush = SolidColor(Color.Transparent),
             decorationBox = { nativeInner ->
                 decorationBox {
-                    BoxWithConstraints {
+                    val maximumHeight = if (!singleLine && maxLines != Int.MAX_VALUE) {
+                        // Match Foundation's reference-font line cap without clipping its inner layout.
+                        val paragraph = rememberTextMeasurer().measure(
+                            AnnotatedString("HHHHHHHHHH\nHHHHHHHHHH\nHHHHHHHHHH"),
+                            style = textStyle,
+                        ).multiParagraph
+                        val height = paragraph.getLineHeight(0) +
+                            paragraph.getLineHeight(1) * maxOf(maxLines - 2, 0) +
+                            paragraph.getLineHeight(2) * minOf(maxLines - 1, 1)
+                        with(density) { height.roundToInt().toDp() }
+                    } else Dp.Infinity
+                    BoxWithConstraints(Modifier.heightIn(max = maximumHeight), propagateMinConstraints = true) {
                         val minimumWidth = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
-                        Box(Modifier.onGloballyPositioned { editor.viewport = it; editor.positionVersion++ }.horizontalScroll(scroll)) {
+                        val minimumHeight = constraints.minHeight
+                        val scrolling = if (singleLine) Modifier.horizontalScroll(scroll) else Modifier.verticalScroll(scroll)
+                        Box(Modifier.onGloballyPositioned {
+                            editor.viewport = it
+                            editor.viewportSize = it.size
+                            editor.positionVersion++
+                        }.then(scrolling), propagateMinConstraints = true) {
                             Box(
                                 Modifier.layout { measurable, incoming ->
-                                    val placeable = measurable.measure(incoming.copy(minWidth = minimumWidth, maxWidth = Constraints.Infinity))
+                                    val contentConstraints = if (singleLine) {
+                                        incoming.copy(minWidth = minimumWidth, maxWidth = Constraints.Infinity)
+                                    } else {
+                                        incoming.copy(minWidth = minimumWidth, minHeight = minimumHeight, maxHeight = Constraints.Infinity)
+                                    }
+                                    val placeable = measurable.measure(contentConstraints)
                                     layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
                                 }
                                     .onGloballyPositioned { editor.coordinates = it; editor.positionVersion++ }
@@ -399,6 +433,7 @@ internal class GlasmioTextEditor(
     var coordinates: LayoutCoordinates? = null
     var decoration: LayoutCoordinates? = null
     var viewport: LayoutCoordinates? = null
+    var viewportSize by mutableStateOf(androidx.compose.ui.unit.IntSize.Zero)
     var positionVersion by mutableIntStateOf(0)
     var focused by mutableStateOf(false)
     var realWindowFocused by mutableStateOf(true)
@@ -406,6 +441,7 @@ internal class GlasmioTextEditor(
     var readOnly = false
     var password = false
     var density: Density = Density(1f)
+    var singleLine = true
     var reverseScroll = false
     var mapping: OffsetMapping = OffsetMapping.Identity
     var change: (TextFieldValue) -> Unit = {}
@@ -481,21 +517,37 @@ internal class GlasmioTextEditor(
     fun selectionBounds(): Rect? {
         val start = handleRect(true) ?: return null
         val end = handleRect(false) ?: return null
-        val pop = if (showHandles) with(density) { 16.dp.toPx() } else 0f
-        return Rect(minOf(start.left, end.left), minOf(start.top, end.top) - if (value.selection.collapsed) 0f else pop,
-            maxOf(start.right, end.right), maxOf(start.bottom, end.bottom) + pop)
+        val viewport = viewportBounds() ?: return null
+        val bounds = if (!singleLine && !value.selection.collapsed) {
+            val result = layout ?: return null
+            val node = coordinates?.takeIf { it.isAttached } ?: return null
+            val firstLine = result.getLineForVerticalPosition(node.screenToLocal(viewport.topLeft).y)
+            val lastLine = result.getLineForVerticalPosition(node.screenToLocal(viewport.bottomRight).y)
+            val from = maxOf(mapping.originalToTransformed(value.selection.min), result.getLineStart(firstLine))
+            val to = minOf(mapping.originalToTransformed(value.selection.max), result.getLineEnd(lastLine))
+            if (from >= to) return null
+            val local = result.getPathForRange(from, to).getBounds()
+            Rect(node.localToScreen(local.topLeft), node.localToScreen(local.bottomRight)).intersect(viewport)
+        } else {
+            Rect(minOf(start.left, end.left), minOf(start.top, end.top),
+                maxOf(start.right, end.right), maxOf(start.bottom, end.bottom))
+        }
+        val pop = if (showHandles && !value.selection.collapsed) with(density) { 16.dp.toPx() } else 0f
+        return Rect(bounds.left, bounds.top - pop, bounds.right, bounds.bottom + pop)
     }
 
     fun updatePointer(screen: Offset) {
         pointerScreen = screen
         val node = coordinates?.takeIf { it.isAttached } ?: return
         val viewport = viewportBounds() ?: return
-        val local = node.screenToLocal(screen)
+        val point = Offset(screen.x.coerceIn(viewport.left, viewport.right), screen.y.coerceIn(viewport.top, viewport.bottom))
+        val local = node.screenToLocal(point)
         val result = layout ?: return
         val offset = result.getOffsetForPosition(local)
         val cursor = result.getCursorRect(offset.coerceIn(0, result.layoutInput.text.length))
         magnifierSource = node.localToScreen(Offset(local.x, cursor.center.y)).copy(
-            x = screen.x.coerceIn(viewport.left, viewport.right),
+            x = point.x,
+            y = node.localToScreen(cursor.center).y.coerceIn(viewport.top, viewport.bottom),
         )
         magnifierOrigin = cursor.size
         magnifierRetainedSource = magnifierSource
@@ -531,7 +583,9 @@ internal class GlasmioTextEditor(
         val node = coordinates?.takeIf { it.isAttached } ?: return
         val result = layout ?: return
         updatePointer(screen)
-        val transformed = result.getOffsetForPosition(node.screenToLocal(screen))
+        val viewport = viewportBounds() ?: return
+        val point = Offset(screen.x.coerceIn(viewport.left, viewport.right), screen.y.coerceIn(viewport.top, viewport.bottom))
+        val transformed = result.getOffsetForPosition(node.screenToLocal(point))
         val original = mapping.transformedToOriginal(transformed.coerceIn(0, result.layoutInput.text.length))
             .coerceIn(0, value.text.length)
         val selection = if (draggingHandle != null) {
@@ -554,6 +608,7 @@ internal class GlasmioTextEditor(
     }
 
     fun endHandle(released: Boolean) {
+        if (released) draggingHandle?.let { handle -> pointerScreen?.let { dragHandle(handle, it) } }
         draggingHandle = null
         fixedHandleOffset = null
         pointerScreen = null
@@ -590,23 +645,22 @@ internal class GlasmioTextEditor(
     }
 
     suspend fun scrollAtEdge() {
+        val handle = draggingHandle ?: return
         val pointer = pointerScreen ?: return
+        // Placement catches up with the preceding scroll on this frame, including at the limit.
+        dragHandle(handle, pointer)
         val bounds = viewportBounds() ?: return
         val edge = with(density) { 24.dp.toPx() }
+        val position = if (singleLine) pointer.x else pointer.y
+        val minimum = if (singleLine) bounds.left else bounds.top
+        val maximum = if (singleLine) bounds.right else bounds.bottom
+        val speed = with(density) { 12.dp.toPx() }
         val delta = when {
-            pointer.x < bounds.left + edge -> -((bounds.left + edge - pointer.x) / edge).coerceIn(0f, 1f) * 12f
-            pointer.x > bounds.right - edge -> ((pointer.x - bounds.right + edge) / edge).coerceIn(0f, 1f) * 12f
+            position < minimum + edge -> -((minimum + edge - position) / edge).coerceIn(0f, 1f) * speed
+            position > maximum - edge -> ((position - maximum + edge) / edge).coerceIn(0f, 1f) * speed
             else -> 0f
         }
-        if (delta != 0f) {
-            val consumed = scroll.scrollBy(if (reverseScroll) -delta else delta)
-            if (consumed != 0f) {
-                // Only our handles own character-based selection updates. Foundation keeps
-                // the word adjustment and anchor for its native long-press gesture.
-                draggingHandle?.let { dragHandle(it, pointer) }
-                updatePointer(pointer)
-            }
-        }
+        if (delta != 0f) scroll.scrollBy(if (reverseScroll) -delta else delta)
     }
 
     fun dismissMenu() {
@@ -682,7 +736,7 @@ internal fun GlasmioTextEditingOverlay(host: GlasmioTextEditingHost, backdrop: B
     val popOffset = with(LocalDensity.current) { 8.dp.toPx() }
     // UIKit has no selection widget for a collapsed caret: the caret is its own grab point and the
     // loupe magnifies the caret itself, so only a range owns the two lollipops.
-    val handles = if (editor.showHandles && !editor.value.selection.collapsed && editor.value.text.isNotEmpty()) {
+    val handles = if (editor.showHandles && (!editor.value.selection.collapsed || editor.draggingSelection) && editor.value.text.isNotEmpty()) {
         listOf(true, false).mapNotNull { editingHandle(editor, root, viewport, popOffset, it) }
     } else emptyList()
     val handlesBackdrop = rememberLayerBackdrop()
@@ -739,7 +793,7 @@ private fun GlasmioEditingHandle(editor: GlasmioTextEditor, start: Boolean, anch
                     var released = false
                     try {
                         val rect = editor.handleRect(start) ?: return@awaitEachGesture
-                        val original = Offset(rect.left, if (start) rect.top else rect.bottom)
+                        val original = Offset(rect.left, rect.center.y)
                         var point = original
                         editor.updatePointer(point)
                         while (true) {
@@ -756,7 +810,7 @@ private fun GlasmioEditingHandle(editor: GlasmioTextEditor, start: Boolean, anch
                 }
             },
     ) {
-        drawEditingHandle(Offset(size.width / 2f, size.height / 2f), lineHeight, start, color)
+        drawEditingHandle(Offset(size.width / 2f, size.height / 2f), lineHeight, start != editor.value.selection.reversed, color)
     }
 }
 
@@ -785,8 +839,9 @@ private fun editingHandle(
     start: Boolean,
 ): EditingHandle? {
     val rect = editor.handleRect(start) ?: return null
-    val edge = if (start) rect.top else rect.bottom
-    val popDirection = if (start) -popOffset else popOffset
+    val leading = start != editor.value.selection.reversed
+    val edge = if (leading) rect.top else rect.bottom
+    val popDirection = if (leading) -popOffset else popOffset
     val anchor = Offset(rect.left, edge + popDirection)
     val dragging = editor.draggingHandle == start
     if (!dragging && !(anchor.x in viewport.left..viewport.right && edge in (viewport.top - 1f)..(viewport.bottom + 1f))) return null
