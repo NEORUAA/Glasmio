@@ -4,7 +4,7 @@ set -euo pipefail
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard
 
-if ! ./gradlew :sample:connectedDebugAndroidTest :glasmio-ui:connectedDebugAndroidTest --console=plain; then
+if ! ./gradlew :sample:connectedDebugAndroidTest :glasmio-ui:connectedDebugAndroidTest --continue --console=plain; then
     mkdir -p sample/build/reports/androidTests
     adb shell dumpsys window > sample/build/reports/androidTests/window-state.txt
     adb exec-out screencap -p > sample/build/reports/androidTests/device-failure.png
