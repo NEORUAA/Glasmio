@@ -127,6 +127,9 @@ class NavigationRenderingTest {
         val adaptiveEnabled = mutableStateOf(true)
         val discrete = mutableStateOf(false)
         val direction = mutableStateOf(LayoutDirection.Ltr)
+        val ordinaryCaptions = listOf("off" to "关闭", "open" to "Open", "adaptive" to "Adaptive", "quiet" to "Quiet")
+        val captions = mutableStateOf(ordinaryCaptions)
+        val captionOverride = mutableStateOf<String?>(null)
         val modeRequests = mutableListOf<String>()
         val strengthRequests = mutableListOf<Float>()
         var finishes = 0
@@ -135,7 +138,7 @@ class NavigationRenderingTest {
                 GlasmioBackdropProvider(emptyBackdrop()) {
                     CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
                         GlasmioSegmentedControl(
-                            items = listOf("off" to "Off", "open" to "Open", "adaptive" to "Adaptive", "quiet" to "Quiet"),
+                            items = captions.value,
                             selected = mode.value, onSelected = { modeRequests += it },
                             adaptiveItem = "adaptive", adaptiveValue = actual.value,
                             adaptiveDiscrete = discrete.value,
@@ -146,6 +149,7 @@ class NavigationRenderingTest {
                             hiddenItems = if (mode.value == "adaptive") setOf("off") else emptySet(),
                             onAdaptiveValueChangeFinished = { finishes++ },
                             adaptiveLabels = listOf("More", "Default", "Less"),
+                            captionOverride = captionOverride.value,
                         )
                     }
                 }
@@ -153,6 +157,39 @@ class NavigationRenderingTest {
         }
         val group = compose.onNodeWithTag("adaptive-group")
         val adaptive = compose.onNodeWithContentDescription("Adaptive")
+        val expandedHeight = group.fetchSemanticsNode().boundsInRoot.height
+        compose.runOnIdle { mode.value = "open" }
+        val singleLineHeight = group.fetchSemanticsNode().boundsInRoot.height
+        assertEquals("A hidden two-character caption must not add a line", singleLineHeight, expandedHeight, 1f)
+        compose.mainClock.autoAdvance = false
+        try {
+            listOf("adaptive", "open").forEach { target ->
+                compose.runOnIdle { mode.value = target }
+                compose.mainClock.advanceTimeByFrame()
+                listOf(16L, 80L, 160L, 240L, 500L).forEach { elapsed ->
+                    compose.mainClock.advanceTimeBy(elapsed)
+                    assertEquals("Caption height must stay stable while hiding or revealing Off",
+                        singleLineHeight, group.fetchSemanticsNode().boundsInRoot.height, 1f)
+                }
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        compose.runOnIdle {
+            captions.value = ordinaryCaptions.map { if (it.first == "quiet") it.first to "ノイズ\nキャンセル" else it }
+            mode.value = "adaptive"
+        }
+        val multilineHeight = group.fetchSemanticsNode().boundsInRoot.height
+        assertTrue("Visible multiline captions retain their natural height", multilineHeight > singleLineHeight)
+        compose.runOnIdle { mode.value = "open" }
+        assertEquals(multilineHeight, group.fetchSemanticsNode().boundsInRoot.height, 1f)
+        compose.runOnIdle { captionOverride.value = "Put on AirPods to continue" }
+        compose.onNodeWithText("Put on AirPods to continue").assertIsDisplayed()
+        val overrideHeight = group.fetchSemanticsNode().boundsInRoot.height
+        compose.runOnIdle { mode.value = "adaptive" }
+        assertEquals("A replacement caption does not measure hidden item labels",
+            overrideHeight, group.fetchSemanticsNode().boundsInRoot.height, 1f)
+        compose.runOnIdle { captions.value = ordinaryCaptions; captionOverride.value = null }
         assertEquals(ProgressBarRangeInfo.Indeterminate,
             adaptive.fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo])
         adaptive.performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(.4f)) }

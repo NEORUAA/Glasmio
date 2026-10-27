@@ -497,10 +497,34 @@ private fun <T> AdaptiveSegmentedRenderer(
                 if (standalone) Row(Modifier.fillMaxWidth().clearAndSetSemantics { }) {
                     adaptiveLabels.forEach { Text(it, style = GlasmioTheme.textStyles.caption1, color = colors.content,
                         textAlign = TextAlign.Center, modifier = Modifier.weight(1f)) }
-                } else AdaptiveCells(geometry, Modifier.fillMaxWidth().clearAndSetSemantics { }) { index ->
+                } else AdaptiveCaptions(geometry, targetGeometry, Modifier.fillMaxWidth().clearAndSetSemantics { }) { index ->
                     Text(items[index].second, style = GlasmioTheme.textStyles.caption1, color = colors.content,
                         textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().alpha(visibility.getValue(items[index].first).value.coerceIn(0f, 1f)))
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveCaptions(
+    geometry: AdaptiveGeometry,
+    targetGeometry: AdaptiveGeometry,
+    modifier: Modifier,
+    content: @Composable (Int) -> Unit,
+) {
+    Layout(modifier = modifier, content = { geometry.cells.indices.forEach { Box { content(it) } } }) { measurables, constraints ->
+        val children = measurables.mapIndexed { index, child ->
+            val targetWidth = targetGeometry.cells[index].width
+            // Only placement animates: a disappearing caption must never wrap into a zero-width cell.
+            val width = (if (targetWidth > 0f) targetWidth else targetGeometry.unit).roundToInt().coerceAtLeast(0)
+            child.measure(constraints.copy(minWidth = width, maxWidth = width))
+        }
+        val height = children.indices.filter { targetGeometry.cells[it].width > 0f }
+            .maxOfOrNull { children[it].height } ?: constraints.minHeight
+        layout(constraints.maxWidth, height) {
+            children.forEachIndexed { index, child ->
+                child.placeRelative((geometry.cells[index].center - child.width / 2f).roundToInt(), 0)
             }
         }
     }
