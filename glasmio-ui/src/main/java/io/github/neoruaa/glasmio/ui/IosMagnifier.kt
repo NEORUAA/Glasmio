@@ -59,13 +59,13 @@ import kotlin.math.roundToInt
 /**
  * Position of the touch point inside the lens body, on the axis the lens is lifted along.
  *
- * UIKit does not magnify about the body centre: `_contentOffsetPortalContainerView` is translated
- * by the same `±75 dp` as the body once `_animationState.b1` is set, while the portal keeps its zoom
- * anchor on `self.center`. The edited line therefore lands near the leading edge of the body rather
- * than in the middle. The fraction below follows that geometry; it is not a recovered constant, and
- * it is the one number in this file with no binary behind it.
+ * Half: the magnified caret sits in the middle of the body. `_contentOffsetPortalContainerView` is
+ * translated by the same `±75 dp` the body is lifted by, which cancels against the lift instead of
+ * pushing the edited line towards an edge, so the portal ends up centred on the body. This is a
+ * device-verified fit rather than a recovered constant: no fraction appears in the binary, only the
+ * two cancelling translations.
  */
-private const val LoupeSampleAnchorFraction = 0.3f
+private const val LoupeSampleAnchorFraction = 0.5f
 
 /** Lens body height in the horizontal orientation (`preferredSize`), also the widget-height limit. */
 internal val GlasmioLoupeBodyHeight: Dp = 85.dp
@@ -109,9 +109,11 @@ internal val GlasmioLoupeBodyHeight: Dp = 85.dp
  *
  * The opening passes animate alpha, size and lift; UIKit also drives `borderWidth 42.5 → 2` and the
  * corner radius through `GlassSurface`, whose border is part of the shared material and stays static
- * here. The lens body deforms with acceleration ([GlasmioLoupeFlexMotion]) while [tracking]: a
- * constant-speed drag leaves it undeformed, a flick stretches the motion axis and compresses the
- * perpendicular one. Passing `1` as [dismissalProgress] closes the lens the way a line break does on
+ * here. Size and lift keep the ~1.5% overshoot of UIKit's 0.8 damped morph pass, and the lens is
+ * kicked by a one-shot non-uniform scale when the interaction activates, standing in for
+ * `scaleSpring.retargetImpulse`. While [tracking] the body deforms with acceleration
+ * ([GlasmioLoupeFlexMotion]): a constant-speed drag leaves it undeformed, a flick stretches the
+ * motion axis and compresses the perpendicular one. Passing `1` as [dismissalProgress] closes the lens the way a line break does on
  * iOS, without ending the caller's gesture; UIKit only writes that progress when
  * `YukonMagnifiersDisabled` is set, so the default is `0f` and the branch stays dormant.
  */
@@ -174,6 +176,10 @@ fun GlasmioMagnifier(
         dampingRatio = motion.closeDampingRatio,
         stiffness = loupeSpringStiffness(motion.closeResponseSeconds),
     )
+    val activationSpring = spring<Float>(
+        dampingRatio = motion.flex.trackingDampingRatio,
+        stiffness = loupeSpringStiffness(motion.flex.responseSeconds),
+    )
 
     val shown = visible && !isLoupeDismissed(dismissalProgress, motion)
     var mounted by remember { mutableStateOf(shown) }
@@ -188,23 +194,30 @@ fun GlasmioMagnifier(
     )
     val reveal = remember { Animatable(0f) }
     val morph = remember { Animatable(0f) }
+    // One-shot activation pulse; see GlasmioLoupeFlexMotion.activationSquash.
+    val activation = remember { Animatable(0f) }
     var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null, neverEqualPolicy()) }
     LaunchedEffect(shown, identity) {
         if (shown) {
             mounted = true
             closing = false
             follow.snapTo(currentSource.value)
+            // The interaction activates with an impulse, not from rest: the body starts slightly
+            // deformed and relaxes on the same spring the drag deformation uses.
+            activation.snapTo(1f)
             // Both passes start together, as the two consecutive _animateUsingSpringBehavior calls
             // do: the reveal lands in 0.4 s while the body finishes growing and lifting in 0.5 s.
             coroutineScope {
                 launch { reveal.animateTo(1f, openSpring) }
                 launch { morph.animateTo(1f, morphSpring) }
+                launch { activation.animateTo(0f, activationSpring) }
             }
         } else if (mounted) {
             closing = true
             coroutineScope {
                 launch { reveal.animateTo(0f, closeSpring) }
                 launch { morph.animateTo(0f, closeSpring) }
+                launch { activation.animateTo(0f, closeSpring) }
             }
             mounted = false
             dismissed.value?.invoke()
@@ -257,11 +270,15 @@ fun GlasmioMagnifier(
 
         // The opening pass keeps the lens on the touch point and only then moves it to the lifted
         // position, so the growth and the lift read as one motion.
-        val progress = morph.value.coerceIn(0f, 1f)
+        //
+        // `morph` is deliberately not clamped: the 0.8 damped pass overshoots its target by ~1.5%,
+        // and that momentary excess size and lift is the only momentum UIKit's opening has.
+        val progress = morph.value
         val anchorX = (1f - progress) * (center.x - lensCenterX)
         val anchorY = (1f - progress) * (center.y - lensCenterY)
         val bodyScaleX = 1f - (1f - progress) * (1f - originWidth / width)
         val bodyScaleY = 1f - (1f - progress) * (1f - originHeight / height)
+        val activationScale = loupeActivationScale(activation.value, motion.flex)
 
         // UIKit reports the identity deformation whenever the interaction is not tracking.
         val bodyScale = Offset(bodyScaleX, bodyScaleY)
@@ -298,9 +315,13 @@ fun GlasmioMagnifier(
         )
         val flexDrift = flexDriftDp * density.density
 
-        val zoom = if (closing) loupeLerp(progress, collapsedMagnification, magnification) else magnification
+        val zoom = if (closing) {
+            loupeLerp(progress.coerceIn(0f, 1f), collapsedMagnification, magnification)
+        } else magnification
         val currentZoom = rememberUpdatedState(zoom)
-        val currentTouchLocal = rememberUpdatedState(Offset(center.x - lensLeft, center.y - lensTop))
+        val currentTouchLocal = rememberUpdatedState(
+            Offset(follow.samplePosition.x - lensLeft, follow.samplePosition.y - lensTop),
+        )
         val currentAnchor = rememberUpdatedState(
             if (vertical) Offset(width * LoupeSampleAnchorFraction, height / 2f)
             else Offset(width / 2f, height * LoupeSampleAnchorFraction),
@@ -338,8 +359,8 @@ fun GlasmioMagnifier(
                     .graphicsLayer {
                         alpha = reveal.value.coerceIn(0f, 1f)
                         transformOrigin = TransformOrigin.Center
-                        scaleX = bodyScaleX * flexScale.x
-                        scaleY = bodyScaleY * flexScale.y
+                        scaleX = bodyScaleX * flexScale.x * activationScale.x
+                        scaleY = bodyScaleY * flexScale.y * activationScale.y
                         translationX = anchorX + flexDrift.x
                         translationY = anchorY + flexDrift.y
                     }

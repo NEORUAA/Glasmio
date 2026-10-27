@@ -119,6 +119,20 @@ data class GlasmioLoupeFlexMotion(
     val responseSeconds: Float = 0.5f,
     /** Damping ratio used while the drag is still tracking. */
     val trackingDampingRatio: Float = 0.9f,
+    /**
+     * Peak compression of the motion axis when the interaction activates, as a fraction of the body.
+     *
+     * UIKit gets this from `scaleSpring.retargetImpulse`, which injects a velocity the first time the
+     * interaction targets a new state instead of easing in from rest. The loupe variant leaves
+     * `retargetImpulse` at its default and the runtime value is unverified, so the port reproduces the
+     * envelope UIKit's impulse produces (a small non-uniform scale that settles in [responseSeconds])
+     * instead of the impulse itself.
+     */
+    val activationSquash: Float = 0.02f,
+    /** Peak stretch of the perpendicular axis when the interaction activates. */
+    val activationStretch: Float = 0.012f,
+    /** Whether the activation pulse runs at all. */
+    val activationEnabled: Boolean = true,
     /** Whether the lens deforms at all. */
     val enabled: Boolean = true,
 ) {
@@ -128,6 +142,8 @@ data class GlasmioLoupeFlexMotion(
         require(normalization > 0f) { "Flex normalization must be positive." }
         require(dampingRatio > 0f && trackingDampingRatio > 0f) { "Flex damping ratios must be positive." }
         require(responseSeconds > 0f) { "Flex response must be positive." }
+        require(activationSquash >= 0f && activationSquash < 1f) { "Activation squash must be in [0, 1)." }
+        require(activationStretch >= 0f && activationStretch < 1f) { "Activation stretch must be in [0, 1)." }
     }
 }
 
@@ -150,9 +166,17 @@ enum class GlasmioLoupeOrientation {
     Vertical,
 }
 
-/** A single integration result of [loupeFollowStep]. */
+/** A single integration result of [loupeFollowStep] and [loupeSpringStep]. */
 @Immutable
-internal data class LoupeFollowFrame(val position: Offset, val velocity: Offset)
+internal data class LoupeFollowFrame(
+    val position: Offset,
+    val velocity: Offset,
+    /**
+     * Low-passed target the body is springing towards. [loupeSpringStep] springs straight at its
+     * target, so it reports the target itself.
+     */
+    val lowPassed: Offset,
+)
 
 /** Compose stiffness for a UIKit spring expressed as a response period. */
 internal fun loupeSpringStiffness(responseSeconds: Float): Float {
@@ -194,9 +218,9 @@ internal fun loupeFollowStep(
     elapsedSeconds: Float,
 ): LoupeFollowFrame {
     val dt = elapsedSeconds.coerceIn(0f, MaxFrameSeconds)
-    if (dt <= 0f) return LoupeFollowFrame(position, velocity)
+    if (dt <= 0f) return LoupeFollowFrame(position, velocity, position)
     if ((position - target).getDistance() < ParkDistance && velocity.getDistance() < ParkSpeed) {
-        return LoupeFollowFrame(target, Offset.Zero)
+        return LoupeFollowFrame(target, Offset.Zero, target)
     }
     val goal = loupeLowPass(position, target, motion.followLowPass, dt)
     val stiffness = loupeSpringStiffness(motion.followResponseSeconds)
@@ -213,7 +237,7 @@ internal fun loupeFollowStep(
         integrated += current * step
         remaining -= step
     }
-    return LoupeFollowFrame(integrated, current)
+    return LoupeFollowFrame(integrated, current, goal)
 }
 
 /**
@@ -338,6 +362,19 @@ internal fun loupeFlex(
 }
 
 /**
+ * Non-uniform scale of the activation pulse, which has no counterpart in UIKit's `update`: it stands in
+ * for the one-shot velocity `scaleSpring.retargetImpulse` adds when the interaction first activates.
+ *
+ * [pulse] decays from `1` to `0` on the flex spring, so the body starts `activationSquash` narrower
+ * and `activationStretch` taller than its resting frame and relaxes into it. The motion axis is the
+ * body's width, matching an interaction that just settled on a caret instead of moving.
+ */
+internal fun loupeActivationScale(pulse: Float, motion: GlasmioLoupeFlexMotion): Offset {
+    if (!motion.enabled || !motion.activationEnabled || pulse == 0f) return Offset(1f, 1f)
+    return Offset(1f - motion.activationSquash * pulse, 1f + motion.activationStretch * pulse)
+}
+
+/**
  * Position of a lens driven by [loupeFollowStep]. Styles and lenses that own their own placement
  * can drive this directly; [GlasmioMagnifier] uses one internally for its center.
  */
@@ -347,12 +384,24 @@ class GlasmioLoupeFollowState internal constructor(initialPosition: Offset) {
     var position by mutableStateOf(initialPosition)
         private set
 
+    /**
+     * Point the magnified sample is anchored to, in overlay pixels.
+     *
+     * UIKit's display link places the portal at the low-passed position and only then springs the body
+     * towards it, so the content leads the body. Anchoring the sample to [position] instead adds the
+     * spring's lag on top of the low-pass, which is what makes a dragged lens feel late under the
+     * finger.
+     */
+    var samplePosition by mutableStateOf(initialPosition)
+        private set
+
     internal var velocity: Offset = Offset.Zero
         private set
 
     /** Restart the follower from [target] without a catch-up animation. */
     fun snapTo(target: Offset) {
         position = target
+        samplePosition = target
         velocity = Offset.Zero
     }
 
@@ -360,6 +409,7 @@ class GlasmioLoupeFollowState internal constructor(initialPosition: Offset) {
         val frame = loupeFollowStep(position, velocity, target, motion, elapsedSeconds)
         velocity = frame.velocity
         if (frame.position != position) position = frame.position
+        if (frame.lowPassed != samplePosition) samplePosition = frame.lowPassed
     }
 }
 
@@ -558,9 +608,9 @@ internal fun loupeSpringStep(
     elapsedSeconds: Float,
 ): LoupeFollowFrame {
     val dt = elapsedSeconds.coerceIn(0f, MaxFrameSeconds)
-    if (dt <= 0f) return LoupeFollowFrame(position, velocity)
+    if (dt <= 0f) return LoupeFollowFrame(position, velocity, target)
     if ((position - target).getDistance() < ParkDistance && velocity.getDistance() < ParkSpeed) {
-        return LoupeFollowFrame(target, Offset.Zero)
+        return LoupeFollowFrame(target, Offset.Zero, target)
     }
     val damping = 2f * dampingRatio * sqrt(stiffness)
     var integrated = position
@@ -575,7 +625,7 @@ internal fun loupeSpringStep(
         integrated += current * step
         remaining -= step
     }
-    return LoupeFollowFrame(integrated, current)
+    return LoupeFollowFrame(integrated, current, target)
 }
 
 /** Velocity of a spring that is integrated every frame instead of being restarted per target. */

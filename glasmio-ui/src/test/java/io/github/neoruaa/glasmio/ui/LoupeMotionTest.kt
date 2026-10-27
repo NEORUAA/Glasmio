@@ -100,6 +100,33 @@ class LoupeMotionTest {
         assertEquals(Offset.Zero, snapped.velocity)
     }
 
+    @Test fun sampleLeadsTheBodyDuringADrag() {
+        // UIKit anchors the portal to the low-passed position and only then springs the body towards
+        // it, so the content sits closer to the finger than the outline does.
+        val motion = GlasmioLoupeMotion()
+        val state = GlasmioLoupeFollowState(Offset.Zero)
+        val target = Offset(200f, 0f)
+        repeat(6) { state.advance(target, motion, frame) }
+        assertTrue("sample ${state.samplePosition} body ${state.position}", state.samplePosition.x > state.position.x)
+        assertTrue(state.samplePosition.x < target.x)
+        state.snapTo(target)
+        assertEquals(target, state.samplePosition)
+        assertEquals(target, state.position)
+    }
+
+    @Test fun activationPulseDeformsThenSettlesToIdentity() {
+        // UIKit's retargetImpulse is unverified, so the port reproduces its envelope: a small
+        // non-uniform scale at activation that relaxes on the flex spring.
+        val motion = GlasmioLoupeFlexMotion()
+        assertEquals(Offset(0.98f, 1.012f), loupeActivationScale(1f, motion))
+        assertEquals(Offset(1f, 1f), loupeActivationScale(0f, motion))
+        assertEquals(Offset(1f, 1f), loupeActivationScale(1f, motion.copy(activationEnabled = false)))
+        assertEquals(Offset(1f, 1f), loupeActivationScale(1f, motion.copy(enabled = false)))
+        // The pulse squashes the motion axis and stretches the perpendicular one.
+        assertTrue(loupeActivationScale(1f, motion).x < 1f)
+        assertTrue(loupeActivationScale(1f, motion).y > 1f)
+    }
+
     @Test fun identityFlexAtRest() {
         val motion = GlasmioLoupeFlexMotion()
         assertTrue(loupeFlex(Offset.Zero, Offset.Zero, 115f, 85f, motion).isIdentity)

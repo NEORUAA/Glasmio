@@ -619,5 +619,5 @@ CSS 近似：
 - **形变到渲染的最后一公里**：`scaleX/scaleY/driftX/driftY` 合成到 `transform` 的那段闭包（`0x1c5079058` 附近）只确认了 keypath = `"transform"` + `CATransform3D`，具体矩阵顺序未逐条核对；`_UILiquidLensView` 的 SDF 是否另有一套随形变变化的半径/圆度也未展开。
 - **`velocityIntegrator.acceleration` 的平滑窗口**：`_UIVelocityIntegrator` 为环形采样（步长 144 B、外加 `accelerationFilter`），具体时间常数未跟到底，所以“多快才拉满 1.15”只能按 `2500 pt/s²` 粗略估算。
 - **`_UIFlexInteractionSettings` 的外部覆盖**：设置域（`+settingsDomain`）是否可通过内部设置/偏好改 `flexEnabled` / `liftEnabled` 未验证。
-- **采样锚点 `LoupeSampleAnchorFraction = 0.78`**：二进制里没有这个常数。原生用 `_contentOffsetPortalContainerView` 的 `translate(±75)` 抵消镜体抬升，且 zoom 锚在 `self.center`；按这条链路推算，被编辑那行应落在镜体上部 `≈0.3`。0.78 是经验拟合，需要一张真机截图定案。
+- **采样锚点 `LoupeSampleAnchorFraction = 0.5`**：二进制里没有这个分数。唯一可推的是 `_contentOffsetPortalContainerView` 的内层 `transform` 与 `_containerView.center` 都被平移同一个 `±75`，两次平移方向相反而抵消，zoom 又锚在 `self.center`，所以被编辑那行落在镜体正中；最初拟合的 `0.78` 与随后的 `0.3` 都是错的，真机对比后定为 1/2。
 - **纵向文字变体**：`85×115` + `translate(+75,0)` 的竖向分支（`0x1c4107ddc` / `0x1c41089d4`）尚未在实现里提供。
