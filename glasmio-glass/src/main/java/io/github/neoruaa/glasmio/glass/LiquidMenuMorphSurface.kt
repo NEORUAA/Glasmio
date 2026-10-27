@@ -67,10 +67,14 @@ fun LiquidMenuMorphSurface(
     sourceHasGlassBackground: Boolean = true,
     sourceMaterial: NavigationGlassMaterial? = null,
     sourceFrostRadius: Dp? = null,
+    sourceMaterialPaint: (DrawScope.(Float) -> Unit)? = null,
+    sourceUsesShadowLift: Boolean = true,
+    sourceUsesInnerShadows: Boolean = true,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     val localDensity = LocalDensity.current
     val colors = LocalGlassColors.current
+    val appearance = LocalGlassAppearance.current
     val source = rememberCrossWindowBackdrop(backdrop)
     val renderer = rememberGlassMorphRenderer(
         source, active = true, blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
@@ -231,7 +235,45 @@ fun LiquidMenuMorphSurface(
                         refractionHeight = frame.lensHeight.toDp(),
                         refractionAmount = (-frame.lensAmount).toDp(),
                         navigationMaterial = true,
+                        shadowLiftProgress = if (sourceHasGlassBackground && !sourceUsesShadowLift) frame.contentProgress else 1f,
+                        innerShadowProgress = if (sourceHasGlassBackground && !sourceUsesInnerShadows) frame.contentProgress else 1f,
                         dropShadowAlpha = if (sourceHasGlassBackground) frame.contentProgress else 1f,
+                        materialPaint = if (sourceHasGlassBackground) {
+                            {
+                                // Weight each original fill on the same sampled backing so
+                                // non-SrcOver blend modes retain their native destination.
+                                val sourceAlpha = 1f - frame.contentProgress
+                                if (sourceAlpha > 0f) {
+                                    if (sourceMaterialPaint != null) sourceMaterialPaint(sourceAlpha)
+                                    else if (appearance.usesBackdrop) {
+                                        drawNavigationGlassMaterial(
+                                            colors.container, colors.isDark,
+                                            material = sourceMaterial, alpha = sourceAlpha,
+                                        )
+                                    } else {
+                                        drawRect(
+                                            colors.container.copy(alpha = if (appearance.reduceTransparency) 1f
+                                            else colors.container.alpha * 1.25f),
+                                            alpha = sourceAlpha,
+                                        )
+                                    }
+                                }
+                                if (frame.contentProgress > 0f) {
+                                    if (appearance.usesBackdrop) {
+                                        drawNavigationGlassMaterial(
+                                            colors.container, colors.isDark,
+                                            material = NavigationGlassMaterial.RegularMedium, alpha = frame.contentProgress,
+                                        )
+                                    } else {
+                                        drawRect(
+                                            colors.container.copy(alpha = if (appearance.reduceTransparency) 1f
+                                            else (colors.container.alpha * 1.25f).coerceIn(0f, 1f)),
+                                            alpha = frame.contentProgress,
+                                        )
+                                    }
+                                }
+                            }
+                        } else null,
                         isDark = colors.isDark,
                         sampleScale = sampleScale,
                     )

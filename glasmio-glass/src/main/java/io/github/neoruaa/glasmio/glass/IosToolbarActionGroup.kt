@@ -102,6 +102,9 @@ class GlasmioMenuAnchorState constructor() {
     private var standaloneContentPortal: ToolbarMenuPortal? = null
     private var standaloneMaterial: NavigationGlassMaterial? = null
     private var standaloneFrostRadius: Dp? = null
+    private var standaloneMaterialPaint: (DrawScope.(Float) -> Unit)? = null
+    private var standaloneUsesShadowLift = true
+    private var standaloneUsesInnerShadows = true
     @Volatile
     var shaderPrograms: LiquidMenuShaderPrograms? = null
         private set
@@ -123,6 +126,13 @@ class GlasmioMenuAnchorState constructor() {
         private set
     /** An explicit standalone frost override takes precedence over its material. */
     var sourceFrostRadius by mutableStateOf<Dp?>(null)
+        private set
+    /** Paint the source's ordered fill stack directly over the retained backdrop. */
+    var sourceMaterialPaint by mutableStateOf<(DrawScope.(Float) -> Unit)?>(null)
+        private set
+    var sourceUsesShadowLift by mutableStateOf(true)
+        private set
+    var sourceUsesInnerShadows by mutableStateOf(true)
         private set
     internal val isStandaloneAnchor: Boolean get() = group == null
     internal val hasStandaloneForeground: Boolean get() = standalonePortal != null
@@ -155,10 +165,16 @@ class GlasmioMenuAnchorState constructor() {
         size: Size,
         material: NavigationGlassMaterial?,
         frostRadius: Dp?,
+        materialPaint: DrawScope.(Float) -> Unit,
+        usesShadowLift: Boolean,
+        usesInnerShadows: Boolean,
     ) {
         if (!isStandaloneAnchor || size.isEmpty()) return
         standaloneMaterial = material
         standaloneFrostRadius = frostRadius
+        standaloneMaterialPaint = materialPaint
+        standaloneUsesShadowLift = usesShadowLift
+        standaloneUsesInnerShadows = usesInnerShadows
         val retained = standalonePortal
         if (retained == null || retained.layer !== layer || retained.sourceBounds.size != size) {
             standalonePortal = ToolbarMenuPortal(layer, Rect(Offset.Zero, size))
@@ -168,6 +184,9 @@ class GlasmioMenuAnchorState constructor() {
             sourceHasGlassBackground = true
             sourceMaterial = material
             sourceFrostRadius = frostRadius
+            sourceMaterialPaint = materialPaint
+            sourceUsesShadowLift = usesShadowLift
+            sourceUsesInnerShadows = usesInnerShadows
         }
     }
 
@@ -182,6 +201,9 @@ class GlasmioMenuAnchorState constructor() {
             sourceHasGlassBackground = standalonePortal != null
             sourceMaterial = standaloneMaterial.takeIf { sourceHasGlassBackground }
             sourceFrostRadius = standaloneFrostRadius.takeIf { sourceHasGlassBackground }
+            sourceMaterialPaint = standaloneMaterialPaint.takeIf { sourceHasGlassBackground }
+            sourceUsesShadowLift = standaloneUsesShadowLift
+            sourceUsesInnerShadows = standaloneUsesInnerShadows
         }
     }
 
@@ -190,6 +212,9 @@ class GlasmioMenuAnchorState constructor() {
             standalonePortal = null
             standaloneMaterial = null
             standaloneFrostRadius = null
+            standaloneMaterialPaint = null
+            standaloneUsesShadowLift = true
+            standaloneUsesInnerShadows = true
         }
     }
 
@@ -207,6 +232,21 @@ class GlasmioMenuAnchorState constructor() {
         sourceHasGlassBackground = acquiredGroup != null || standalonePortal != null
         sourceMaterial = standaloneMaterial.takeIf { acquiredGroup == null && standalonePortal != null }
         sourceFrostRadius = standaloneFrostRadius.takeIf { acquiredGroup == null && standalonePortal != null }
+        sourceMaterialPaint = if (acquiredGroup != null) {
+            val paint = acquiredGroup?.materialPaint
+            val material = run.first().material
+            if (paint != null) {
+                val sourcePaint: DrawScope.(Float) -> Unit = { alpha -> paint(this, material, alpha) }
+                sourcePaint
+            } else null
+        } else standaloneMaterialPaint.takeIf { standalonePortal != null }
+        val groupedNavigationMaterial = acquiredGroup?.let { group ->
+            run.first().material.let { it.color == null && it.sampleBackdrop && group.appearance.usesBackdrop }
+        }
+        sourceUsesShadowLift = groupedNavigationMaterial ?: standaloneUsesShadowLift
+        sourceUsesInnerShadows = groupedNavigationMaterial?.let {
+            it && acquiredGroup?.appearance?.reduceTransparency != true
+        } ?: standaloneUsesInnerShadows
         portal = acquiredGroup?.foregroundPortal(run) ?:
             (standalonePortal ?: standaloneContentPortal).takeIf { sourceGroup == null }
         isAcquired = true
@@ -221,6 +261,9 @@ class GlasmioMenuAnchorState constructor() {
         sourceHasGlassBackground = false
         sourceMaterial = null
         sourceFrostRadius = null
+        sourceMaterialPaint = null
+        sourceUsesShadowLift = true
+        sourceUsesInnerShadows = true
         acquiredBounds = null
         isAcquired = false
     }
@@ -268,6 +311,9 @@ fun Modifier.glasmioMenuAnchor(state: GlasmioMenuAnchorState): Modifier {
 internal fun rememberMenuAnchorForeground(
     material: NavigationGlassMaterial?,
     frostRadius: Dp?,
+    materialPaint: DrawScope.(Float) -> Unit,
+    usesShadowLift: Boolean,
+    usesInnerShadows: Boolean,
 ): Modifier {
     var anchor by remember { mutableStateOf<GlasmioMenuAnchorState?>(null) }
     val foreground = if (anchor?.isStandaloneAnchor == true) rememberGraphicsLayer() else null
@@ -281,7 +327,9 @@ internal fun rememberMenuAnchorForeground(
         .modifierLocalProvider(ModifierLocalMenuAnchor) { null }
         .then(if (foreground != null) Modifier.drawWithContent {
             foreground.record { this@drawWithContent.drawContent() }
-            anchor?.bindStandaloneForeground(foreground, size, material, frostRadius)
+            anchor?.bindStandaloneForeground(
+                foreground, size, material, frostRadius, materialPaint, usesShadowLift, usesInnerShadows,
+            )
             drawLayer(foreground)
         } else Modifier)
 }
@@ -307,6 +355,21 @@ fun GlasmioToolbarActionGroup(
     }
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
+    group.appearance = appearance
+    group.materialPaint = remember(colors, appearance) {
+        { material, alpha ->
+            val containerColor = material.color ?: colors.container
+            when {
+                appearance.reduceTransparency -> drawRect(containerColor.copy(alpha = 1f), alpha = alpha)
+                material.color == null && material.sampleBackdrop && appearance.usesBackdrop ->
+                    drawNavigationGlassMaterial(containerColor, colors.isDark, material.alphaMultiplier, alpha = alpha)
+                else -> drawRect(
+                    containerColor.copy(alpha = containerColor.alpha * material.alphaMultiplier.coerceAtLeast(0f)),
+                    alpha = alpha,
+                )
+            }
+        }
+    }
     val backdrop = LocalGlassBackdrop.current
     val runs = group.sharedRuns()
     Box(modifier.onGloballyPositioned(group::updateCoordinates)) {
@@ -479,6 +542,8 @@ class ToolbarActionGroup(
     val separationProgress: State<Float>,
     private val foregroundLayer: GraphicsLayer,
 ) {
+    internal var materialPaint: (DrawScope.(ToolbarActionMaterial, Float) -> Unit)? = null
+    internal var appearance = GlassAppearance()
     private val pressScope = GraphicsLayerBlockScope()
     private val pressRenderer = PressHighlightRenderer()
 

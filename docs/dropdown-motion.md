@@ -72,3 +72,14 @@ default navigation retains its 15 dp / 2% shadow, while an Edit Menu toolbar ret
 Regular Medium. Backdrop frost follows the same material progress between the source
 radius and the menu's 16 dp radius without recreating the source capture. The native
 source, foreground and portal blur channels remain independent.
+
+Source anchors also retain their actual ordered material-paint operations. Their tint
+contributes with `1 - contentProgress` while the menu tint contributes with
+`contentProgress`. Each fill keeps its original blend mode against the sampled
+backing, including Plus, Luminosity, custom tints and Prominent overlays; no
+transparent alpha layer changes those operations at the handoff.
+
+The source also declares whether its static surface uses shadow lifting and inner
+shadows. Their coverage interpolates to the menu rather than switching at the last
+frame. Prominent and custom surfaces therefore retain their own optical backing
+instead of inheriting navigation-only treatment before the live anchor returns.

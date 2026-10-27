@@ -55,6 +55,10 @@ import io.github.neoruaa.glasmio.glass.LiquidMenuMorphMotion
 import io.github.neoruaa.glasmio.glass.NavigationGlassMaterial
 import io.github.neoruaa.glasmio.glass.NavigationDropShadowRenderer
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
+import io.github.neoruaa.glasmio.glass.GlassSurface
+import io.github.neoruaa.glasmio.glass.GlassEmphasis
+import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
+import io.github.neoruaa.glasmio.glass.glasmioMenuAnchor
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
@@ -68,6 +72,95 @@ import org.junit.runner.RunWith
 class NavigationRenderingTest {
     @get:Rule val compose = createComposeRule()
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
+
+    @Test
+    fun menuTintReturnsToItsActualGlassAnchorAcrossSourceMaterials() {
+        val scene = mutableStateOf(0)
+        val showMorph = mutableStateOf(false)
+        val motion = LiquidMenuMorphMotion()
+        val anchor = GlasmioMenuAnchorState()
+        var hostOrigin = Offset.Zero
+        var source: Rect? = null
+        var target: Rect? = null
+        var density = 1f
+        val names = listOf("Navigation", "Small", "Medium", "Clear", "Custom tint", "Prominent")
+        compose.setContent {
+            density = LocalDensity.current.density
+            val material = when (scene.value) {
+                1 -> NavigationGlassMaterial.RegularSmall
+                2 -> NavigationGlassMaterial.RegularMedium
+                3 -> NavigationGlassMaterial.Clear
+                else -> null
+            }
+            GlasmioTheme(isDark = false) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(330.dp).testTag("source-tint-handoff")
+                        .onGloballyPositioned { hostOrigin = it.localToScreen(Offset.Zero) },
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color(0xFF315473))) },
+                    overlayContent = { backdrop ->
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            GlassSurface(
+                                modifier = Modifier.size(144.dp, 44.dp).glasmioMenuAnchor(anchor)
+                                    .onGloballyPositioned { source = Rect(it.localToScreen(Offset.Zero), Size(it.size.width.toFloat(), it.size.height.toFloat())) },
+                                material = material,
+                                navigationSurfaceColor = if (scene.value == 4) Color(0xFF337CCC) else null,
+                                emphasis = if (scene.value == 5) GlassEmphasis.Prominent else GlassEmphasis.Regular,
+                            ) {}
+                            if (showMorph.value) GlasmioContextMenu(
+                                visible = true, compact = true, menuWidth = 160.dp, heightOverride = 100.dp,
+                                backdrop = backdrop, exportChildBackdrop = false, morphMotion = motion,
+                                morphSourceHasGlassBackground = anchor.sourceHasGlassBackground,
+                                morphSourceMaterial = anchor.sourceMaterial,
+                                morphSourceFrostRadius = anchor.sourceFrostRadius,
+                                morphSourceMaterialPaint = anchor.sourceMaterialPaint,
+                                morphSourceUsesShadowLift = anchor.sourceUsesShadowLift,
+                                morphSourceUsesInnerShadows = anchor.sourceUsesInnerShadows,
+                                onMenuBoundsChanged = { target = it },
+                            ) {}
+                        }
+                    },
+                )
+            }
+        }
+        names.forEachIndexed { index, name ->
+            compose.runOnIdle {
+                anchor.release()
+                showMorph.value = false
+                scene.value = index
+                target = null
+            }
+            compose.waitForIdle()
+            val static = compose.onNodeWithTag("source-tint-handoff").captureToImage().toPixelMap()
+            compose.runOnIdle { anchor.acquire(); showMorph.value = true }
+            compose.waitForIdle()
+            lateinit var sample: Rect
+            compose.runOnIdle {
+                val from = requireNotNull(source)
+                sample = from.translate(-hostOrigin)
+                motion.initialize(from, requireNotNull(target), 22f * density, density)
+                motion.retarget(true); motion.advanceBy(3f)
+            }
+            compose.onNodeWithTag("source-tint-handoff").captureToImage()
+            compose.runOnIdle { motion.retarget(false); motion.advanceBy(3f) }
+            val closing = compose.onNodeWithTag("source-tint-handoff").captureToImage().toPixelMap()
+            var error = 0.0
+            var maximum = 0f
+            var count = 0
+            for (y in (sample.top + 16f * density).roundToInt() until (sample.bottom - 16f * density).roundToInt()) {
+                for (x in (sample.left + 28f * density).roundToInt() until (sample.right - 28f * density).roundToInt()) {
+                    val a = static[x, y]
+                    val b = closing[x, y]
+                    val difference = maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
+                    error += difference
+                    maximum = maxOf(maximum, difference)
+                    count++
+                }
+            }
+            assertTrue("$name tint must match its live anchor before release: max=$maximum mean=${error / count}",
+                maximum < 4f / 255f && error / count < 2.0 / 255.0)
+        }
+        compose.runOnIdle { anchor.release() }
+    }
 
     @Test
     fun glassMenuClosingRetainsItsSourceMaterialShadowUntilTheToolbarReturns() {

@@ -384,21 +384,34 @@ private fun DrawScope.drawNavigationProminentTint(
     isLight: Boolean,
     brightness: Float,
     enabled: Boolean,
+    alpha: Float = 1f,
 ) {
     drawRect(
         Color.White.copy(alpha = (if (isLight) 0.16f else 0.06f) + brightness * 0.18f),
+        alpha = alpha,
         blendMode = BlendMode.Screen,
     )
-    drawRect(surfaceColor.copy(alpha = 1f), alpha = 0.22f, blendMode = BlendMode.Hue)
-    drawRect(surfaceColor.copy(alpha = surfaceColor.alpha * if (enabled) 1f else 0.8f))
+    drawRect(surfaceColor.copy(alpha = 1f), alpha = 0.22f * alpha, blendMode = BlendMode.Hue)
+    drawRect(surfaceColor.copy(alpha = surfaceColor.alpha * if (enabled) 1f else 0.8f), alpha = alpha)
+}
+
+private fun DrawScope.drawExplicitNavigationProminentTint(
+    containerColor: Color,
+    navigationSurfaceColor: Color?,
+    enabled: Boolean,
+    alpha: Float = 1f,
+) {
+    drawRect(Color.White.copy(alpha = 0.94f), alpha = alpha)
+    val tint = navigationSurfaceColor ?: containerColor.copy(alpha = 1f)
+    drawRect(tint.copy(alpha = tint.alpha * if (enabled) 1f else 0.8f), alpha = alpha)
 }
 
 const val LightNavigationContainerAlphaScale = 0.5f
 
 /** Adjusts only the sampled image, before the neutral tint and foreground are drawn. */
-fun DrawScope.drawLightNavigationBackdrop() {
-    drawRect(Color(0xFFF8F8F8).copy(alpha = 0.25f), blendMode = BlendMode.Luminosity)
-    drawRect(Color(0xFF444444).copy(alpha = 0.15f), blendMode = BlendMode.Plus)
+fun DrawScope.drawLightNavigationBackdrop(alpha: Float = 1f) {
+    drawRect(Color(0xFFF8F8F8).copy(alpha = 0.25f), alpha = alpha, blendMode = BlendMode.Luminosity)
+    drawRect(Color(0xFF444444).copy(alpha = 0.15f), alpha = alpha, blendMode = BlendMode.Plus)
 }
 
 /** Neutral navigation material, applied to the sampled image before its inner shadows. */
@@ -408,26 +421,30 @@ fun DrawScope.drawNavigationGlassMaterial(
     containerAlphaMultiplier: Float = 1.25f,
     material: NavigationGlassMaterial? = null,
     materialTint: Color? = null,
+    alpha: Float = 1f,
 ) {
+    val opacity = alpha.coerceIn(0f, 1f)
+    if (opacity <= 0f) return
     if (material != null) {
         material.fills(isDark).forEach { fill ->
-            drawRect(fill.color, blendMode = fill.blendMode)
+            drawRect(fill.color, alpha = opacity, blendMode = fill.blendMode)
         }
         materialTint?.let { tint ->
-            drawRect(tint.copy(alpha = (tint.alpha * containerAlphaMultiplier).coerceIn(0f, 1f)))
+            drawRect(tint.copy(alpha = (tint.alpha * containerAlphaMultiplier).coerceIn(0f, 1f)), alpha = opacity)
         }
         return
     }
     if (isDark) {
-        drawRect(Color(0xFF999999).copy(alpha = 0.17f), blendMode = BlendMode.Luminosity)
+        drawRect(Color(0xFF999999).copy(alpha = 0.17f), alpha = opacity, blendMode = BlendMode.Luminosity)
     } else {
-        drawLightNavigationBackdrop()
+        drawLightNavigationBackdrop(opacity)
     }
     drawRect(
         containerColor.copy(
             alpha = containerColor.alpha * containerAlphaMultiplier.coerceAtLeast(0f) *
                 if (isDark) 0.6f else LightNavigationContainerAlphaScale,
         ),
+        alpha = opacity,
     )
 }
 
@@ -849,9 +866,7 @@ fun GlassSurface(
                 } else if (emphasis == GlassEmphasis.Prominent) {
                     {
                         // Explicit scene variants add their source backing and tint to the same glass.
-                        drawRect(Color.White.copy(alpha = 0.94f))
-                        val tint = navigationSurfaceColor ?: containerColor.copy(alpha = 1f)
-                        drawRect(tint.copy(alpha = tint.alpha * if (enabled) 1f else 0.8f))
+                        drawExplicitNavigationProminentTint(containerColor, navigationSurfaceColor, enabled)
                     }
                 } else null,
                 accentHighlights = accentDetailAction,
@@ -870,7 +885,39 @@ fun GlassSurface(
             )
         }
     }
-    val menuAnchorForeground = rememberMenuAnchorForeground(material, frostRadius)
+    val sourceMaterialPaint: DrawScope.(Float) -> Unit = remember(
+        surfaceColor, navigationSurfaceColor, navigationSurfaceAlphaMultiplier, material,
+        emphasis, enabled, appearance, navigationMaterial, sampleBackdrop, isLight, brightness,
+    ) {
+        { alpha ->
+            val containerColor = navigationSurfaceColor ?: surfaceColor
+            if (appearance.reduceTransparency) {
+                drawRect(containerColor.copy(alpha = 1f), alpha = alpha)
+            } else if (material == null && emphasis == GlassEmphasis.Prominent) {
+                drawNavigationProminentTint(containerColor, isLight, brightness, enabled, alpha)
+            } else {
+                if (navigationMaterial && sampleBackdrop && appearance.usesBackdrop) {
+                    drawNavigationGlassMaterial(
+                        containerColor, !isLight, navigationSurfaceAlphaMultiplier, material,
+                        navigationSurfaceColor.takeIf { emphasis == GlassEmphasis.Regular }, alpha,
+                    )
+                } else {
+                    drawRect(
+                        containerColor.copy(alpha = containerColor.alpha * navigationSurfaceAlphaMultiplier.coerceAtLeast(0f)),
+                        alpha = alpha,
+                    )
+                }
+                if (emphasis == GlassEmphasis.Prominent) {
+                    drawExplicitNavigationProminentTint(containerColor, navigationSurfaceColor, enabled, alpha)
+                }
+            }
+        }
+    }
+    val menuAnchorForeground = rememberMenuAnchorForeground(
+        material, frostRadius, sourceMaterialPaint,
+        usesShadowLift = navigationMaterial && !preserveBackdropColors,
+        usesInnerShadows = innerShadows != null && !appearance.reduceTransparency,
+    )
     val drawSurface: @Composable (Modifier) -> Unit = { surfaceModifier ->
         Box(
             modifier = surfaceModifier

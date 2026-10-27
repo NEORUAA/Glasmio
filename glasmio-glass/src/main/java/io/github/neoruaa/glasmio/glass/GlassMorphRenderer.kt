@@ -121,7 +121,8 @@ class GlassMorphRenderer(
         shadowOffsetY = materialPreset?.shadowOffsetY ?: 8.dp,
         shadowAlpha = materialPreset?.let { if (materialDark) it.darkShadowAlpha else it.lightShadowAlpha } ?: 0.02f,
     )
-    private val shadowLiftEffect = if (appearance.usesBackdrop) navigationShadowLiftEffect() else null
+    private val shadowLiftShader = if (appearance.usesBackdrop) RuntimeShader(NavigationShadowLiftShader) else null
+    private val shadowLiftEffect = shadowLiftShader?.let { RenderEffect.createRuntimeShaderEffect(it, "content") }
     private val reusableOutlinePath = Path()
     private var materialWidth = 0
     private var materialHeight = 0
@@ -189,6 +190,9 @@ class GlassMorphRenderer(
         pressHighlightBounds: Rect? = null,
         outlinePath: Path? = null,
         materialTint: Color? = null,
+        materialPaint: (DrawScope.() -> Unit)? = null,
+        shadowLiftProgress: Float = 1f,
+        innerShadowProgress: Float = 1f,
     ) = with(scope) {
         if (bounds.isEmpty || viewport.isEmpty) return@with
         val recordedLayoutDirection = layoutDirection
@@ -287,7 +291,9 @@ class GlassMorphRenderer(
             shader.setFloatUniform("amount", -refractionAmount.toPx() * renderScale)
             RenderEffect.createRuntimeShaderEffect(shader, "content")
         } else null
-        val sampledEffect = if (navigationMaterial && !isDark && shadowLiftEffect != null) {
+        val liftProgress = shadowLiftProgress.coerceIn(0f, 1f)
+        val sampledEffect = if (navigationMaterial && !isDark && shadowLiftEffect != null && liftProgress > 0f) {
+            shadowLiftShader?.setFloatUniform("suppression", 1f - liftProgress)
             if (refractionEffect != null) RenderEffect.createChainEffect(shadowLiftEffect, refractionEffect)
             else shadowLiftEffect
         } else refractionEffect
@@ -378,9 +384,10 @@ class GlassMorphRenderer(
                             scale(1f / renderScale, 1f / renderScale, Offset.Zero)
                         }) { drawLayer(refracted) }
                         inset(bounds.left, bounds.top, size.width - bounds.right, size.height - bounds.bottom) {
-                            drawNavigationGlassMaterial(tint, isDark, tintMultiplier, materialPreset, materialTint)
+                            if (materialPaint != null) materialPaint()
+                            else drawNavigationGlassMaterial(tint, isDark, tintMultiplier, materialPreset, materialTint)
                         }
-                        innerShadows.draw(this, shape, bounds, isDark)
+                        innerShadows.draw(this, shape, bounds, isDark, alpha = innerShadowProgress)
                     } finally {
                         drawContext.size = previousSize
                     }
@@ -395,14 +402,20 @@ class GlassMorphRenderer(
                         scale(1f / renderScale, 1f / renderScale, Offset.Zero)
                     }) { drawLayer(refracted) }
                 }
-                drawRect(
-                    tint.copy(
-                        alpha = if (appearance.reduceTransparency) 1f
-                            else (tint.alpha * tintMultiplier).coerceIn(0f, 1f),
-                    ),
-                    topLeft = bounds.topLeft,
-                    size = bounds.size,
-                )
+                if (materialPaint != null) {
+                    inset(bounds.left, bounds.top, size.width - bounds.right, size.height - bounds.bottom) {
+                        materialPaint()
+                    }
+                } else {
+                    drawRect(
+                        tint.copy(
+                            alpha = if (appearance.reduceTransparency) 1f
+                                else (tint.alpha * tintMultiplier).coerceIn(0f, 1f),
+                        ),
+                        topLeft = bounds.topLeft,
+                        size = bounds.size,
+                    )
+                }
             }
         }
         clipGlassShape(bounds, radius, shape, path) {

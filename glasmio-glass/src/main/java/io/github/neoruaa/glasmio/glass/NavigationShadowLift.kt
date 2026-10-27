@@ -11,15 +11,20 @@ import com.kyant.backdrop.effects.runtimeShaderEffect
 /** Lifts only the sampled shadows, before the navigation material is composited. */
 fun BackdropEffectScope.liftNavigationShadows() {
     // The backdrop scope caches the compiled shader and chains it after prior effects.
-    runtimeShaderEffect("NavigationShadowLift", NavigationShadowLiftShader, "content") {}
+    runtimeShaderEffect("NavigationShadowLift", NavigationShadowLiftShader, "content") {
+        setFloatUniform("suppression", 0f)
+    }
 }
 
 /** Retain this effect with the morph renderer rather than compiling it during drawing. */
 fun navigationShadowLiftEffect(): RenderEffect =
-    RenderEffect.createRuntimeShaderEffect(RuntimeShader(NavigationShadowLiftShader), "content")
+    RenderEffect.createRuntimeShaderEffect(RuntimeShader(NavigationShadowLiftShader).apply {
+        setFloatUniform("suppression", 0f)
+    }, "content")
 
 const val NavigationShadowLiftShader = """
 uniform shader content;
+uniform float suppression;
 
 half4 main(float2 coord) {
     half4 sampled = content.eval(coord);
@@ -41,6 +46,6 @@ half4 main(float2 coord) {
     // Black rises to about sRGB 0.31; retain a visible lift after the neutral tint.
     float lift = 0.08 * (1.0 - smoothstep(0.0, shadowLimit, luminance));
     float3 lifted = fromLinearSrgb(min(linear + float3(lift), float3(1.0)));
-    return half4(lifted * alpha, alpha);
+    return half4(mix(lifted * alpha, float3(sampled.rgb), suppression), alpha);
 }
 """

@@ -80,9 +80,11 @@ class NavigationInnerShadowRenderer(
         shape: Shape,
         bounds: Rect = Rect(Offset.Zero, scope.size),
         isDark: Boolean = false,
+        alpha: Float = 1f,
     ) {
         val canvas = scope.drawContext.canvas.nativeCanvas
-        if (!canvas.isHardwareAccelerated || bounds.isEmpty) return
+        val opacity = alpha.coerceIn(0f, 1f)
+        if (!canvas.isHardwareAccelerated || bounds.isEmpty || opacity <= 0f) return
         val nextKey = GeometryKey(shape, bounds.size, scope.layoutDirection, scope.density, scope.fontScale)
         // HWUI may discard display lists while a retained surface is hidden. Geometry
         // equality alone does not guarantee that its native shadow masks still exist.
@@ -91,6 +93,11 @@ class NavigationInnerShadowRenderer(
                 burnMask?.hasDisplayList() != false
             )
         if (key != nextKey || !masksRecorded) updateGeometry(scope, nextKey)
+        // Scale the mask coverage before the existing destination-aware blends.
+        // The packed RGB channels and the fallback burn shader keep their original math.
+        packedMask?.alpha = opacity
+        narrowMask.alpha = opacity
+        wideMask.alpha = opacity
         val save = canvas.save()
         try {
             canvas.translate(bounds.left, bounds.top)

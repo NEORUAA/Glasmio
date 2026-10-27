@@ -222,6 +222,9 @@ fun GlasmioContextMenu(
     onMorphReady: ((Rect) -> Unit)? = null,
     morphSourceMaterial: NavigationGlassMaterial? = null,
     morphSourceFrostRadius: androidx.compose.ui.unit.Dp? = null,
+    morphSourceMaterialPaint: (androidx.compose.ui.graphics.drawscope.DrawScope.(Float) -> Unit)? = null,
+    morphSourceUsesShadowLift: Boolean = true,
+    morphSourceUsesInnerShadows: Boolean = true,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     if (!visible) return
@@ -348,6 +351,9 @@ fun GlasmioContextMenu(
                         sourceHasGlassBackground = morphSourceHasGlassBackground,
                         sourceMaterial = morphSourceMaterial,
                         sourceFrostRadius = morphSourceFrostRadius,
+                        sourceMaterialPaint = morphSourceMaterialPaint,
+                        sourceUsesShadowLift = morphSourceUsesShadowLift,
+                        sourceUsesInnerShadows = morphSourceUsesInnerShadows,
                         shaderPrograms = morphShaderPrograms,
                         menuScale = menuScale,
                         transformOrigin = startOrigin,
@@ -744,6 +750,9 @@ fun GlasmioMenu(
                             morphSourceHasGlassBackground = sourceAnchor.sourceHasGlassBackground,
                             morphSourceMaterial = sourceAnchor.sourceMaterial,
                             morphSourceFrostRadius = sourceAnchor.sourceFrostRadius,
+                            morphSourceMaterialPaint = sourceAnchor.sourceMaterialPaint,
+                            morphSourceUsesShadowLift = sourceAnchor.sourceUsesShadowLift,
+                            morphSourceUsesInnerShadows = sourceAnchor.sourceUsesInnerShadows,
                             morphShaderPrograms = sourceAnchor.shaderPrograms,
                             onMorphReady = { target ->
                                 if (usesMorph && !surfaceReady) measuredMorphTarget = target
