@@ -42,6 +42,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.ceil
@@ -64,6 +65,8 @@ fun LiquidMenuMorphSurface(
     transformOrigin: TransformOrigin,
     highlight: InteractiveHighlight,
     sourceHasGlassBackground: Boolean = true,
+    sourceMaterial: NavigationGlassMaterial? = null,
+    sourceFrostRadius: Dp? = null,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     val localDensity = LocalDensity.current
@@ -73,6 +76,19 @@ fun LiquidMenuMorphSurface(
         source, active = true, blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
         programs = shaderPrograms, materialPreset = NavigationGlassMaterial.RegularMedium, isDark = colors.isDark,
     )
+    val sourceShadow = remember(sourceMaterial, colors.isDark) {
+        NavigationDropShadowRenderer(
+            renderScale = 1f,
+            shadowRadius = sourceMaterial?.shadowRadius ?: 15.dp,
+            shadowOffsetY = sourceMaterial?.shadowOffsetY ?: 8.dp,
+            shadowAlpha = sourceMaterial?.let {
+                if (colors.isDark) it.darkShadowAlpha else it.lightShadowAlpha
+            } ?: 0.02f,
+        )
+    }
+    DisposableEffect(sourceShadow) {
+        onDispose { sourceShadow.release() }
+    }
     val portal = remember(shaderPrograms) { shaderPrograms?.portal ?: RuntimeShader(LiquidMenuPortalShader) }
     DisposableEffect(portal) {
         onDispose {
@@ -132,6 +148,12 @@ fun LiquidMenuMorphSurface(
             .drawWithContent {
                 val host = coordinates ?: return@drawWithContent
                 val frame = motion.frame
+                renderer.updateBlurRadius(
+                    if (sourceHasGlassBackground) {
+                        val sourceFrost = sourceFrostRadius ?: sourceMaterial?.frostRadius ?: 2.dp
+                        sourceFrost + (NavigationGlassMaterial.RegularMedium.frostRadius - sourceFrost) * frame.contentProgress
+                    } else NavigationGlassMaterial.RegularMedium.frostRadius,
+                )
                 val incoming = frame.bounds.translate(-screenOrigin)
                 if (incoming.isEmpty) return@drawWithContent
                 // Only an actual glass source contributes a second material lobe.
@@ -185,6 +207,9 @@ fun LiquidMenuMorphSurface(
                     maxOf(required.right, previousCapture.right), maxOf(required.bottom, previousCapture.bottom),
                 ) else previousCapture
                 drawCache.viewport = capture
+                if (sourceHasGlassBackground && frame.contentProgress < 1f) {
+                    sourceShadow.draw(this, shape, bounds, alpha = 1f - frame.contentProgress)
+                }
                 fun DrawScope.drawMaterial() {
                     renderer.draw(
                         scope = this,

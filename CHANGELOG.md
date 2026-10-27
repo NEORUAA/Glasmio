@@ -20,6 +20,7 @@ Initial Android Compose framework extraction from MeiloX.
 - Add eleven semantic text styles, 34 emphasis/italic variants, and all twelve Dynamic Type categories.
 - Match tall swipe actions, structural separators, reorder handles, Alert field spacing, and Stepper press clipping.
 - Return plain Pop-up menus to their live text source, preserve corner tangents on tall menus, and retain four-sided shadows through opening and dismissal.
+- Retain source-material shadows and interpolate backdrop frost when glass menus return to their toolbar or button.
 - Add compact and expanded text editing menus, real 16 dp selection handles, and a Clear cursor magnifier adapted from AndroidLiquidGlass, with safe-area placement and spring following.
 - Configure signed Maven artifacts, sources, API documentation, and automated Central publication.
 - Apache-2.0 license with third-party notices included in every published module.

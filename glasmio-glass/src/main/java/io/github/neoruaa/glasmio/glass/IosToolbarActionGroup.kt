@@ -61,6 +61,7 @@ import androidx.compose.ui.modifier.modifierLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.kyant.capsule.ContinuousRoundedRectangle
@@ -99,6 +100,8 @@ class GlasmioMenuAnchorState constructor() {
     private var acquiredGroup: ToolbarActionGroup? = null
     private var standalonePortal: ToolbarMenuPortal? = null
     private var standaloneContentPortal: ToolbarMenuPortal? = null
+    private var standaloneMaterial: NavigationGlassMaterial? = null
+    private var standaloneFrostRadius: Dp? = null
     @Volatile
     var shaderPrograms: LiquidMenuShaderPrograms? = null
         private set
@@ -114,6 +117,12 @@ class GlasmioMenuAnchorState constructor() {
     val isGroupedSource: Boolean get() = acquiredGroup != null
     /** A plain anchor transfers its pixels without inventing a glass background. */
     var sourceHasGlassBackground by mutableStateOf(false)
+        private set
+    /** Null retains the original Navigation material used by toolbar groups. */
+    var sourceMaterial by mutableStateOf<NavigationGlassMaterial?>(null)
+        private set
+    /** An explicit standalone frost override takes precedence over its material. */
+    var sourceFrostRadius by mutableStateOf<Dp?>(null)
         private set
     internal val isStandaloneAnchor: Boolean get() = group == null
     internal val hasStandaloneForeground: Boolean get() = standalonePortal != null
@@ -141,8 +150,15 @@ class GlasmioMenuAnchorState constructor() {
         triggerBounds = bounds
     }
 
-    internal fun bindStandaloneForeground(layer: GraphicsLayer, size: Size) {
+    internal fun bindStandaloneForeground(
+        layer: GraphicsLayer,
+        size: Size,
+        material: NavigationGlassMaterial?,
+        frostRadius: Dp?,
+    ) {
         if (!isStandaloneAnchor || size.isEmpty()) return
+        standaloneMaterial = material
+        standaloneFrostRadius = frostRadius
         val retained = standalonePortal
         if (retained == null || retained.layer !== layer || retained.sourceBounds.size != size) {
             standalonePortal = ToolbarMenuPortal(layer, Rect(Offset.Zero, size))
@@ -150,6 +166,8 @@ class GlasmioMenuAnchorState constructor() {
         if (isAcquired && acquiredGroup == null) {
             portal = standalonePortal
             sourceHasGlassBackground = true
+            sourceMaterial = material
+            sourceFrostRadius = frostRadius
         }
     }
 
@@ -162,11 +180,17 @@ class GlasmioMenuAnchorState constructor() {
         if (isAcquired && acquiredGroup == null) {
             portal = standalonePortal ?: standaloneContentPortal
             sourceHasGlassBackground = standalonePortal != null
+            sourceMaterial = standaloneMaterial.takeIf { sourceHasGlassBackground }
+            sourceFrostRadius = standaloneFrostRadius.takeIf { sourceHasGlassBackground }
         }
     }
 
     internal fun clearStandaloneForeground(layer: GraphicsLayer) {
-        if (standalonePortal?.layer === layer) standalonePortal = null
+        if (standalonePortal?.layer === layer) {
+            standalonePortal = null
+            standaloneMaterial = null
+            standaloneFrostRadius = null
+        }
     }
 
     internal fun clearStandaloneContent(layer: GraphicsLayer) {
@@ -181,6 +205,8 @@ class GlasmioMenuAnchorState constructor() {
         acquiredBounds = if (run.isEmpty()) source else sourceGroup!!.visualBoundsInWindow(run)
         acquiredGroup = sourceGroup.takeIf { run.isNotEmpty() }
         sourceHasGlassBackground = acquiredGroup != null || standalonePortal != null
+        sourceMaterial = standaloneMaterial.takeIf { acquiredGroup == null && standalonePortal != null }
+        sourceFrostRadius = standaloneFrostRadius.takeIf { acquiredGroup == null && standalonePortal != null }
         portal = acquiredGroup?.foregroundPortal(run) ?:
             (standalonePortal ?: standaloneContentPortal).takeIf { sourceGroup == null }
         isAcquired = true
@@ -193,6 +219,8 @@ class GlasmioMenuAnchorState constructor() {
         acquiredGroup = null
         portal = null
         sourceHasGlassBackground = false
+        sourceMaterial = null
+        sourceFrostRadius = null
         acquiredBounds = null
         isAcquired = false
     }
@@ -237,7 +265,10 @@ fun Modifier.glasmioMenuAnchor(state: GlasmioMenuAnchorState): Modifier {
 
 /** Retain only a standalone surface's foreground; its material remains owned by the morph. */
 @Composable
-internal fun rememberMenuAnchorForeground(): Modifier {
+internal fun rememberMenuAnchorForeground(
+    material: NavigationGlassMaterial?,
+    frostRadius: Dp?,
+): Modifier {
     var anchor by remember { mutableStateOf<GlasmioMenuAnchorState?>(null) }
     val foreground = if (anchor?.isStandaloneAnchor == true) rememberGraphicsLayer() else null
     DisposableEffect(anchor, foreground) {
@@ -250,7 +281,7 @@ internal fun rememberMenuAnchorForeground(): Modifier {
         .modifierLocalProvider(ModifierLocalMenuAnchor) { null }
         .then(if (foreground != null) Modifier.drawWithContent {
             foreground.record { this@drawWithContent.drawContent() }
-            anchor?.bindStandaloneForeground(foreground, size)
+            anchor?.bindStandaloneForeground(foreground, size, material, frostRadius)
             drawLayer(foreground)
         } else Modifier)
 }

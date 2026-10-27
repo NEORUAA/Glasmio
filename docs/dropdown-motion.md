@@ -64,3 +64,11 @@ Plain-source material opacity records into an explicit graphics layer that inclu
 the material's shadow support, rather than a menu-sized canvas alpha layer. The
 transparent Popup shell preserves that backing outside the visible menu; placement
 constrains the visible menu and compensates the shell separately for each direction.
+
+Glass anchors retain their source material and any explicit frost override. During
+the morph, the source exterior shadow fades into the menu shadow and returns before
+the live anchor is revealed. The source pass uses the static renderer's full resolution;
+default navigation retains its 15 dp / 2% shadow, while an Edit Menu toolbar retains
+Regular Medium. Backdrop frost follows the same material progress between the source
+radius and the menu's 16 dp radius without recreating the source capture. The native
+source, foreground and portal blur channels remain independent.

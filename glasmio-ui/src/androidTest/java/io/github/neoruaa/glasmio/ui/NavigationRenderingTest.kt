@@ -1,6 +1,7 @@
 package io.github.neoruaa.glasmio.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,12 +12,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -41,6 +44,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.backdrops.emptyBackdrop
+import com.kyant.capsule.ContinuousRoundedRectangle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.GlassAppearance
@@ -48,6 +52,9 @@ import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.icons.SfSymbol
 import io.github.neoruaa.glasmio.glass.LiquidMenuMorphMotion
+import io.github.neoruaa.glasmio.glass.NavigationGlassMaterial
+import io.github.neoruaa.glasmio.glass.NavigationDropShadowRenderer
+import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import org.junit.Assert.assertEquals
@@ -61,6 +68,139 @@ import org.junit.runner.RunWith
 class NavigationRenderingTest {
     @get:Rule val compose = createComposeRule()
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
+
+    @Test
+    fun glassMenuClosingRetainsItsSourceMaterialShadowUntilTheToolbarReturns() {
+        val motion = LiquidMenuMorphMotion()
+        val reference = mutableStateOf(false)
+        var hostOrigin = Offset.Zero
+        var target: Rect? = null
+        var sourceLocal = Rect.Zero
+        var density = 1f
+        compose.setContent {
+            density = LocalDensity.current.density
+            val shadow = remember {
+                NavigationDropShadowRenderer(shadowRadius = 48.dp, shadowOffsetY = 8.dp, shadowAlpha = 0.25f)
+            }
+            DisposableEffect(shadow) { onDispose { shadow.release() } }
+            GlasmioTheme(isDark = false) {
+                Box(Modifier.size(330.dp).background(Color.White).testTag("source-shadow-handoff")
+                    .onGloballyPositioned { hostOrigin = it.localToScreen(Offset.Zero) }
+                    .drawWithContent {
+                        drawContent()
+                        if (reference.value) shadow.draw(this, ContinuousRoundedRectangle(22.dp), sourceLocal)
+                    }, contentAlignment = Alignment.Center) {
+                    if (!reference.value) GlasmioContextMenu(
+                        visible = true, compact = true, menuWidth = 160.dp, heightOverride = 100.dp,
+                        backdrop = emptyBackdrop(), exportChildBackdrop = false, morphMotion = motion,
+                        morphSourceMaterial = NavigationGlassMaterial.RegularMedium,
+                        onMenuBoundsChanged = { target = it },
+                    ) {}
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            val destination = requireNotNull(target)
+            val sourceSize = Size(144f * density, 44f * density)
+            val source = Rect(destination.center - Offset(sourceSize.width, sourceSize.height) / 2f, sourceSize)
+            sourceLocal = source.translate(-hostOrigin)
+            motion.initialize(source, destination, 22f * density, density)
+            motion.retarget(true); motion.advanceBy(3f)
+            motion.retarget(false); motion.advanceBy(3f)
+            assertEquals(0f, motion.frame.contentProgress, 0.001f)
+        }
+        val closing = compose.onNodeWithTag("source-shadow-handoff").captureToImage().toPixelMap()
+        compose.runOnIdle { reference.value = true }
+        val static = compose.onNodeWithTag("source-shadow-handoff").captureToImage().toPixelMap()
+        val strips = listOf(
+            Rect(sourceLocal.center.x - 12f * density, sourceLocal.top - 34f * density, sourceLocal.center.x + 12f * density, sourceLocal.top - 18f * density),
+            Rect(sourceLocal.center.x - 12f * density, sourceLocal.bottom + 18f * density, sourceLocal.center.x + 12f * density, sourceLocal.bottom + 34f * density),
+        )
+        strips.forEach { band ->
+            var observed = 0.0
+            var expected = 0.0
+            var samples = 0
+            for (y in band.top.roundToInt() until band.bottom.roundToInt()) {
+                for (x in band.left.roundToInt() until band.right.roundToInt()) {
+                    observed += 1f - closing[x, y].red
+                    expected += 1f - static[x, y].red
+                    samples++
+                }
+            }
+            assertTrue("The static toolbar reference must have a visible exterior shadow", expected / samples > 0.01)
+            assertTrue("The final morph frame cannot lose its source shadow", observed > expected * 0.8)
+            assertTrue("The final morph shadow must approach the static toolbar", abs(observed - expected) / samples < 0.015)
+        }
+    }
+
+    @Test
+    fun menuMaterialFrostReturnsToTheSourceOverrideWithoutRecreatingItsCapture() {
+        val motion = LiquidMenuMorphMotion()
+        val frost = mutableStateOf(0.dp)
+        var hostOrigin = Offset.Zero
+        var target: Rect? = null
+        var sourceLocal = Rect.Zero
+        var density = 1f
+        compose.setContent {
+            density = LocalDensity.current.density
+            GlasmioTheme(isDark = false) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(330.dp).testTag("source-frost-handoff")
+                        .onGloballyPositioned { hostOrigin = it.localToScreen(Offset.Zero) },
+                    sampledContent = {
+                        Canvas(Modifier.fillMaxSize()) {
+                            val cell = 4.dp.toPx()
+                            for (y in 0..(size.height / cell).toInt()) for (x in 0..(size.width / cell).toInt()) {
+                                drawRect(if ((x + y) % 2 == 0) Color.Black else Color.White,
+                                    Offset(x * cell, y * cell), Size(cell, cell))
+                            }
+                        }
+                    },
+                    overlayContent = { backdrop ->
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            GlasmioContextMenu(
+                                visible = true, compact = true, menuWidth = 160.dp, heightOverride = 100.dp,
+                                backdrop = backdrop, exportChildBackdrop = false, morphMotion = motion,
+                                morphSourceMaterial = NavigationGlassMaterial.RegularMedium,
+                                morphSourceFrostRadius = frost.value,
+                                onMenuBoundsChanged = { target = it },
+                            ) {}
+                        }
+                    },
+                )
+            }
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            val destination = requireNotNull(target)
+            val sourceSize = Size(144f * density, 44f * density)
+            val source = Rect(destination.center - Offset(sourceSize.width, sourceSize.height) / 2f, sourceSize)
+            sourceLocal = source.translate(-hostOrigin)
+            motion.initialize(source, destination, 22f * density, density)
+            motion.retarget(true); motion.advanceBy(3f)
+            motion.retarget(false); motion.advanceBy(3f)
+        }
+        val sharp = compose.onNodeWithTag("source-frost-handoff").captureToImage().toPixelMap()
+        compose.runOnIdle { frost.value = 16.dp }
+        val frosted = compose.onNodeWithTag("source-frost-handoff").captureToImage().toPixelMap()
+        fun contrast(image: androidx.compose.ui.graphics.PixelMap): Float {
+            var low = 1f
+            var high = 0f
+            val region = Rect(sourceLocal.left + 36f * density, sourceLocal.top + 8f * density,
+                sourceLocal.right - 36f * density, sourceLocal.bottom - 8f * density)
+            for (y in region.top.roundToInt() until region.bottom.roundToInt()) {
+                for (x in region.left.roundToInt() until region.right.roundToInt()) {
+                    low = minOf(low, image[x, y].red); high = maxOf(high, image[x, y].red)
+                }
+            }
+            return high - low
+        }
+        val sharpContrast = contrast(sharp)
+        val softContrast = contrast(frosted)
+        assertTrue("A zero-frost source must retain its real backdrop detail", sharpContrast > 0.08f)
+        assertTrue("Updating the source frost must update the retained capture's real blur", softContrast < sharpContrast * 0.4f)
+    }
 
     @Test
     fun clearLensPreservesDarkSourceContrastWithoutChangingNavigationDefaults() {

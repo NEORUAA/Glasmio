@@ -126,14 +126,29 @@ class GlassMorphRenderer(
     private var materialWidth = 0
     private var materialHeight = 0
     private var recordedViewport: Rect? = null
-    private val sourceEffect = if (appearance.usesBackdrop) run {
-        val color = RenderEffect.createColorFilterEffect(
+    private val sourceColorEffect = if (appearance.usesBackdrop) {
+        RenderEffect.createColorFilterEffect(
             ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(1.5f) }),
         )
-        val blur = with(density) { blurRadius.toPx() } * renderScale
-        RenderEffect.createBlurEffect(blur, blur, color, Shader.TileMode.CLAMP)
-            .asComposeRenderEffect()
     } else null
+    private var sourceEffectRadius = blurRadius
+    private var sourceEffect = createSourceEffect(blurRadius)
+
+    private fun createSourceEffect(blurRadius: Dp): androidx.compose.ui.graphics.RenderEffect? {
+        val color = sourceColorEffect ?: return null
+        val blur = with(density) { blurRadius.toPx() } * renderScale
+        return (if (blur > 0f) {
+            RenderEffect.createBlurEffect(blur, blur, color, Shader.TileMode.CLAMP)
+        } else color).asComposeRenderEffect()
+    }
+
+    /** Keep the recorded source and native shader objects while its material frost changes. */
+    internal fun updateBlurRadius(blurRadius: Dp) {
+        if (sourceEffectRadius == blurRadius) return
+        sourceEffectRadius = blurRadius
+        sourceEffect = createSourceEffect(blurRadius)
+        source.renderEffect = sourceEffect
+    }
 
     fun invalidateRecording() {
         recordedViewport = null

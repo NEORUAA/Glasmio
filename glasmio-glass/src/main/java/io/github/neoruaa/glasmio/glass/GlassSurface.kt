@@ -870,7 +870,7 @@ fun GlassSurface(
             )
         }
     }
-    val menuAnchorForeground = rememberMenuAnchorForeground()
+    val menuAnchorForeground = rememberMenuAnchorForeground(material, frostRadius)
     val drawSurface: @Composable (Modifier) -> Unit = { surfaceModifier ->
         Box(
             modifier = surfaceModifier
