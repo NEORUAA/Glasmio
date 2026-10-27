@@ -14,7 +14,7 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.scaffold.*
-import io.github.neoruaa.glasmio.sample.navigation.*
+import io.github.neoruaa.glasmio.scaffold.navigation.*
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -26,7 +26,7 @@ class NavigationClockTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
     @Test fun realSeekClockPublishesTrackingCancelAndCommit() {
         val stack = mutableStateListOf("A")
-        val motion = SampleHeaderMotion("A")
+        val motion = GlasmioNavHeaderMotion("A")
         rule.setContent {
             GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
                 GlasmioNavigationScaffold(motion, header = { entry ->
@@ -34,7 +34,7 @@ class NavigationClockTest {
                         GlasmioHeaderAction("same.action", "moon", "Stable action", {}) { Text("M") },
                     ))))
                 }) {
-                    SampleNavDisplay(stack, motion, onBack = { if (stack.size > 1) stack.removeAt(stack.lastIndex) },
+                    GlasmioNavDisplay(stack, motion, onBack = { if (stack.size > 1) stack.removeAt(stack.lastIndex) },
                         entryProvider = { key -> NavEntry(key = key, contentKey = key) { Box(Modifier.fillMaxSize().background(Color.White)) { Text(key) } } })
                 }
             }

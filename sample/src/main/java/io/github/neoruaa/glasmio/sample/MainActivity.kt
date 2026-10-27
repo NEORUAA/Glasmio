@@ -81,8 +81,8 @@ import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.scene.Scene
-import io.github.neoruaa.glasmio.sample.navigation.SampleNavDisplay
-import io.github.neoruaa.glasmio.sample.navigation.SampleHeaderMotion
+import io.github.neoruaa.glasmio.scaffold.navigation.GlasmioNavDisplay
+import io.github.neoruaa.glasmio.scaffold.navigation.GlasmioNavHeaderMotion
 import androidx.navigation3.ui.NavDisplay
 import androidx.navigation3.ui.NavDisplayTransitionEffects
 import androidx.navigation3.ui.defaultTransitionSpec
@@ -351,7 +351,7 @@ private fun SampleNavigation(
     }
     val navigationBackdrop = rememberLayerBackdrop()
     val headerMotion = remember {
-        SampleHeaderMotion(backStack.last()) { from, to, pop ->
+        GlasmioNavHeaderMotion(backStack.last()) { from, to, pop ->
             if ((from as? String)?.sampleRouteName() in topLevelRoutes && (to as? String)?.sampleRouteName() in topLevelRoutes) GlasmioNavigationOperation.Tab
             else if (pop) GlasmioNavigationOperation.Pop else GlasmioNavigationOperation.Push
         }
@@ -410,7 +410,7 @@ private fun SampleNavigation(
                 ) { headerPadding ->
                 CompositionLocalProvider(LocalSampleBodyPadding provides headerPadding) {
                 Box(Modifier.fillMaxSize().glassBackdropSource(navigationBackdrop).trackBackdropPosition(navigationBackdrop)) {
-                    SampleNavDisplay(
+                    GlasmioNavDisplay(
                         motion = headerMotion,
                         backStack = backStack,
                         modifier = Modifier.fillMaxSize(),

@@ -1,12 +1,12 @@
-package io.github.neoruaa.glasmio.sample.navigation
+package io.github.neoruaa.glasmio.scaffold.navigation
 
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import io.github.neoruaa.glasmio.scaffold.*
 
-/** Writable only in the sample adapter; the scaffold receives the read-only contract. */
-internal class SampleHeaderMotion(
+/** Navigation-owned motion clock shared by the body display and the scaffold header. */
+class GlasmioNavHeaderMotion(
     initialKey: Any,
     private val operationFor: (Any, Any, Boolean) -> GlasmioNavigationOperation = { _, _, pop ->
         if (pop) GlasmioNavigationOperation.Pop else GlasmioNavigationOperation.Push

@@ -17,9 +17,9 @@
  * limitations under the License.
  */
 
-@file:JvmName("NavDisplayKt")
+@file:JvmName("GlasmioNavDisplayKt")
 
-package io.github.neoruaa.glasmio.sample.navigation
+package io.github.neoruaa.glasmio.scaffold.navigation
 
 import androidx.collection.mutableObjectFloatMapOf
 import androidx.compose.animation.AnimatedContent
@@ -97,15 +97,15 @@ import kotlin.jvm.JvmMultifileClass
 import kotlin.jvm.JvmName
 import kotlin.reflect.KClass
 
-// Maintained from miuix-navigation3-ui 0.9.3. Single-pane only; clock hooks are local.
+// Maintained from miuix-navigation3-ui 0.9.3. Single-pane only; header and body share the clock.
 import androidx.navigation3.ui.*
 import io.github.neoruaa.glasmio.scaffold.*
 import kotlin.math.roundToLong
 
 @Composable
-internal fun <T : Any> SampleNavDisplay(
+fun <T : Any> GlasmioNavDisplay(
     backStack: List<T>,
-    motion: SampleHeaderMotion,
+    motion: GlasmioNavHeaderMotion,
     modifier: Modifier = Modifier,
     contentAlignment: Alignment = Alignment.TopStart,
     onBack: () -> Unit = {
@@ -135,7 +135,7 @@ internal fun <T : Any> SampleNavDisplay(
             entryProvider = entryProvider,
         )
 
-    SampleNavDisplay(
+    GlasmioNavDisplay(
         entries = entries,
         motion = motion,
         modifier = modifier,
@@ -198,9 +198,9 @@ internal fun <T : Any> SampleNavDisplay(
  * @see [rememberDecoratedNavEntries]
  */
 @Composable
-private fun <T : Any> SampleNavDisplay(
+private fun <T : Any> GlasmioNavDisplay(
     entries: List<NavEntry<T>>,
-    motion: SampleHeaderMotion,
+    motion: GlasmioNavHeaderMotion,
     modifier: Modifier = Modifier,
     contentAlignment: Alignment = Alignment.TopStart,
     sizeTransform: SizeTransform? = null,
@@ -229,7 +229,7 @@ private fun <T : Any> SampleNavDisplay(
     val navigationEventState = rememberNavigationEventState(sceneState)
     NavigationBackHandler(sceneState, navigationEventState, onBack)
 
-    SampleNavDisplay(
+    GlasmioNavDisplay(
         sceneState,
         motion,
         navigationEventState,
@@ -269,9 +269,9 @@ private fun <T : Any> SampleNavDisplay(
  * @see [rememberSceneState]
  */
 @Composable
-private fun <T : Any> SampleNavDisplay(
+private fun <T : Any> GlasmioNavDisplay(
     sceneState: SceneState<T>,
-    motion: SampleHeaderMotion,
+    motion: GlasmioNavHeaderMotion,
     navigationEventState: NavigationEventState<SceneInfo<T>>,
     modifier: Modifier = Modifier,
     contentAlignment: Alignment = Alignment.TopStart,

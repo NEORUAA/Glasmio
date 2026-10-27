@@ -1,4 +1,4 @@
-package io.github.neoruaa.glasmio.sample.navigation
+package io.github.neoruaa.glasmio.scaffold.navigation
 
 import androidx.compose.runtime.*
 import androidx.lifecycle.*

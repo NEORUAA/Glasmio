@@ -1,7 +1,7 @@
 // Copyright 2025, compose-miuix-ui contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package io.github.neoruaa.glasmio.sample.navigation
+package io.github.neoruaa.glasmio.scaffold.navigation
 
 import androidx.compose.animation.core.Easing
 import androidx.compose.runtime.Immutable
