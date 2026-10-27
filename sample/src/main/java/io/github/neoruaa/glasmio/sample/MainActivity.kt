@@ -50,6 +50,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -60,6 +62,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.AndroidFont
@@ -95,6 +98,7 @@ import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.icons.*
+import io.github.neoruaa.glasmio.icons.R as GlasmioIconsR
 import io.github.neoruaa.glasmio.preference.*
 import io.github.neoruaa.glasmio.scaffold.*
 import io.github.neoruaa.glasmio.ui.*
@@ -807,6 +811,9 @@ private fun ControlsDemo(layout: SamplePageLayout) {
     var text by rememberSaveable { mutableStateOf("") }
     var segment by rememberSaveable { mutableIntStateOf(0) }
     var iconSegment by rememberSaveable { mutableIntStateOf(1) }
+    var adaptivePosition by rememberSaveable { mutableFloatStateOf(.5f) }
+    var adaptiveMode by rememberSaveable { mutableIntStateOf(4) }
+    var groupedAdaptivePosition by rememberSaveable { mutableFloatStateOf(.4f) }
     var color by remember { mutableStateOf(Color(0xFF0088FF)) }
     var colorPicker by rememberSaveable { mutableStateOf(false) }
     DemoList(layout) {
@@ -839,6 +846,18 @@ private fun ControlsDemo(layout: SamplePageLayout) {
             }
         }
         item {
+            Section("Adaptive Slider") {
+                GlasmioAdaptiveSlider(
+                    value = adaptivePosition,
+                    onValueChange = { adaptivePosition = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled,
+                    showLabels = true,
+                    labels = listOf("More Noise", "Default", "Less Noise"),
+                )
+            }
+        }
+        item {
             Section("Segmented Control") {
                 GlasmioSegmentedControl(listOf(0 to "Day", 1 to "Week", 2 to "Month"), segment, { segment = it }, Modifier.fillMaxWidth())
             }
@@ -859,6 +878,46 @@ private fun ControlsDemo(layout: SamplePageLayout) {
                             2 -> "speaker.wave.2.fill"
                             else -> "speaker.wave.3.fill"
                         }, null, size = 25.dp)
+                    },
+                )
+            }
+        }
+        item {
+            Section("Adaptive Segmented Control") {
+                GlasmioSegmentedControl(
+                    items = listOf(1 to "关闭", 3 to "通透模式", 4 to "自适应", 2 to "降噪"),
+                    selected = adaptiveMode,
+                    onSelected = { selected ->
+                        if (selected == 4 && adaptiveMode != 4) groupedAdaptivePosition = .5f
+                        adaptiveMode = selected
+                    },
+                    adaptiveItem = 4,
+                    adaptiveValue = groupedAdaptivePosition,
+                    onAdaptiveValueChange = { groupedAdaptivePosition = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled,
+                    hiddenItems = if (adaptiveMode == 4) setOf(1) else emptySet(),
+                    showLabels = true,
+                    adaptiveLabels = listOf("较多噪声", "默认", "较少噪声"),
+                    itemContent = { choice, _ ->
+                        val colors = LocalGlassColors.current
+                        val resource = when (choice) {
+                            1 -> GlasmioIconsR.drawable.glasmio_listening_off
+                            3 -> GlasmioIconsR.drawable.glasmio_listening_transparency
+                            4 -> GlasmioIconsR.drawable.glasmio_adaptive_audio
+                            else -> GlasmioIconsR.drawable.glasmio_listening_anc
+                        }
+                        val tint = when {
+                            choice != 1 -> ColorFilter.tint(colors.content)
+                            !colors.isDark -> null
+                            else -> ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(
+                                -1f, 0f, 0f, 0f, 255f,
+                                0f, -1f, 0f, 0f, 255f,
+                                0f, 0f, -1f, 0f, 255f,
+                                0f, 0f, 0f, 1f, 0f,
+                            )))
+                        }
+                        Image(painterResource(resource), null, Modifier.size(30.dp), colorFilter = tint)
                     },
                 )
             }
