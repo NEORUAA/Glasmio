@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -81,6 +82,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -105,7 +107,10 @@ internal class GlasmioTextEditingHost(val windowView: View, val recording: Layer
     var coordinates by mutableStateOf<LayoutCoordinates?>(null)
     var active by mutableStateOf<GlasmioTextEditor?>(null)
     var menuOwnsFocus by mutableStateOf(false)
-    val magnifying: Boolean get() = active?.let { it.chromeVisible && it.magnifierSource != null } == true
+    val magnifying: Boolean
+        get() = active?.let {
+            it.chromeVisible && (it.magnifierSource != null || it.magnifierRetainedSource != null)
+        } == true
 
     fun activate(editor: GlasmioTextEditor) {
         if (active !== editor) active?.dismiss()
@@ -408,7 +413,10 @@ internal class GlasmioTextEditor(
     var showHandles by mutableStateOf(false)
     var pointerScreen by mutableStateOf<Offset?>(null)
     var magnifierSource by mutableStateOf<Offset?>(null)
+    /** Last magnified point, retained while the dismissal spring runs after the gesture ends. */
+    var magnifierRetainedSource by mutableStateOf<Offset?>(null)
     var draggingHandle by mutableStateOf<Boolean?>(null)
+    private var magnifierOrigin: Size? = null
     private var fixedHandleOffset: Int? = null
     val draggingSelection: Boolean get() = fixedHandleOffset != null
     private var nativeProvider: TextContextMenuDataProvider? = null
@@ -488,6 +496,34 @@ internal class GlasmioTextEditor(
         magnifierSource = node.localToScreen(Offset(local.x, cursor.center.y)).copy(
             x = screen.x.coerceIn(viewport.left, viewport.right),
         )
+        magnifierOrigin = cursor.size
+        magnifierRetainedSource = magnifierSource
+    }
+
+    /**
+     * Size of the shape the lens grows out of: the caret rect, as UIKit's `originShape` does. The
+     * layout reports a zero-width caret because only the drawn stroke has width, so the shape keeps
+     * the 2 dp the cursor is painted with.
+     */
+    fun magnifierOriginSize(): Size? {
+        val size = magnifierOrigin ?: return null
+        return with(density) {
+            Size(
+                maxOf(size.width, 2.dp.toPx()).toDp().value,
+                maxOf(size.height, 1.dp.toPx()).toDp().value,
+            )
+        }
+    }
+
+    /** UIKit refuses to open a loupe whose selection widget is taller than the lens body. */
+    fun allowsMagnifier(): Boolean {
+        val size = magnifierOrigin ?: return false
+        return with(density) { size.height.toDp() } <= GlasmioLoupeBodyHeight
+    }
+
+    /** Clear the retained point once the dismissal spring has landed. */
+    fun clearRetainedMagnifier() {
+        if (magnifierSource == null) magnifierRetainedSource = null
     }
 
     fun dragHandle(start: Boolean, screen: Offset) {
@@ -582,7 +618,7 @@ internal class GlasmioTextEditor(
         menuJob = null
         toolbar.hide()
     }
-    fun dismiss() { dismissMenu(); touching = false; pointerScreen = null; magnifierSource = null; showHandles = false; draggingHandle = null; fixedHandleOffset = null }
+    fun dismiss() { dismissMenu(); touching = false; pointerScreen = null; magnifierSource = null; magnifierRetainedSource = null; showHandles = false; draggingHandle = null; fixedHandleOffset = null }
 
     fun showMenuAfterGesture(fromHandle: Boolean = false) {
         val generation = interactionGeneration
@@ -660,7 +696,10 @@ internal fun GlasmioTextEditingOverlay(host: GlasmioTextEditingHost, backdrop: B
         }
     }
 
-    val source = editor.magnifierSource ?: return
+    val liveSource = editor.magnifierSource
+    val source = liveSource ?: editor.magnifierRetainedSource ?: return
+    val originSize = editor.magnifierOriginSize() ?: return
+    if (!editor.allowsMagnifier()) return
     val combined = remember(backdrop, host.recording) {
         object : Backdrop {
             override val isCoordinatesDependent: Boolean
@@ -671,7 +710,16 @@ internal fun GlasmioTextEditingOverlay(host: GlasmioTextEditingHost, backdrop: B
             }
         }
     }
-    GlasmioMagnifier(true, root.screenToLocal(source), combined)
+    GlasmioMagnifier(
+        visible = liveSource != null,
+        sourcePosition = root.screenToLocal(source),
+        backdrop = combined,
+        originSize = DpSize(originSize.width.dp, originSize.height.dp),
+        // A caret and a selection widget replay the opening passes when they swap mid-gesture.
+        identity = editor.value.selection.collapsed,
+        tracking = liveSource != null,
+        onDismissed = editor::clearRetainedMagnifier,
+    )
 }
 
 @Composable
