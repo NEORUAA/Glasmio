@@ -564,6 +564,7 @@ fun Modifier.navigationGlassBackground(
     opticalHighlightBoost: Float = 0f,
     material: NavigationGlassMaterial? = null,
     materialTint: Color? = null,
+    preserveBackdropColors: Boolean = false,
 ): Modifier {
     return this.then(
         if (dropShadow == null) {
@@ -592,7 +593,7 @@ fun Modifier.navigationGlassBackground(
         shape = shape,
         effects = {
             if (sampleBackdrop && appearance.usesBackdrop) {
-                vibrancy()
+                if (!preserveBackdropColors) vibrancy()
                 blur(blurRadius.toPx())
                 if (appearance.usesRefraction && refractionHeight > 0.dp && refractionAmount > 0.dp) {
                     lens(
@@ -602,7 +603,7 @@ fun Modifier.navigationGlassBackground(
                         chromaticAberration = true,
                     )
                 }
-                if (navigationMaterial && !isDark) liftNavigationShadows()
+                if (navigationMaterial && !isDark && !preserveBackdropColors) liftNavigationShadows()
             }
         },
         highlight = {
@@ -679,6 +680,8 @@ fun GlassSurface(
     contentAlignment: Alignment = Alignment.Center,
     detailAction: Boolean = false,
     material: NavigationGlassMaterial? = null,
+    frostRadius: Dp? = null,
+    preserveBackdropColors: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
@@ -862,7 +865,8 @@ fun GlassSurface(
                 opticalHighlightBoost = opticalHighlightBoost,
                 material = material,
                 materialTint = navigationSurfaceColor.takeIf { emphasis == GlassEmphasis.Regular },
-                blurRadius = material?.frostRadius ?: 2.dp,
+                blurRadius = frostRadius ?: material?.frostRadius ?: 2.dp,
+                preserveBackdropColors = preserveBackdropColors,
             )
         }
     }

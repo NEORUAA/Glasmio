@@ -11,7 +11,8 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Glass | `GlasmioBackdropHost`, `GlasmioBackdropProvider`, `GlassSurface`, `GlassSurfaceStyle`, `GlassEmphasis`, `rememberCrossWindowBackdrop`, `rememberSharedGlassBackdrop`, `rememberRasterizedBackdrop` |
 | Buttons | `GlasmioButton`, `GlasmioIconButton`, `GlasmioButtonSize`, `GlasmioButtonDefaults` |
 | Controls | `GlasmioSwitch`, `GlasmioSlider`, `GlasmioStepper`, `GlasmioSegmentedControl`, `GlasmioScrollableTabRow`, `GlasmioColorPicker` |
-| Input | `GlasmioTextField`, `GlasmioSearchBar`, `GlasmioSearchToolbar` |
+| Input | `GlasmioTextField`, `GlasmioSearchBar`, `GlasmioSearchToolbar`, `GlasmioEditableText` |
+| Text editing | `GlasmioTextSelectionHost`, `GlasmioTextSelectionMenu`, `GlasmioTextSelectionLabels`, `GlasmioMagnifier` |
 | Lists | `GlasmioCard`, `GlasmioGroupedList`, `GlasmioListRow`, `GlasmioSectionTitle`, `GlasmioGroupedTableFooter`, `GlasmioListValuePill`, `GlasmioListSwipeActions`, `GlasmioListSwipeAction`, `GlasmioSwipeActionStyle`, `GlasmioReorderableGroup` |
 | Toolbars | `GlasmioTopBar`, `GlasmioTopBarStyle`, `GlasmioToolbarActionGroup`, `GlasmioToolbarActionStyle`, `GlasmioBottomToolbar`, `GlasmioSheetTopToolbar`, `GlasmioSheetToolbarButton`, `GlasmioSheetButton` |
 | Navigation | `GlasmioNavigationBar`, `GlasmioTabItem` |
@@ -102,6 +103,26 @@ fun ControlsScreen() = ExampleHost {
 
 Supply localized descriptions for icon-only actions and Stepper controls. Use `enabled = false` for disabled controls. Slider values and range endpoints must be finite, with an increasing range.
 
+## Text editing
+
+Wrap each window's content in `GlasmioTextSelectionHost` to use the compact Edit Menu and its expanded actions panel. The host forwards Foundation's actual clipboard and selection callbacks. `additionalItems` accepts application-owned editing actions and cascading submenus. `GlasmioAlertDialog` installs its own window-local host when the activity uses one.
+
+```kotlin
+@Composable
+fun EditingScreen() = ExampleHost {
+    var value by remember { mutableStateOf(TextFieldValue("Hello World")) }
+    GlasmioTextSelectionHost {
+        Box(Modifier.fillMaxSize().safeDrawingPadding().padding(24.dp)) {
+            GlasmioEditableText(value, { value = it }, Modifier.fillMaxWidth())
+        }
+    }
+}
+```
+
+Single-line `GlasmioEditableText`, text fields, search fields and Alert fields use the Clear magnifier and 16 dp selection lollipops. Both the lens and editing menu choose an available side within status-bar, navigation-bar and IME insets, and follow position changes with damped springs. Expanded editing menus stay within the same viewport and scroll when space is limited. Foundation continues to own text input, selection recognition, transformations and IME sessions. Multiline fields retain native selection chrome and scrolling; the host still supplies their editing menu. Without a host, fields use their normal Foundation behavior.
+
+`GlasmioMagnifier` can also be used independently in a bounded overlay. Pass its source position and viewport bounds in physical pixels relative to that overlay. Its backdrop must exclude the lens itself. `backgroundColor` fills sampling beyond the source window near its edges. The lens uses Clear tint, edge and shadow layers with a local zero-frost override and preserved source colors, retaining AndroidLiquidGlass's 8/24 dp lens without navigation vibrancy or shadow lifting. `GlassSurface.frostRadius` and `preserveBackdropColors` affect only the specified surface.
+
 ## Lists, insets, and preferences
 
 `GlasmioPinnedListPage` owns a collapsing large title and its fixed toolbar. Its content uses `LazyListScope`, so item keys and lazy content remain under application control. The page owns its top inset; `bottomPadding` can include the space occupied by an application bottom bar.
@@ -147,6 +168,8 @@ separators attached to fixed list slots while the grabbed row moves.
 ## Menus
 
 The menu owns its popup lifecycle while the application owns `expanded`. Render actions through `GlasmioMenuItem` and invoke the supplied `close` callback after choosing an action. Nested actions can use `GlasmioCascadingMenuItem.children`.
+
+`GlasmioCascadingMenu.itemHeight` and `separatorHeight` select row and section geometry without changing the default 44/12 dp menu. The Edit Menu uses Apple's 40/21 dp variant, with 60 dp for the explicit two-line Paste and Match Style row. `viewportBounds` constrains expanded menus in window pixels; their contents scroll when that viewport is shorter than the menu.
 
 Pop-up Buttons and Cascading Menus use the native source-preview morph by default.
 Standalone sources transfer their own foreground; toolbar sources retain the complete

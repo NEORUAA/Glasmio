@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.ui
 
+import kotlin.math.roundToInt
+
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.icons.*
@@ -412,6 +414,7 @@ fun GlasmioMenu(
     overlayContent: @Composable BoxScope.(() -> Float) -> Unit = {},
     anchor: @Composable (onClick: () -> Unit) -> Unit,
     morphFromAnchor: Boolean = true,
+    viewportBounds: Rect? = null,
     content: @Composable ColumnScope.(LayerBackdrop, close: () -> Unit) -> Unit,
 ) {
     var anchorSize by remember { mutableStateOf(IntSize.Zero) }
@@ -597,7 +600,10 @@ fun GlasmioMenu(
         }
         if (popupAlive && (anchorSize != IntSize.Zero || externalAnchorBounds != null)) {
             val density = androidx.compose.ui.platform.LocalDensity.current
-            val menuHeight = heightOverride ?: (20.dp + 44.dp * itemCount)
+            val requestedHeight = heightOverride ?: (20.dp + 44.dp * itemCount)
+            val menuHeight = viewportBounds?.let {
+                minOf(requestedHeight, with(density) { it.height.coerceAtLeast(1f).toDp() })
+            } ?: requestedHeight
             val targetMenuHeightPx = with(density) { menuHeight.roundToPx() }
             val targetMenuWidthPx = with(density) { menuWidth.roundToPx() }
             val horizontalInsetPx = with(density) { 12.dp.roundToPx() }
@@ -645,7 +651,7 @@ fun GlasmioMenu(
             var resolvedFullScreenMenuOffset by remember(positionProvider, positionAnchorBounds, resolvedFullScreen) {
                 mutableStateOf<IntOffset?>(null)
             }
-            val popupPositionProvider = remember(positionProvider, positionAnchorBounds, resolvedFullScreen) {
+            val popupPositionProvider = remember(positionProvider, positionAnchorBounds, resolvedFullScreen, viewportBounds) {
                 object : PopupPositionProvider {
                     override fun calculatePosition(
                         anchorBounds: IntRect,
@@ -653,14 +659,20 @@ fun GlasmioMenu(
                         layoutDirection: LayoutDirection,
                         popupContentSize: IntSize,
                     ): IntOffset {
+                        val requestedAnchor = positionAnchorBounds?.let {
+                            IntRect(it.left.toInt(), it.top.toInt(), it.right.toInt(), it.bottom.toInt())
+                        } ?: anchorBounds
+                        val viewport = viewportBounds?.let {
+                            IntRect(it.left.roundToInt(), it.top.roundToInt(), it.right.roundToInt(), it.bottom.roundToInt())
+                        }
+                        val origin = viewport?.topLeft ?: IntOffset.Zero
+                        val available = viewport?.let { IntSize(it.width.coerceAtLeast(1), it.height.coerceAtLeast(1)) } ?: windowSize
                         val menuOffset = positionProvider.calculatePosition(
-                            positionAnchorBounds?.let {
-                                IntRect(it.left.toInt(), it.top.toInt(), it.right.toInt(), it.bottom.toInt())
-                            } ?: anchorBounds,
-                            windowSize,
+                            requestedAnchor.translate(-origin),
+                            available,
                             layoutDirection,
                             popupContentSize,
-                        )
+                        ) + origin
                         return if (resolvedFullScreen) {
                             resolvedFullScreenMenuOffset = menuOffset
                             IntOffset.Zero
@@ -714,7 +726,7 @@ fun GlasmioMenu(
                             shadowAlpha = if (usesMorph) shadowAlpha.value else 1f,
                             opensAbove = opensAbove,
                             itemCount = itemCount,
-                            heightOverride = heightOverride,
+                            heightOverride = menuHeight,
                             menuScale = menuScale,
                             exportChildBackdrop = exportChildBackdrop,
                             initialTransformOrigin = if (expandFromAnchor != null) {
@@ -814,6 +826,7 @@ fun <T> GlasmioPopUpButton(
     }
 }
 
+/** [rowHeight] overrides the complete row height, including subtitle or explicit title lines. */
 @Composable
 fun GlasmioMenuItem(
     title: String,
@@ -826,6 +839,7 @@ fun GlasmioMenuItem(
     iconTint: Color? = null,
     fontWeight: FontWeight? = null,
     subtitle: String? = null,
+    rowHeight: androidx.compose.ui.unit.Dp? = null,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
@@ -834,7 +848,7 @@ fun GlasmioMenuItem(
     Row(
         modifier
             .fillMaxWidth()
-            .height(if (subtitle == null) 44.dp else 56.dp)
+            .height(rowHeight ?: menuItemHeight(44.dp, title, subtitle))
             .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
             .semantics(mergeDescendants = true) {
                 if (!enabled) disabled()
@@ -866,7 +880,7 @@ fun GlasmioMenuItem(
         Column(Modifier.weight(1f)) {
             Text(
                 title, style = IosTypography.body,
-                fontWeight = fontWeight, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                fontWeight = fontWeight, maxLines = if ('\n' in title) 2 else 1, overflow = TextOverflow.Ellipsis,
                 color = if (destructive) LocalGlassColors.current.destructive else LocalGlassColors.current.content,
             )
             subtitle?.let {
@@ -880,4 +894,8 @@ fun GlasmioMenuItem(
         trailing?.invoke()
     }
 }
+
+/** A subtitle and an explicit second title line each keep their own vertical allowance. */
+internal fun menuItemHeight(base: androidx.compose.ui.unit.Dp, title: String, subtitle: String?): androidx.compose.ui.unit.Dp =
+    base + (if (subtitle != null) 12.dp else 0.dp) + (if ('\n' in title) 20.dp else 0.dp)
 

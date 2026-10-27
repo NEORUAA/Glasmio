@@ -348,119 +348,134 @@ private fun SampleNavigation(
     }
     val navigationBackdrop = rememberLayerBackdrop()
     val bottomBackdrop = rememberSharedGlassBackdrop(navigationBackdrop, navigationBackdrop)
-    GlasmioFloatingSearch(
-        active = currentRoute.value == "Search",
-        query = searchQuery,
-        onQueryChange = { searchQuery = it },
-        onSearch = {},
-        onDismiss = navigateBack,
-        placeholder = "Search Components",
-        cancelLabel = "Cancel",
+    val editingValue = rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue("Hello World"))
+    }
+    val editingActions = textEditingDemoActions(editingValue, navigationBackdrop)
+    GlasmioTextSelectionHost(
         backdrop = navigationBackdrop,
-        results = { padding -> SearchResults(searchQuery.text, padding, navigate) },
+        additionalItems = if (currentRoute.value == "Text Editing") editingActions.items else emptyList(),
     ) {
-        Box(Modifier.fillMaxSize().nestedScroll(scrollConnection)) {
-            Box(Modifier.fillMaxSize().glassBackdropSource(navigationBackdrop).trackBackdropPosition(navigationBackdrop)) {
-                NavDisplay(
-                    backStack = backStack,
-                    modifier = Modifier.fillMaxSize(),
-                    onBack = navigateBack,
-                    transitionSpec = {
-                        if (usesRootTabTransition()) rootTabTransition()
-                        else defaultTransitionSpec<String>().invoke(this)
-                    },
-                    popTransitionSpec = {
-                        if (usesRootTabTransition()) rootTabTransition()
-                        else defaultPopTransitionSpec<String>().invoke(this)
-                    },
-                    predictivePopTransitionSpec = { swipeEdge ->
-                        if (usesRootTabTransition()) rootTabTransition()
-                        else defaultPredictivePopTransitionSpec<String>().invoke(this, swipeEdge)
-                    },
-                    transitionEffects = remember(usesMiuixTransitionEffects) {
-                        NavDisplayTransitionEffects(
-                            enableCornerClip = usesMiuixTransitionEffects,
-                            dimAmount = if (usesMiuixTransitionEffects) 0.5f else 0f,
-                            blockInputDuringTransition = false,
-                        )
-                    },
-                    entryProvider = { route ->
-                        NavEntry(key = route, contentKey = route) {
-                            val wallpaper = route in wallpaperRoutes
-                            GlasmioBackdropHost(
-                                modifier = Modifier.fillMaxSize(),
-                                sampledContent = { SampleBackdrop(wallpaper) },
-                                overlayContent = {
-                                    val isTopLevel = route in topLevelRoutes
-                                    val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-                                    val bottomPadding = navigationInset + if (isTopLevel || route == "Search") NavigationBarSurfaceHeight + 8.dp else 0.dp
-                                    val pageBackdrop = rememberLayerBackdrop()
-                                    CompositionLocalProvider(LocalBlurBackdrop provides pageBackdrop) {
-                                        Box(Modifier.fillMaxSize()) {
-                                            Box(Modifier.fillMaxSize().glassBackdropSource(pageBackdrop).trackBackdropPosition(pageBackdrop)) {
-                                                if (route == "Lists") {
-                                                    ListDemo(onBack = navigateBack)
-                                                } else if (route == "Menus") {
-                                                    MenusDemo(bottomPadding, navigateBack, currentDark, currentOnDark)
-                                                } else {
-                                                    val title = when (route) {
-                                                        "Home" -> "Glasmio"
-                                                        "MaterialTab" -> "材质"
-                                                        "SettingsTab" -> "Settings"
-                                                        "About" -> "关于"
-                                                        else -> route
-                                                    }
-                                                    SamplePinnedPage(
-                                                        title = title,
-                                                        bottomPadding = bottomPadding,
-                                                        wallpaper = wallpaper,
-                                                        onBack = if (isTopLevel) null else navigateBack,
-                                                        dark = currentDark,
-                                                        onDark = currentOnDark,
-                                                        listState = rootListStates[route],
-                                                    ) { layout ->
-                                                        when (route) {
-                                                            "Home" -> Catalog(layout, navigate)
-                                                            "MaterialTab", "Materials" -> MaterialsDemo(layout)
-                                                            "Controls" -> ControlsDemo(layout)
-                                                            "Navigation" -> NavigationDemo(layout)
-                                                            "Preferences", "SettingsTab" -> PreferencesDemo(
-                                                                layout, currentDark, currentOnDark, currentReduceTransparency,
-                                                                currentOnReduceTransparency, currentRtl, currentOnRtl,
-                                                                currentPreferenceName, { preferenceName = it },
-                                                                currentPreferenceChoice, { preferenceChoice = it },
-                                                            )
-                                                            "Search" -> SearchLanding(layout, navigate)
-                                                            "Text Styles and Dynamic Type" -> TypographyDemo(layout.listState, layout.padding) {
-                                                                SampleLargeTitle(layout.title, layout.collapseProgress)
+        editingActions.dialog()
+        GlasmioFloatingSearch(
+            active = currentRoute.value == "Search",
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            onSearch = {},
+            onDismiss = navigateBack,
+            placeholder = "Search Components",
+            cancelLabel = "Cancel",
+            backdrop = navigationBackdrop,
+            results = { padding -> SearchResults(searchQuery.text, padding, navigate) },
+        ) {
+            Box(Modifier.fillMaxSize().nestedScroll(scrollConnection)) {
+                Box(Modifier.fillMaxSize().glassBackdropSource(navigationBackdrop).trackBackdropPosition(navigationBackdrop)) {
+                    NavDisplay(
+                        backStack = backStack,
+                        modifier = Modifier.fillMaxSize(),
+                        onBack = navigateBack,
+                        transitionSpec = {
+                            if (usesRootTabTransition()) rootTabTransition()
+                            else defaultTransitionSpec<String>().invoke(this)
+                        },
+                        popTransitionSpec = {
+                            if (usesRootTabTransition()) rootTabTransition()
+                            else defaultPopTransitionSpec<String>().invoke(this)
+                        },
+                        predictivePopTransitionSpec = { swipeEdge ->
+                            if (usesRootTabTransition()) rootTabTransition()
+                            else defaultPredictivePopTransitionSpec<String>().invoke(this, swipeEdge)
+                        },
+                        transitionEffects = remember(usesMiuixTransitionEffects) {
+                            NavDisplayTransitionEffects(
+                                enableCornerClip = usesMiuixTransitionEffects,
+                                dimAmount = if (usesMiuixTransitionEffects) 0.5f else 0f,
+                                blockInputDuringTransition = false,
+                            )
+                        },
+                        entryProvider = { route ->
+                            NavEntry(key = route, contentKey = route) {
+                                val wallpaper = route in wallpaperRoutes
+                                GlasmioBackdropHost(
+                                    modifier = Modifier.fillMaxSize(),
+                                    sampledContent = { SampleBackdrop(wallpaper) },
+                                    overlayContent = {
+                                        val isTopLevel = route in topLevelRoutes
+                                        val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+                                        val bottomPadding = navigationInset + if (isTopLevel || route == "Search") NavigationBarSurfaceHeight + 8.dp else 0.dp
+                                        val pageBackdrop = rememberLayerBackdrop()
+                                        CompositionLocalProvider(LocalBlurBackdrop provides pageBackdrop) {
+                                            Box(Modifier.fillMaxSize()) {
+                                                Box(Modifier.fillMaxSize().glassBackdropSource(pageBackdrop).trackBackdropPosition(pageBackdrop)) {
+                                                    if (route == "Lists") {
+                                                        ListDemo(onBack = navigateBack)
+                                                    } else if (route == "Menus") {
+                                                        MenusDemo(bottomPadding, navigateBack, currentDark, currentOnDark)
+                                                    } else {
+                                                        val title = when (route) {
+                                                            "Home" -> "Glasmio"
+                                                            "MaterialTab" -> "材质"
+                                                            "SettingsTab" -> "Settings"
+                                                            "About" -> "关于"
+                                                            else -> route
+                                                        }
+                                                        SamplePinnedPage(
+                                                            title = title,
+                                                            bottomPadding = bottomPadding,
+                                                            wallpaper = wallpaper,
+                                                            onBack = if (isTopLevel) null else navigateBack,
+                                                            dark = currentDark,
+                                                            onDark = currentOnDark,
+                                                            listState = rootListStates[route],
+                                                            alwaysCompact = route == "Text Editing",
+                                                            backgroundColor = if (route == "Text Editing") {
+                                                                if (LocalGlassColors.current.isDark) Color.Black else Color.White
+                                                            } else LocalGlassColors.current.groupedBackground,
+                                                        ) { layout ->
+                                                            when (route) {
+                                                                "Home" -> Catalog(layout, navigate)
+                                                                "MaterialTab", "Materials" -> MaterialsDemo(layout)
+                                                                "Controls" -> ControlsDemo(layout)
+                                                                "Navigation" -> NavigationDemo(layout)
+                                                                "Preferences", "SettingsTab" -> PreferencesDemo(
+                                                                    layout, currentDark, currentOnDark, currentReduceTransparency,
+                                                                    currentOnReduceTransparency, currentRtl, currentOnRtl,
+                                                                    currentPreferenceName, { preferenceName = it },
+                                                                    currentPreferenceChoice, { preferenceChoice = it },
+                                                                )
+                                                                "Search" -> SearchLanding(layout, navigate)
+                                                                "Text Styles and Dynamic Type" -> TypographyDemo(layout.listState, layout.padding) {
+                                                                    SampleLargeTitle(layout.title, layout.collapseProgress)
+                                                                }
+                                                                "Text Editing" -> TextEditingDemo(editingValue, layout.padding)
+                                                                "Sheets" -> SheetsDemo(layout)
+                                                                "About" -> AboutDemo(layout)
                                                             }
-                                                            "Sheets" -> SheetsDemo(layout)
-                                                            "About" -> AboutDemo(layout)
                                                         }
                                                     }
                                                 }
-                                            }
 
+                                            }
                                         }
-                                    }
-                                },
-                            )
-                        }
-                    },
-                )
-            }
-            val activeRoute = currentRoute.value
-            if (activeRoute != null && activeRoute in topLevelRoutes) {
-                GlasmioBackdropProvider(bottomBackdrop) {
-                    SampleBottomBar(
-                        selected = activeRoute,
-                        onSelected = selectTab,
-                        onSearch = { navigate("Search") },
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                        backdrop = bottomBackdrop,
-                        compactProgress = compactProgress,
-                        onExpand = { navigationBarVisible = true },
+                                    },
+                                )
+                            }
+                        },
                     )
+                }
+                val activeRoute = currentRoute.value
+                if (activeRoute != null && activeRoute in topLevelRoutes) {
+                    GlasmioBackdropProvider(bottomBackdrop) {
+                        SampleBottomBar(
+                            selected = activeRoute,
+                            onSelected = selectTab,
+                            onSearch = { navigate("Search") },
+                            modifier = Modifier.align(Alignment.BottomCenter),
+                            backdrop = bottomBackdrop,
+                            compactProgress = compactProgress,
+                            onExpand = { navigationBarVisible = true },
+                        )
+                    }
                 }
             }
         }
@@ -506,6 +521,8 @@ private fun SamplePinnedPage(
     dark: Boolean,
     onDark: (Boolean) -> Unit,
     listState: LazyListState? = null,
+    alwaysCompact: Boolean = false,
+    backgroundColor: Color = LocalGlassColors.current.groupedBackground,
     actions: @Composable RowScope.() -> Unit = {},
     content: @Composable (SamplePageLayout) -> Unit,
 ) {
@@ -521,8 +538,8 @@ private fun SamplePinnedPage(
         title = title,
         bottomPadding = bottomPadding,
         onNavigateBack = onBack,
-        collapseProgress = progress,
-        backgroundColor = LocalGlassColors.current.groupedBackground,
+        collapseProgress = if (alwaysCompact) 1f else progress,
+        backgroundColor = backgroundColor,
         actions = {
             GlasmioIconButton(onClick = { onDark(!dark) }) {
                 SfIcon(if (dark) "sun.max" else "moon", if (dark) "Light appearance" else "Dark appearance")
@@ -641,6 +658,7 @@ private val catalog = listOf(
     "Menus" to "ellipsis",
     "Sheets" to "inset.filled.bottomthird.rectangle",
     "Text Styles and Dynamic Type" to "textformat.size",
+    "Text Editing" to "character.cursor.ibeam",
 )
 
 @Composable

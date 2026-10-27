@@ -11,6 +11,8 @@ The [Apple iOS and iPadOS 27 design library](https://www.figma.com/design/AmwPTD
 | Text Field | `GlasmioTextField` | `553:23061` | 52 dp row, 16 dp horizontal inset |
 | Pop-up Button | `GlasmioPopUpButton` | `410:50568`, `410:50570` | 44 dp height, 18 sp Semibold 590 with 18 sp line height, 3 dp gap, 14 × 18 dp Medium symbol |
 | Menu container | `GlasmioContextMenu` | `I5707:51032;10411:18581` | 238 dp width, 34 dp corners with 0.6 smoothing at reference heights 437/532/578 dp |
+| Edit Menu | `GlasmioTextSelectionMenu` | `5713:47505`, `12740:24185` | 44 dp compact toolbar, 36 dp More button, 56 dp expanded shortcut row; 24 dp from the 17 sp/20 dp text frame to the toolbar |
+| Text Selection | `GlasmioEditableText` | `I12740:24161;5711:35407`, `I12740:24161;5711:35410` | 16 dp lollipop, 2 dp stem, 8 dp center offset outside the selected line |
 | Alert | `GlasmioAlertDialog` | `65:57149`, `12616:942` | 300 dp panel, 34 dp continuous corners, 14 dp outer inset, 19 dp field-to-action gap |
 | List row | `GlasmioListRow` | `550:50627`, `550:50515` | 52 dp single-line or 68 dp subtitle row, inset separators, 17 sp detail |
 | Section Title | `GlasmioSectionTitle` | `50:56535` | 39 dp minimum height, 16 dp horizontal inset, 9 dp bottom inset |

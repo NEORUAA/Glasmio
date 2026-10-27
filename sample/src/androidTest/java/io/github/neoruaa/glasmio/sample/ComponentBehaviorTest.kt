@@ -1,12 +1,17 @@
 package io.github.neoruaa.glasmio.sample
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -21,6 +26,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -50,14 +56,17 @@ class ComponentBehaviorTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
 
     private fun content(body: @Composable () -> Unit) {
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         rule.setContent {
             GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
                 GlasmioBackdropHost(
                     modifier = Modifier.fillMaxSize(),
                     sampledContent = { Box(Modifier.fillMaxSize().background(Color.White)) },
                     overlayContent = {
-                        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                            body()
+                        GlasmioTextSelectionHost {
+                            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                body()
+                            }
                         }
                     },
                 )
@@ -66,6 +75,204 @@ class ComponentBehaviorTest {
         // Dialog fixtures can own focus before the activity's window does.
         rule.waitUntil(10_000) {
             rule.onAllNodes(isRoot()).fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+        }
+    }
+
+    private fun editingContent(
+        additionalItems: List<GlasmioCascadingMenuItem> = emptyList(),
+        body: @Composable () -> Unit,
+    ) {
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color.White)) },
+                    overlayContent = {
+                        GlasmioTextSelectionHost(additionalItems = additionalItems) {
+                            Column(
+                                Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 160.dp),
+                                verticalArrangement = Arrangement.spacedBy(48.dp),
+                            ) { body() }
+                        }
+                    },
+                )
+            }
+        }
+        rule.waitUntil(10_000) { rule.activity.hasWindowFocus() }
+    }
+
+    private fun editingAction(english: String, resource: Int): SemanticsMatcher =
+        (hasText(english) or hasText(rule.activity.getString(resource))) and hasClickAction()
+
+    private fun longPressWord(tag: String, character: Int = 1): TextLayoutResult {
+        val field = rule.onNodeWithTag(tag)
+        val layouts = mutableListOf<TextLayoutResult>()
+        field.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val point = layouts.single().getBoundingBox(character).center
+        field.performTouchInput { longClick(point) }
+        val copy = editingAction("Copy", android.R.string.copy)
+        rule.waitUntil(10_000) { rule.onAllNodes(copy).fetchSemanticsNodes().isNotEmpty() }
+        return layouts.single()
+    }
+
+    @Test fun selectionMenuCopiesCutsAndPastesThroughTheRealClipboard() {
+        var source by mutableStateOf(TextFieldValue("Hello World"))
+        var destination by mutableStateOf(TextFieldValue("Replace me"))
+        val clipboard = rule.activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        var previousClip: ClipData? = null
+        rule.runOnIdle {
+            previousClip = clipboard.primaryClip
+            clipboard.setPrimaryClip(ClipData.newPlainText("Editing fixture", "Seed"))
+        }
+        try {
+            editingContent {
+                GlasmioEditableText(source, { source = it }, Modifier.fillMaxWidth().testTag("copy-source"))
+                GlasmioEditableText(destination, { destination = it }, Modifier.fillMaxWidth().testTag("paste-target"))
+            }
+            val sourceLayout = longPressWord("copy-source")
+            rule.runOnIdle { assertEquals(TextRange(0, 5), source.selection) }
+            val sourceBounds = rule.onNodeWithTag("copy-source").fetchSemanticsNode().boundsInRoot
+            val cutBounds = rule.onNode(editingAction("Cut", android.R.string.cut)).fetchSemanticsNode().boundsInRoot
+            assertEquals(sourceBounds.left + with(rule.density) { 20.dp.toPx() }, cutBounds.left, 1f)
+            assertEquals(sourceBounds.top + sourceLayout.getCursorRect(0).bottom + with(rule.density) { 24.dp.toPx() }, cutBounds.top, 1f)
+            rule.onNode(editingAction("Copy", android.R.string.copy)).performClick()
+            rule.runOnIdle { assertEquals("Hello", clipboard.primaryClip?.getItemAt(0)?.text?.toString()) }
+
+            longPressWord("copy-source")
+            rule.onNode(editingAction("Cut", android.R.string.cut)).performClick()
+            rule.waitUntil(10_000) { source.text == " World" }
+            rule.runOnIdle { assertEquals("Hello", clipboard.primaryClip?.getItemAt(0)?.text?.toString()) }
+
+            longPressWord("paste-target")
+            rule.onNode(editingAction("Paste", android.R.string.paste)).performClick()
+            rule.waitUntil(10_000) { destination.text == "Hello me" }
+            rule.runOnIdle {
+                assertEquals(TextRange(5), destination.selection)
+                assertEquals(" World", source.text)
+            }
+        } finally {
+            rule.runOnIdle {
+                previousClip?.let(clipboard::setPrimaryClip) ?: clipboard.clearPrimaryClip()
+            }
+        }
+    }
+
+    @Test fun expandedSelectionMenuKeepsSelectAllHandlesAndRunsItsEditingCallback() {
+        var value by mutableStateOf(TextFieldValue("Hello World"))
+        var replacements = 0
+        val replacement = GlasmioCascadingMenuItem("Replace selection", onClick = {
+            val range = value.selection
+            value = TextFieldValue(value.text.replaceRange(range.min, range.max, "Welcome"), TextRange(range.min + 7))
+            replacements++
+        })
+        editingContent(additionalItems = listOf(replacement)) {
+            GlasmioEditableText(value, { value = it }, Modifier.fillMaxWidth().testTag("expanded-editor"))
+        }
+        longPressWord("expanded-editor")
+        rule.onNodeWithContentDescription("More").performClick()
+        val selectAll = editingAction("Select All", android.R.string.selectAll)
+        rule.onNode(selectAll).assertIsDisplayed().performClick()
+        rule.waitUntil(10_000) {
+            value.selection.min == 0 && value.selection.max == value.text.length &&
+                rule.onAllNodesWithText("Replace selection").fetchSemanticsNodes().isEmpty()
+        }
+        rule.onNodeWithContentDescription("Selection start").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Selection end").assertIsDisplayed()
+        rule.onNodeWithContentDescription("More").performClick()
+        rule.onNodeWithText("Replace selection").assertIsDisplayed().performClick()
+        rule.waitUntil(10_000) { value.text == "Welcome" }
+        rule.runOnIdle { assertEquals(1, replacements) }
+    }
+
+    @Test fun selectionHandlesChangeTheRealRangeAndSurviveCrossingTheOtherEndpoint() {
+        var value by mutableStateOf(TextFieldValue("Hello World"))
+        editingContent {
+            GlasmioEditableText(value, { value = it }, Modifier.fillMaxWidth().testTag("handle-editor"))
+        }
+        longPressWord("handle-editor")
+        val layouts = mutableListOf<TextLayoutResult>()
+        rule.onNodeWithTag("handle-editor").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        val text = layouts.single()
+        val startX = text.getCursorRect(0).left
+        val endX = text.getCursorRect(5).left
+        val fullX = text.getCursorRect(11).left
+        val endHandle = rule.onNodeWithContentDescription("Selection end").assertIsDisplayed()
+        // Cross the start endpoint, then move out again in the same real pointer stream.
+        endHandle.performTouchInput {
+            down(center)
+            moveBy(Offset(startX - endX, 0f), delayMillis = 160)
+            moveBy(Offset(fullX - startX, 0f), delayMillis = 240)
+            up()
+        }
+        rule.waitUntil(10_000) { value.selection.min == 0 && value.selection.max == 11 }
+        rule.onNodeWithContentDescription("Selection start").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Selection end").assertIsDisplayed()
+        rule.runOnIdle { assertEquals("Hello World", value.text) }
+    }
+
+    @Test fun selectionMenuFitsBelowTopAndAboveBottomSafeDrawingEditors() {
+        var upper by mutableStateOf(TextFieldValue("Upper edge"))
+        var lower by mutableStateOf(TextFieldValue("Lower edge"))
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color.White)) },
+                    overlayContent = {
+                        GlasmioTextSelectionHost {
+                            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                                Box(Modifier.fillMaxSize().testTag("safe-editor-viewport")) {
+                                    GlasmioEditableText(
+                                        upper, { upper = it },
+                                        Modifier.align(Alignment.TopStart).fillMaxWidth().testTag("upper-edge-editor"),
+                                        keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
+                                    )
+                                    GlasmioEditableText(
+                                        lower, { lower = it },
+                                        Modifier.align(Alignment.BottomStart).fillMaxWidth().testTag("lower-edge-editor"),
+                                        keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
+                                    )
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        rule.waitUntil(10_000) { rule.activity.hasWindowFocus() }
+        val clipboard = rule.activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        var previousClip: ClipData? = null
+        rule.runOnIdle { previousClip = clipboard.primaryClip }
+        try {
+            val copy = editingAction("Copy", android.R.string.copy)
+            longPressWord("upper-edge-editor")
+            val upperBounds = rule.onNodeWithTag("upper-edge-editor").fetchSemanticsNode().boundsInRoot
+            val upperCopy = rule.onNode(copy).assertIsDisplayed().assertHasClickAction()
+            assertTrue("The top-edge selection menu must fit below its editor",
+                upperCopy.fetchSemanticsNode().boundsInRoot.top >= upperBounds.bottom - 1f)
+            rule.runOnIdle { assertEquals(TextRange(0, 5), upper.selection) }
+            upperCopy.performClick()
+            rule.runOnIdle { assertEquals("Upper", clipboard.primaryClip?.getItemAt(0)?.text?.toString()) }
+
+            longPressWord("lower-edge-editor")
+            val lowerBounds = rule.onNodeWithTag("lower-edge-editor").fetchSemanticsNode().boundsInRoot
+            val viewport = rule.onNodeWithTag("safe-editor-viewport").fetchSemanticsNode().boundsInRoot
+            val lowerCopy = rule.onNode(copy).assertIsDisplayed().assertHasClickAction()
+            val menuBounds = lowerCopy.fetchSemanticsNode().boundsInRoot
+            assertTrue("The bottom-edge selection menu must fit above its editor", menuBounds.bottom <= lowerBounds.top + 1f)
+            assertTrue("The copy action must remain inside the safe drawing viewport",
+                menuBounds.top >= viewport.top - 1f && menuBounds.bottom <= viewport.bottom + 1f)
+            rule.runOnIdle { assertEquals(TextRange(0, 5), lower.selection) }
+            lowerCopy.performClick()
+            rule.runOnIdle {
+                assertEquals("Lower", clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+                assertEquals("Upper edge", upper.text)
+                assertEquals("Lower edge", lower.text)
+            }
+        } finally {
+            rule.runOnIdle { previousClip?.let(clipboard::setPrimaryClip) ?: clipboard.clearPrimaryClip() }
         }
     }
 

@@ -63,6 +63,53 @@ class NavigationRenderingTest {
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
 
     @Test
+    fun clearLensPreservesDarkSourceContrastWithoutChangingNavigationDefaults() {
+        compose.setContent {
+            GlasmioTheme(isDark = false) {
+                io.github.neoruaa.glasmio.glass.GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color.Black)) },
+                    overlayContent = {
+                        Row(Modifier.padding(24.dp)) {
+                            listOf(false, true).forEach { preserve ->
+                                io.github.neoruaa.glasmio.glass.GlassSurface(
+                                    modifier = Modifier.size(128.dp, 96.dp).testTag(if (preserve) "clear-original-source" else "clear-navigation-source"),
+                                    material = io.github.neoruaa.glasmio.glass.NavigationGlassMaterial.Clear,
+                                    frostRadius = 0.dp,
+                                    preserveBackdropColors = preserve,
+                                    refractionHeight = 8.dp,
+                                    refractionAmount = 24.dp,
+                                ) {}
+                                Spacer(Modifier.width(12.dp))
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        val original = compose.onNodeWithTag("clear-original-source").captureToImage().toPixelMap()
+        val navigation = compose.onNodeWithTag("clear-navigation-source").captureToImage().toPixelMap()
+        val dark = original[original.width / 2, original.height / 2]
+        val lifted = navigation[navigation.width / 2, navigation.height / 2]
+        assertTrue("The magnifier must retain dark source contrast", dark.red < 0.2f)
+        assertTrue("Existing navigation still keeps its calibrated shadow lift", lifted.red > dark.red + 0.15f)
+    }
+
+    @Test
+    fun editingOverlaysChooseTheAvailableSideWithinSystemInsets() {
+        val safe = Rect(0f, 32f, 402f, 800f)
+        // A lens near the status bar goes below, then returns above in open space.
+        assertEquals(164f, editingOverlayTop(Rect(20f, 140f, 30f, 140f), safe, 96f, 24f, true), 0f)
+        assertEquals(280f, editingOverlayTop(Rect(20f, 400f, 30f, 400f), safe, 96f, 24f, true), 0f)
+        // A text menu near the navigation bar or keyboard goes above the selected line.
+        assertEquals(684f, editingOverlayTop(Rect(20f, 740f, 100f, 762f), safe, 44f, 12f, false), 0f)
+        val keyboardSafe = Rect(0f, 32f, 402f, 450f)
+        assertEquals(324f, editingOverlayTop(Rect(20f, 380f, 100f, 402f), keyboardSafe, 44f, 12f, false), 0f)
+        // A constrained viewport chooses the larger side and clamps its final bounds.
+        assertEquals(32f, editingOverlayTop(Rect(20f, 90f, 100f, 112f), Rect(0f, 32f, 402f, 150f), 96f, 12f, false), 0f)
+    }
+
+    @Test
     fun opaqueLensSourceTintPreservesSelectedTabPixelsWithoutInnerFilters() {
         val progress = mutableFloatStateOf(0f)
         val press = mutableFloatStateOf(0f)

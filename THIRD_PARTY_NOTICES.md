@@ -4,7 +4,7 @@ Glasmio was extracted from the reusable UI implementation in [MeiloX](https://gi
 
 | Project | Use | License |
 | --- | --- | --- |
-| [AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass), Kyant and contributors | Adapted refraction math and interaction utilities, including notices retained in `GlassMorphRenderer`, `NavigationContactRefraction`, and `DragGestureInspector` | Apache-2.0 |
+| [AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass), Kyant and contributors | Adapted refraction math, interaction utilities, and the `MagnifierContent` optics in `GlasmioMagnifier`, including notices retained in `GlassMorphRenderer`, `NavigationContactRefraction`, `DragGestureInspector`, and `IosMagnifier` | Apache-2.0 |
 | [Backdrop / AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass), Kyant and contributors | Backdrop recording and optical effects | Apache-2.0 |
 | [Capsule](https://github.com/Kyant0/Capsule), Kyant and contributors | Continuous rounded geometry | Apache-2.0 |
 | [Shapes](https://github.com/Kyant0/Shapes), Kyant and contributors | Capsule outlines and shape utilities | Apache-2.0 |
