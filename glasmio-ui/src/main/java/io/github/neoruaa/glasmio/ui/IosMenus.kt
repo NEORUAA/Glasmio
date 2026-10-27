@@ -37,10 +37,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -228,6 +230,14 @@ fun GlasmioContextMenu(
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     if (!visible) return
+    val currentContent by rememberUpdatedState(content)
+    // Move the existing content from its measurement host into the morph renderer without
+    // restarting state or effects when the target geometry becomes available.
+    val retainedContent = remember {
+        movableContentOf<ColumnScope, LayerBackdrop> { scope, childBackdrop ->
+            currentContent(scope, childBackdrop)
+        }
+    }
     val animationScope = rememberCoroutineScope()
     val interactiveHighlight = remember(animationScope) {
         InteractiveHighlight(animationScope = animationScope)
@@ -358,7 +368,7 @@ fun GlasmioContextMenu(
                         menuScale = menuScale,
                         transformOrigin = startOrigin,
                         highlight = interactiveHighlight,
-                        content = content,
+                        content = { childBackdrop -> retainedContent(this, childBackdrop) },
                     )
                 } else Column(
                     Modifier
@@ -386,7 +396,7 @@ fun GlasmioContextMenu(
                         .padding(10.dp)
                         .graphicsLayer { alpha = contentAlpha.coerceIn(0f, 1f) },
                 ) {
-                    content(childBackdrop)
+                    retainedContent(this, childBackdrop)
                 }
             }
         }
