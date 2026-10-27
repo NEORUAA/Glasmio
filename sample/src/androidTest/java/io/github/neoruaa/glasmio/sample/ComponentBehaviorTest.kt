@@ -173,9 +173,22 @@ class ComponentBehaviorTest {
         rule.onNodeWithContentDescription("More").performClick()
         val selectAll = editingAction("Select All", android.R.string.selectAll)
         rule.onNode(selectAll).assertIsDisplayed().performClick()
-        rule.waitUntil(10_000) {
-            value.selection.min == 0 && value.selection.max == value.text.length &&
-                rule.onAllNodesWithText("Replace selection").fetchSemanticsNodes().isEmpty()
+        try {
+            rule.waitUntil(10_000) {
+                value.selection.min == 0 && value.selection.max == value.text.length &&
+                    rule.onAllNodesWithText("Replace selection").fetchSemanticsNodes().isEmpty()
+            }
+        } catch (error: ComposeTimeoutException) {
+            val current = value
+            val remainingExpandedActions = runCatching {
+                rule.onAllNodesWithText("Replace selection")
+                    .fetchSemanticsNodes(atLeastOneRootRequired = false).size
+            }.getOrNull()
+            throw AssertionError(
+                "Select All did not complete: selection=${current.selection}, " +
+                    "textLength=${current.text.length}, remainingExpandedActions=$remainingExpandedActions",
+                error,
+            )
         }
         rule.onNodeWithContentDescription("Selection start").assertIsDisplayed()
         rule.onNodeWithContentDescription("Selection end").assertIsDisplayed()
