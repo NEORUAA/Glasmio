@@ -1,8 +1,11 @@
 package io.github.neoruaa.glasmio.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateOffsetAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.MutatorMutex
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -37,8 +40,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.remember
@@ -51,6 +55,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -104,6 +110,8 @@ data class GlasmioTextSelectionLabels(
  * the window root and supply selection bounds in screen pixels. Actions keep their
  * original callbacks; the owner decides whether an action ends the selection session.
  * Additional entries may contain real editing actions or cascading submenus.
+ * Keep the menu composed with [expanded] set to false until [onClosed] runs
+ * to let the toolbar finish scaling back into its selection anchor.
  */
 @Composable
 fun GlasmioTextSelectionMenu(
@@ -115,24 +123,45 @@ fun GlasmioTextSelectionMenu(
     labels: GlasmioTextSelectionLabels = GlasmioTextSelectionLabels(),
     backdrop: Backdrop = LocalGlassBackdrop.current,
     onToolbarBoundsChanged: ((Rect) -> Unit)? = null,
+    expanded: Boolean = true,
+    onClosed: () -> Unit = {},
 ) {
-    if (primaryActions.isEmpty() && additionalItems.isEmpty()) return
+    val scale = remember { Animatable(0f) }
+    var visible by remember { mutableStateOf(expanded) }
+    var toolbarSize by remember { mutableStateOf(IntSize.Zero) }
+    val latestOnClosed by rememberUpdatedState(onClosed)
+    val hasActions = primaryActions.isNotEmpty() || additionalItems.isNotEmpty()
+    val measured = toolbarSize != IntSize.Zero
+    LaunchedEffect(expanded, measured, hasActions) {
+        if (expanded && hasActions) {
+            visible = true
+            if (measured) scale.animateTo(1f, TextSelectionToolbarScaleSpec)
+        } else {
+            scale.animateTo(0f, TextSelectionToolbarScaleSpec)
+            visible = false
+            latestOnClosed()
+        }
+    }
+    if (!visible || !hasActions) return
     val density = LocalDensity.current
     val colors = LocalGlassColors.current
     val menuAnchor = rememberGlasmioMenuAnchorState()
     var moreExpanded by remember { mutableStateOf(false) }
     var rootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null, neverEqualPolicy()) }
     var toolbarBounds by remember { mutableStateOf<Rect?>(null) }
-    var toolbarSize by remember { mutableStateOf(IntSize.Zero) }
     val editingHost = LocalGlasmioTextEditingHost.current
     val safeInsets = WindowInsets.safeDrawing.union(WindowInsets.ime)
     val layoutDirection = LocalLayoutDirection.current
     val windowSize = LocalWindowInfo.current.containerSize
-    DisposableEffect(moreExpanded) {
-        editingHost?.menuOwnsFocus = moreExpanded
-        onDispose { if (moreExpanded) editingHost?.menuOwnsFocus = false }
+    DisposableEffect(expanded, moreExpanded) {
+        val ownsFocus = expanded && moreExpanded
+        editingHost?.menuOwnsFocus = ownsFocus
+        onDispose { if (ownsFocus) editingHost?.menuOwnsFocus = false }
     }
-    BackHandler(enabled = !moreExpanded, onBack = onDismiss)
+    LaunchedEffect(expanded) {
+        if (!expanded) moreExpanded = false
+    }
+    BackHandler(enabled = expanded && !moreExpanded, onBack = onDismiss)
     BoxWithConstraints(modifier.fillMaxSize().onGloballyPositioned { rootCoordinates = it }) {
         val root = rootCoordinates?.takeIf { it.isAttached } ?: return@BoxWithConstraints
         val topLeft = root.screenToLocal(selectionBounds.topLeft)
@@ -165,6 +194,18 @@ fun GlasmioTextSelectionMenu(
                     toolbarBounds = Rect(it.localToWindow(Offset.Zero), androidx.compose.ui.geometry.Size(it.size.width.toFloat(), it.size.height.toFloat()))
                     onToolbarBoundsChanged?.invoke(Rect(it.localToScreen(Offset.Zero), androidx.compose.ui.geometry.Size(it.size.width.toFloat(), it.size.height.toFloat())))
                 }
+                .graphicsLayer {
+                    // Keep the selection edge fixed while the entire toolbar scales.
+                    val toolbarLeft = position.x.coerceIn(viewport.left, (viewport.right - width).coerceAtLeast(viewport.left)).roundToInt()
+                    val toolbarTop = position.y.coerceIn(viewport.top, (viewport.bottom - height).coerceAtLeast(viewport.top)).roundToInt()
+                    val anchorY = if (toolbarTop >= bounds.center.y) bounds.bottom else bounds.top
+                    transformOrigin = TransformOrigin(
+                        (bounds.left - toolbarLeft) / size.width.coerceAtLeast(1f),
+                        (anchorY - toolbarTop) / size.height.coerceAtLeast(1f),
+                    )
+                    scaleX = scale.value
+                    scaleY = scale.value
+                }
                 .glasmioMenuAnchor(menuAnchor),
             backdrop = backdrop,
             shape = ContinuousRoundedRectangle(34.dp),
@@ -178,7 +219,7 @@ fun GlasmioTextSelectionMenu(
                     if (index > 0) Box(Modifier.width(1.dp).height(18.dp).background(colors.content.copy(alpha = 0.18f)))
                     Box(
                         Modifier.height(44.dp).clip(ContinuousRoundedRectangle(20.dp))
-                            .clickable(enabled = action.enabled, interactionSource = null, indication = null, role = Role.Button, onClick = action.onClick)
+                            .clickable(enabled = expanded && action.enabled, interactionSource = null, indication = null, role = Role.Button, onClick = action.onClick)
                             .padding(start = if (index > 0) 16.dp else 0.dp, end = if (additionalItems.isNotEmpty() || index < primaryActions.lastIndex) 16.dp else 0.dp),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -190,7 +231,7 @@ fun GlasmioTextSelectionMenu(
                     Box(
                         Modifier.size(36.dp).clip(ContinuousRoundedRectangle(18.dp))
                             .background(if (colors.isDark) Color(0xFF373737) else Color(0xFFEDEDED))
-                            .clickable(interactionSource = null, indication = null, role = Role.Button) {
+                            .clickable(enabled = expanded, interactionSource = null, indication = null, role = Role.Button) {
                                 editingHost?.menuOwnsFocus = true
                                 moreExpanded = true
                             },
@@ -199,7 +240,7 @@ fun GlasmioTextSelectionMenu(
                 }
             }
         }
-        if (moreExpanded && toolbarBounds != null) {
+        if (expanded && moreExpanded && toolbarBounds != null) {
             GlasmioCascadingMenu(
                 anchorBounds = toolbarBounds,
                 items = additionalItems.mapIndexed { index, item ->
@@ -227,6 +268,17 @@ fun GlasmioTextSelectionMenu(
         }
     }
 }
+
+private val TextSelectionToolbarScaleSpec = tween<Float>(
+    durationMillis = 180,
+    easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f),
+)
+
+private data class TextSelectionToolbarPresentation(
+    val selectionBounds: Rect,
+    val primaryActions: List<GlasmioCascadingMenuItem>,
+    val additionalItems: List<GlasmioCascadingMenuItem>,
+)
 
 @Composable
 private fun TextSelectionQuickActions(actions: List<GlasmioCascadingMenuItem>, onClick: (GlasmioCascadingMenuItem) -> Unit) {
@@ -272,6 +324,7 @@ fun GlasmioTextSelectionHost(
     val editingHost = rememberGlasmioTextEditingHost()
     var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null, neverEqualPolicy()) }
     var toolbarBounds by remember { mutableStateOf<Rect?>(null) }
+    var retainedPresentation by remember { mutableStateOf<TextSelectionToolbarPresentation?>(null) }
     val latestCoordinates by rememberUpdatedState(coordinates)
     val latestToolbarBounds by rememberUpdatedState(toolbarBounds)
     DisposableEffect(toolbar) { onDispose { toolbar.hide() } }
@@ -298,7 +351,7 @@ fun GlasmioTextSelectionHost(
             val root = coordinates?.takeIf { it.isAttached }
             val session = toolbar.session
             val legacy = toolbar.legacy
-            if (root != null && (session != null || legacy != null)) {
+            val activePresentation = if (root != null && (session != null || legacy != null)) {
                 val editingBounds = editingHost.active?.takeIf { it.chromeVisible }?.selectionBounds()
                 val screenBounds = editingBounds ?: if (session != null) {
                     val bounds = session.dataProvider.contentBounds(root)
@@ -313,17 +366,31 @@ fun GlasmioTextSelectionHost(
                     .mapNotNull { key -> actions.firstOrNull { it.first == key } }
                 val primary = clipboard.ifEmpty { actions.take(3) }
                 val remaining = actions.filter { candidate -> primary.none { it.first == candidate.first } }.map { it.second }
-                key(session?.identity ?: legacy?.identity) {
-                    GlasmioTextSelectionMenu(
-                        selectionBounds = screenBounds,
-                        primaryActions = primary.map { it.second },
-                        additionalItems = remaining + additionalItems,
-                        onDismiss = toolbar::hide,
-                        labels = labels,
-                        backdrop = backdrop,
-                        onToolbarBoundsChanged = { toolbarBounds = it },
-                    )
-                }
+                TextSelectionToolbarPresentation(screenBounds, primary.map { it.second }, remaining + additionalItems)
+            } else null
+            // Read the retained snapshot only during exit, so updating it after an
+            // active composition does not schedule another composition.
+            val presentation = activePresentation ?: retainedPresentation
+            SideEffect {
+                if (activePresentation != null) retainedPresentation = activePresentation
+            }
+            if (presentation != null) {
+                GlasmioTextSelectionMenu(
+                    selectionBounds = presentation.selectionBounds,
+                    primaryActions = presentation.primaryActions,
+                    additionalItems = presentation.additionalItems,
+                    onDismiss = toolbar::hide,
+                    labels = labels,
+                    backdrop = backdrop,
+                    onToolbarBoundsChanged = { toolbarBounds = it },
+                    expanded = activePresentation != null,
+                    onClosed = {
+                        if (toolbar.status == TextToolbarStatus.Hidden) {
+                            retainedPresentation = null
+                            toolbarBounds = null
+                        }
+                    },
+                )
             }
         }
     }
@@ -331,7 +398,6 @@ fun GlasmioTextSelectionHost(
 
 private class SelectionMenuSession(
     val dataProvider: TextContextMenuDataProvider,
-    val identity: Any,
 ) : TextContextMenuSession {
     val closed = CompletableDeferred<Unit>()
     override fun close() { closed.complete(Unit) }
@@ -344,7 +410,6 @@ private data class LegacySelectionMenu(
     val cut: (() -> Unit)?,
     val selectAll: (() -> Unit)?,
     val autofill: (() -> Unit)?,
-    val identity: Any,
 )
 
 private class GlasmioSelectionToolbar : TextToolbar, TextContextMenuProvider {
@@ -358,9 +423,8 @@ private class GlasmioSelectionToolbar : TextToolbar, TextContextMenuProvider {
 
     override suspend fun showTextContextMenu(dataProvider: TextContextMenuDataProvider) {
         mutator.mutate {
-            // A native provider may arrive after the fallback has opened. Keep the same
-            // presentation so its closing animation and pending action survive the handoff.
-            val request = SelectionMenuSession(dataProvider, legacy?.identity ?: Any())
+            // The host keeps its presentation mounted across provider handoffs.
+            val request = SelectionMenuSession(dataProvider)
             legacy = null
             session = request
             try { request.closed.await() } finally { if (session === request) session = null }
@@ -372,10 +436,9 @@ private class GlasmioSelectionToolbar : TextToolbar, TextContextMenuProvider {
     }
 
     override fun showMenu(rect: Rect, onCopyRequested: (() -> Unit)?, onPasteRequested: (() -> Unit)?, onCutRequested: (() -> Unit)?, onSelectAllRequested: (() -> Unit)?, onAutofillRequested: (() -> Unit)?) {
-        val identity = legacy?.identity ?: session?.identity ?: Any()
         session?.close()
         session = null
-        legacy = LegacySelectionMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested, onAutofillRequested, identity)
+        legacy = LegacySelectionMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested, onAutofillRequested)
     }
 
     override fun hide() {

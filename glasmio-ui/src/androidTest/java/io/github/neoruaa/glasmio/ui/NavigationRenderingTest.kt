@@ -59,6 +59,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsEqualTo
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -482,6 +483,81 @@ class NavigationRenderingTest {
         } finally {
             compose.mainClock.autoAdvance = true
             compose.runOnIdle { legacy.hide() }
+        }
+    }
+
+    @Test
+    fun selectionToolbarRetainsDisabledContentDuringExitAndReversesWhenReopened() {
+        lateinit var legacy: TextToolbar
+        lateinit var modern: TextContextMenuProvider
+        lateinit var scope: CoroutineScope
+        var executions = 0
+        val anchor = Rect(80f, 120f, 80f, 140f)
+        val provider = object : TextContextMenuDataProvider {
+            override fun position(destinationCoordinates: LayoutCoordinates) = anchor.bottomLeft
+            override fun contentBounds(destinationCoordinates: LayoutCoordinates) = anchor
+            override fun data() = TextContextMenuData(listOf(
+                TextContextMenuItem(TextContextMenuKeys.CopyKey, "Copy") {
+                    executions++
+                    close()
+                },
+            ))
+        }
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioBackdropProvider(emptyBackdrop()) {
+                    GlasmioTextSelectionHost {
+                        val currentLegacy = LocalTextToolbar.current
+                        val currentModern = checkNotNull(LocalTextContextMenuToolbarProvider.current)
+                        val currentScope = rememberCoroutineScope()
+                        SideEffect {
+                            legacy = currentLegacy
+                            modern = currentModern
+                            scope = currentScope
+                        }
+                        Box(Modifier.fillMaxSize())
+                    }
+                }
+            }
+        }
+        listOf(false, true).forEachIndexed { index, useModern ->
+            fun show() {
+                if (useModern) scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    modern.showTextContextMenu(provider)
+                } else legacy.showMenu(anchor, { executions++ }, null, null, null)
+            }
+            compose.runOnIdle { show() }
+            compose.onNodeWithText("Copy").assertIsDisplayed().assertIsEnabled()
+            val fullWidth = compose.onNodeWithText("Copy").fetchSemanticsNode().boundsInRoot.width
+            compose.mainClock.autoAdvance = false
+            try {
+                compose.runOnIdle { legacy.hide() }
+                compose.mainClock.advanceTimeByFrame()
+                compose.mainClock.advanceTimeBy(32)
+                compose.onNodeWithText("Copy").assertExists().assertIsNotEnabled()
+                val exitingWidth = compose.onNodeWithText("Copy").fetchSemanticsNode().boundsInRoot.width
+                assertTrue("Closing must shrink the retained toolbar", exitingWidth > 0f && exitingWidth < fullWidth)
+                compose.runOnIdle { assertEquals(TextToolbarStatus.Hidden, legacy.status) }
+
+                compose.runOnIdle { show() }
+                compose.mainClock.advanceTimeByFrame()
+                val resumedWidth = compose.onNodeWithText("Copy").fetchSemanticsNode().boundsInRoot.width
+                assertEquals("Reopening must continue at the current scale", exitingWidth, resumedWidth, 1f)
+                compose.mainClock.advanceTimeBy(240)
+                compose.onNodeWithText("Copy").assertIsDisplayed().assertIsEnabled()
+                compose.runOnIdle { assertEquals(TextToolbarStatus.Shown, legacy.status) }
+
+                compose.onNodeWithText("Copy").performSemanticsAction(SemanticsActions.OnClick) { it() }
+                compose.mainClock.advanceTimeByFrame()
+                compose.mainClock.advanceTimeBy(32)
+                compose.onNodeWithText("Copy").assertExists().assertIsNotEnabled()
+                compose.runOnIdle { assertEquals(index + 1, executions) }
+                compose.mainClock.advanceTimeBy(240)
+                compose.onNodeWithText("Copy").assertDoesNotExist()
+            } finally {
+                compose.mainClock.autoAdvance = true
+                compose.runOnIdle { legacy.hide() }
+            }
         }
     }
 
