@@ -164,6 +164,7 @@ class ComponentBehaviorTest {
 
     @Test fun expandedSelectionMenuKeepsSelectAllHandlesAndRunsItsEditingCallback() {
         var value by mutableStateOf(TextFieldValue("Hello World"))
+        val selectionChanges = mutableListOf<TextRange>()
         var replacements = 0
         val replacement = GlasmioCascadingMenuItem("Replace selection", onClick = {
             val range = value.selection
@@ -171,7 +172,10 @@ class ComponentBehaviorTest {
             replacements++
         })
         editingContent(additionalItems = listOf(replacement)) {
-            GlasmioEditableText(value, { value = it }, Modifier.fillMaxWidth().testTag("expanded-editor"))
+            GlasmioEditableText(value, {
+                selectionChanges += it.selection
+                value = it
+            }, Modifier.fillMaxWidth().testTag("expanded-editor"))
         }
         longPressWord("expanded-editor")
         rule.onNodeWithContentDescription("More").performClick()
@@ -184,13 +188,15 @@ class ComponentBehaviorTest {
             }
         } catch (error: ComposeTimeoutException) {
             val current = value
+            val changes = rule.runOnIdle { selectionChanges.toList() }
             val remainingExpandedActions = runCatching {
                 rule.onAllNodesWithText("Replace selection")
                     .fetchSemanticsNodes(atLeastOneRootRequired = false).size
             }.getOrNull()
             throw AssertionError(
                 "Select All did not complete: selection=${current.selection}, " +
-                    "textLength=${current.text.length}, remainingExpandedActions=$remainingExpandedActions",
+                    "textLength=${current.text.length}, remainingExpandedActions=$remainingExpandedActions, " +
+                    "selectionChanges=$changes",
                 error,
             )
         }

@@ -18,6 +18,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuData
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuItem
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
 import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuToolbarProvider
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuDataProvider
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuProvider
@@ -422,7 +425,8 @@ internal class GlasmioTextEditor(
         override fun showMenu(rect: Rect, onCopyRequested: (() -> Unit)?, onPasteRequested: (() -> Unit)?, onCutRequested: (() -> Unit)?, onSelectAllRequested: (() -> Unit)?) =
             showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested, null)
         override fun showMenu(rect: Rect, onCopyRequested: (() -> Unit)?, onPasteRequested: (() -> Unit)?, onCutRequested: (() -> Unit)?, onSelectAllRequested: (() -> Unit)?, onAutofillRequested: (() -> Unit)?) {
-            nativeLegacy = { toolbar.showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, onSelectAllRequested, onAutofillRequested) }
+            val selectAll: (() -> Unit)? = if (onSelectAllRequested != null) ({ this@GlasmioTextEditor.selectAll() }) else null
+            nativeLegacy = { toolbar.showMenu(rect, onCopyRequested, onPasteRequested, onCutRequested, selectAll, onAutofillRequested) }
             if (chromeVisible) nativeLegacy?.invoke()
         }
         // The deliberately unfocused native chrome hides itself after layout. Real dismissal is
@@ -431,7 +435,13 @@ internal class GlasmioTextEditor(
     }
     val modernAdapter = object : TextContextMenuProvider {
         override suspend fun showTextContextMenu(dataProvider: TextContextMenuDataProvider) {
-            nativeProvider = dataProvider
+            nativeProvider = object : TextContextMenuDataProvider by dataProvider {
+                override fun data() = TextContextMenuData(dataProvider.data().components.map { component ->
+                    if (component is TextContextMenuItem && component.key == TextContextMenuKeys.SelectAllKey) {
+                        TextContextMenuItem(component.key, component.label, component.leadingIcon) { this@GlasmioTextEditor.selectAll() }
+                    } else component
+                })
+            }
             if (chromeVisible) showNativeMenu()
             // The native request can be cancelled by false WindowInfo without cancelling the
             // independently owned menu coroutine or its live data provider.
@@ -593,6 +603,16 @@ internal class GlasmioTextEditor(
         menuJob = scope.launch { target.showTextContextMenu(provider) }
     }
 
+    private fun selectAll() {
+        // Selection belongs to this editor; native requests can outlive the gesture that
+        // produced them while our menu closes. Read the current value and callback here.
+        val next = value.copy(selection = TextRange(0, value.text.length))
+        value = next
+        change(next)
+        showHandles = true
+        showMenuAfterGesture(fromHandle = true)
+    }
+
     private fun showFallbackMenu() {
         val bounds = handleRect(false) ?: return
         val root = coordinates?.takeIf { it.isAttached }?.let { it.findRootCoordinates() } ?: return
@@ -611,10 +631,7 @@ internal class GlasmioTextEditor(
             onCopyRequested = if (hasSelection && !password) ({ clipboard.setText(AnnotatedString(selectedText())); dismissMenu() }) else null,
             onPasteRequested = if (!readOnly && clipboard.hasText()) ({ clipboard.getText()?.let { replace(it.text) }; dismissMenu() }) else null,
             onCutRequested = if (!readOnly && hasSelection && !password) ({ clipboard.setText(AnnotatedString(selectedText())); replace(""); dismissMenu() }) else null,
-            onSelectAllRequested = if (value.text.isNotEmpty() && selection.length < value.text.length) ({
-                val next = value.copy(selection = TextRange(0, value.text.length)); value = next; change(next); showHandles = true
-                showMenuAfterGesture(fromHandle = true)
-            }) else null,
+            onSelectAllRequested = if (value.text.isNotEmpty() && selection.length < value.text.length) ::selectAll else null,
         )
     }
 }

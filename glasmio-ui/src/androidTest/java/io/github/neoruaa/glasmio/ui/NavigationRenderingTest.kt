@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuData
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuItem
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuSession
 import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuToolbarProvider
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuDataProvider
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuProvider
@@ -42,6 +43,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.platform.TextToolbar
+import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
@@ -51,6 +53,8 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.performClick
@@ -76,6 +80,7 @@ import io.github.neoruaa.glasmio.glass.LiquidMenuMorphMotion
 import io.github.neoruaa.glasmio.glass.NavigationGlassMaterial
 import io.github.neoruaa.glasmio.glass.NavigationDropShadowRenderer
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
+import io.github.neoruaa.glasmio.glass.GlasmioBackdropProvider
 import io.github.neoruaa.glasmio.glass.GlassSurface
 import io.github.neoruaa.glasmio.glass.GlassEmphasis
 import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
@@ -84,6 +89,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -96,6 +102,108 @@ import org.junit.runner.RunWith
 class NavigationRenderingTest {
     @get:Rule val compose = createComposeRule()
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
+
+    @Test
+    fun nativeSelectAllAdaptersUseTheLatestEditableValueAndCallback() {
+        val value = mutableStateOf(TextFieldValue("Original text", TextRange(0, 5)))
+        val callbackRevision = mutableStateOf(0)
+        val ownerUpdates = mutableListOf<Int>()
+        var staleNativeCalls = 0
+        var forwardedSelectAll: (() -> Unit)? = null
+        lateinit var legacyAdapter: TextToolbar
+        lateinit var modernAdapter: TextContextMenuProvider
+        lateinit var editingHost: GlasmioTextEditingHost
+        lateinit var scope: CoroutineScope
+        val session = object : TextContextMenuSession { override fun close() = Unit }
+        val receiver = object : TextToolbar, TextContextMenuProvider {
+            override val status = TextToolbarStatus.Hidden
+            override fun hide() = Unit
+            override fun showMenu(rect: Rect, onCopyRequested: (() -> Unit)?, onPasteRequested: (() -> Unit)?,
+                onCutRequested: (() -> Unit)?, onSelectAllRequested: (() -> Unit)?) {
+                forwardedSelectAll = onSelectAllRequested
+            }
+            override suspend fun showTextContextMenu(dataProvider: TextContextMenuDataProvider) {
+                val item = dataProvider.data().components.filterIsInstance<TextContextMenuItem>()
+                    .single { it.key == TextContextMenuKeys.SelectAllKey }
+                forwardedSelectAll = { item.onClick(session) }
+                awaitCancellation()
+            }
+        }
+        val nativeData = object : TextContextMenuDataProvider {
+            override fun position(destinationCoordinates: LayoutCoordinates) = Offset.Zero
+            override fun contentBounds(destinationCoordinates: LayoutCoordinates) = Rect.Zero
+            override fun data() = TextContextMenuData(listOf(
+                TextContextMenuItem(TextContextMenuKeys.SelectAllKey, "Select All") { staleNativeCalls++ },
+            ))
+        }
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioBackdropProvider(emptyBackdrop()) {
+                    GlasmioTextSelectionHost {
+                        CompositionLocalProvider(
+                            LocalTextToolbar provides receiver,
+                            LocalTextContextMenuToolbarProvider provides receiver,
+                        ) {
+                            val revision = callbackRevision.value
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                GlasmioEditableText(value.value, {
+                                    ownerUpdates += revision
+                                    value.value = it
+                                }, Modifier.width(280.dp).testTag("native-select-all"), readOnly = true,
+                                    decorationBox = { inner ->
+                                        val currentLegacy = LocalTextToolbar.current
+                                        val currentModern = checkNotNull(LocalTextContextMenuToolbarProvider.current)
+                                        val currentHost = checkNotNull(LocalGlasmioTextEditingHost.current)
+                                        val currentScope = rememberCoroutineScope()
+                                        SideEffect {
+                                            legacyAdapter = currentLegacy
+                                            modernAdapter = currentModern
+                                            editingHost = currentHost
+                                            scope = currentScope
+                                        }
+                                        inner()
+                                    })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        compose.onNodeWithTag("native-select-all")
+            .performSemanticsAction(SemanticsActions.RequestFocus) { it() }.assertIsFocused()
+        compose.waitUntil(10_000) { editingHost.active?.chromeVisible == true }
+        listOf(false, true).forEachIndexed { index, modern ->
+            compose.runOnIdle {
+                forwardedSelectAll = null
+                callbackRevision.value = 0
+                value.value = TextFieldValue("Original text $index", TextRange(0, 5))
+            }
+            compose.runOnIdle {
+                assertTrue("The real editor must own visible editing chrome", editingHost.active?.chromeVisible == true)
+                if (modern) scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    modernAdapter.showTextContextMenu(nativeData)
+                } else legacyAdapter.showMenu(Rect.Zero, null, null, null, { staleNativeCalls++ })
+            }
+            compose.waitUntil(10_000) { forwardedSelectAll != null }
+            lateinit var selectAll: () -> Unit
+            val latestText = "Current text for adapter $index"
+            compose.runOnIdle {
+                selectAll = checkNotNull(forwardedSelectAll)
+                value.value = TextFieldValue(latestText, TextRange(0, 5))
+                callbackRevision.value = 1
+            }
+            compose.onNodeWithTag("native-select-all").assertTextEquals(latestText)
+            compose.runOnIdle {
+                ownerUpdates.clear()
+                selectAll()
+                assertEquals(listOf(1), ownerUpdates)
+                assertEquals(0, staleNativeCalls)
+                assertEquals(TextRange(0, latestText.length), value.value.selection)
+            }
+            compose.onNodeWithContentDescription("Selection start").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Selection end").assertIsDisplayed()
+        }
+    }
 
     @Test
     fun selectionMenuKeepsPendingActionAcrossLegacyToModernHandoff() {
