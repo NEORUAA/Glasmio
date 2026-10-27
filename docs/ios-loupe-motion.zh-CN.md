@@ -10,11 +10,14 @@
 放大镜不做物理跟手，它跑一条 **60 Hz `CADisplayLink`**：
 
 ```text
-target  = constrainedModelPosition(modelPosition)      // 手指点（水平夹紧后）
-center += (target − center) × 0.3                      // 一阶低通，τ ≈ 47 ms
-center  = spring(damping 0.7, response 0.2 s) 落帧      // 再套一层欠阻尼 spring
+target = constrainedModelPosition(modelPosition)      // 手指点（水平夹紧后）
+model += (target − model) × 0.3                        // 一阶低通跑在 model 上，τ ≈ 47 ms
+portal  = model                                        // 画面钉在 model（领）
+body    → spring(damping 0.7, response 0.2 s)(model)    // 身体追 model（随）
 |modelPosition − center| < FLT_EPSILON → displayLink 暂停
 ```
+
+两条序列缺一不可：低通不能跑在身体（presentation）上。
 
 透镜里的画面不是自绘，而是对宿主窗口的 `_UIPortalView` 做 `scale(1.25)` 且以**手指点为不动点**；开合各 1～2 层 `UIViewSpringAnimationBehavior`，关闭时把 portal 缩到 `0.125`。
 
@@ -236,11 +239,16 @@ if (_visible) [self _updatePortalViewTransformForPosition:next zoomScale:1.25];
 
 | 要点 | 说明 |
 | --- | --- |
+| **两条独立序列** | 低通跑在 **model `center`** 上（`self.center` 是模型值，presentation 在 `layer.presentationLayer`）。`next` 既是新的 model `center`（喂给 spring），又是 portal 的采样位置。所以：`model_n = 0.3·target_n + 0.7·model_{n−1}`，`body_n → model_n`。 |
 | 一阶低通 | 60 Hz 下固定 `0.3/0.7`，等效时间常数 `τ = Δt / −ln(0.7) ≈ 46.8 ms`；95% 收敛 ≈ `3τ ≈ 140 ms`。连续形式 `ẋ = (target − x)/τ` |
-| spring | `response 0.2 s`、`dampingRatio 0.7`、`tracking:NO`。单位质量：`k = (2π/0.2)² ≈ 987`，`c = 2ζ√k ≈ 43.9` |
+| spring | `response 0.2 s`、`dampingRatio 0.7`、`tracking:NO`。单位质量：`k = (2π/0.2)² ≈ 987`，`c = 2ζ√k ≈ 43.9`；匀速段的稳态误差 `e = c·v/k ≈ 0.0446·v` |
 | 暂停条件 | 用的是 `|_modelPosition − center|`（不是 target），阈值就是 `FLT_EPSILON`；任何新的 `setModelPosition` 会 `setPaused:NO` 重新启动 |
 | 帧源 | `CADisplayLink`，`preferredFramesPerSecond = 60`，加在主 run loop 默认 mode；`removeFromSuperview` 时 `invalidate` |
 | 顺序 | 先低通、再接 spring；两者叠加后视觉滞后约 1～2 帧，并带约 140 ms 的追赶拖尾 |
+| **稳态滞后（500 dp/s 拖动）** | model 落后手指 `0.7/0.3 · v/60 ≈ 19.4 dp`；身体再落后 model `≈ 16 dp`；合计 ≈ 35.5 dp。内容是“领”着身体的（19.4 dp） |
+
+**为什么必须是两条序列**：低通喂的是 model，而 model 没有 spring 滞后；身体只是“追 model”的滞后副本。如果把低通跑在 presentation（身体）上，spring 的滞后会回灌进滤波器，使 `alpha·gap` 必须**等于** spring 误差，变成“两段滞后同时乘回同一个 gap”：同一条 500 dp/s 的拖动会变成 **73 dp**
+（而不是 35.5 dp），也就是“镜体跟不上手”。这不是微调级别的差，翻了一倍。
 
 这就是“跟手但不粘手”的全部机制。没有物理、没有 velocity 预测、没有触点插值。
 
@@ -362,7 +370,7 @@ flex.preferredVariant        = 3;   // → _UIFlexInteractionSpec.loupe
 
 ```swift
 let bounds  = view.bounds                             // 每帧重读：开场阶段只有 ≈6×26
-let accel   = velocityIntegrator.acceleration         // pt/s²，_UIVelocityIntegrator 最新采样
+let accel   = velocityIntegrator.acceleration         // 方向无关：d|v|/dt，见下
 let n       = (x: accel.x / 2500, y: accel.y / 2500)  // movementNormalizationFactor
 
 // 单轴上下界：既受百分比限制，也受 ±100 pt 绝对量限制
@@ -400,8 +408,9 @@ if n.y != 0 {
 `lerp(t, from, to) = (1−t)·from + t·to`（`__UILerp`，`0x1c4128320`）。要点：
 
 - 形变源是**加速度**而不是位移。手指匀速拖动 → 加速度≈0 → 形变≈0；只在**加速/减速瞬间**看到明显的拉伸，松手后弹簧自动回 `1.0`。
-- 插值是**带符号**的：`n.x > 0` 时 `sx` 拉长、`sy` 压短，`n.x < 0` 时反过来。所以形体是镜像的，只有 `drift` 钉住的那条边跟着方向翻转。
-- 但每个插值结果都要过 `softClamp`（`0x1c553f980`，三处调用点 `0x1c507ce34` / `0x1c507cee4` / `0x1c507cf2c`）。三者的渐近值是 `0.617` 与 `1.283`：**不管多快地甩，镜体永远落在 ±30% 内**。所以在 `115×85` 的胶囊上，宽度 ±15% 基本看不出来、高度 −38% 却一眼就是“扁”，左右两个方向都被压成了同一个“变扁”包络。
+- **加速度是“方向无关”的**：`_UIFlexInteraction` 初始化里把自己的 `velocityIntegrator` 设成 `prefersDirectionlessAcceleration = YES`（`0x1c5079d30`，`MOV W2, #1`），于是 `-[_UIVelocityIntegrator addSample3D:withTimestamp:]` 先对**两个采样各自取绝对值**再相减（`0x1c484ee38`–`0x1c484ee80` 的 `FCMLT`/`FNEG`/`BIT`/`BIF`）。所以 `n > 0` 表示**手指在加速**，`n < 0` 表示**手指在减速**，与往左还是往右无关：左右拖动都是“拉长 + 变扁”，只有急停才翻成“变窄 + 变高”。拿带符号的速度做差分就会变成镜像，是错的。
+- 插值本身仍然是带符号的（`n < 0` 时两条轴互换），但驱动量已经不带方向，所以视觉上正反拖同形；只有 `drift` 的 `sign(velocity)` 随方向翻转。
+- 但每个插值结果都要过 `softClamp`（`0x1c553f980`，三处调用点 `0x1c507ce34` / `0x1c507cee4` / `0x1c507cf2c`）。三者的渐近值是 `0.617` 与 `1.283`：**不管多快地甩，镜体永远落在 ±30% 内**，急停的反弹也不会把身体拉爆。
 - `bounds()` 与 `drift` 都读**当帧** `bounds`：开场阶段身体还只有光标大小，`drift` 只有 ≈0.4 pt；用静止尺寸 `115` 去算会把它放大 ~19 倍，看起来像小镜子刚出现就被甩出去。
 - `drift` 是“前缘锚定”补偿：`(1−t)·0.5·dim·sign(v)`，被压短的那一侧向内收，整体看起来像液体被拖着走，而不是整块平移。
 
@@ -474,13 +483,16 @@ fun clampX(p: Offset, box: Rect, loupeW: Float, inset: Float = 8f): Offset {
     return p.copy(x = p.x.coerceIn(inset + r, box.right - inset - r))
 }
 
-// 2a. 逐帧复刻：60 Hz 一阶低通（iOS 的拖尾就来自这里）
+// 2a. 逐帧复刻：60 Hz 一阶低通喂 **model**，身体再用 spring 追 model（两条序列，别合并）
+var model = center
 LaunchedEffect(modelPosition) {
     while (isActive) {
         withFrameNanos { }
         val target = clampX(modelPosition, container, loupeW)
         if ((modelPosition - center).getDistance() <= 1.19e-7f) break   // 静止即停
-        center += (target - center) * 0.3f
+        model += (target - model) * 0.3f                 // 低通跑在 model 上
+        portalAnchor = model                            // 画面采样点 = model（领）
+        center = springStep(center, model)              // 身体追 model（随）
     }
 }
 
@@ -528,6 +540,7 @@ fun flex(accel: Offset, w: Float, h: Float, velocity: Offset, bodyScale: Offset 
 ```
 
 > 2a 与 2b 不等价：iOS 是“先低通、再 spring”，2b 只保留 spring。要还原那 47 ms 拖尾用 2a。
+> 2a 里低通必须写在 `model` 上：写在 `center` 上会把 spring 的滞后回灌进滤波器，500 dp/s 拖动时总滞后从 35.5 dp 变成 73 dp。
 
 ### 11.1 Glasmio 落地映射
 
@@ -588,8 +601,9 @@ CSS 近似：
 | 收起进度 | `0.85` | `0x1c4ef4d44` |
 | 开 session 吸附 | `|Δx| < 10 pt` 贴 widget 中心 | `0x1c4ef471c` |
 | 水平内缩 | `8 pt` | `0x1c4293200` |
-| 跟手低通 | `next = 0.3·target + 0.7·current`（τ ≈ 47 ms） | `0x1c4108e34` |
-| 跟手 spring | `damping 0.7 / response 0.2` | 同上 |
+| 跟手低通 | `next = 0.3·target + 0.7·current`（τ ≈ 47 ms），跑在 **model** 上 | `0x1c4108e34` |
+| 跟手 spring | `damping 0.7 / response 0.2`（`tracking:NO`） | 同上 |
+| 稳态滞后 @500 dp/s | model `19.4 dp` / 身体 `35.5 dp` | 同上 |
 | display link | `60 fps`；暂停阈值 `1.19e-7` | `0x1c4107264` |
 | 开 #1 | `damping 1.0 / response 0.4` | `0x1c4108134` |
 | 开 #2 | `damping 0.8 / response 0.5` | 同上 |

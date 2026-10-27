@@ -13,6 +13,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.isActive
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -58,7 +59,11 @@ internal const val LoupeLineBreakDistance = 39f
  */
 @Immutable
 data class GlasmioLoupeMotion(
-    /** Per-60 Hz coefficient of the position low-pass that runs before the follow spring. */
+    /**
+     * Weight of the touch point in the per-60 Hz low-pass that produces the model `center`.
+     * UIKit blends `0.3 * target + 0.7 * previous model` on every display link tick, i.e. this is
+     * the `0.3`, and it is rescaled by the real frame time before use.
+     */
     val followLowPass: Float = 0.3f,
     /** Damping ratio of the spring that lands the low-passed position. */
     val followDampingRatio: Float = 0.7f,
@@ -172,10 +177,11 @@ internal data class LoupeFollowFrame(
     val position: Offset,
     val velocity: Offset,
     /**
-     * Low-passed target the body is springing towards. [loupeSpringStep] springs straight at its
-     * target, so it reports the target itself.
+     * The `model` position: what the display link last wrote to `center`, i.e. the low-passed target
+     * that the portal samples. The body ([position]) trails it by the spring's lag.
+     * [loupeSpringStep] springs straight at its target, so it reports the target itself.
      */
-    val lowPassed: Offset,
+    val model: Offset,
 )
 
 /** Compose stiffness for a UIKit spring expressed as a response period. */
@@ -194,8 +200,7 @@ internal fun loupeLowPassAlpha(alphaPerFrame: Float, elapsedSeconds: Float): Flo
     return 1f - (1f - alphaPerFrame).pow(frame)
 }
 
-/** UIKit's first-order low-pass: `next = alpha * target + (1 - alpha) * current`. */
-internal fun loupeLowPass(current: Offset, target: Offset, alphaPerFrame: Float, elapsedSeconds: Float): Offset {
+/** UIKit's first-order low-pass: `next = alpha * target + (1 - alpha) * current`. */internal fun loupeLowPass(current: Offset, target: Offset, alphaPerFrame: Float, elapsedSeconds: Float): Offset {
     if (current == target) return target
     val alpha = loupeLowPassAlpha(alphaPerFrame, elapsedSeconds)
     return Offset(
@@ -205,24 +210,41 @@ internal fun loupeLowPass(current: Offset, target: Offset, alphaPerFrame: Float,
 }
 
 /**
- * One display frame of UIKit's follower: the target is low-passed against the current center and
- * the center is then driven to that intermediate point by a spring. Interpreting both in the same
- * frame is what reproduces the 47 ms lag and the ~140 ms catch-up tail; a single Compose spring
- * cannot, because it loses the intermediate state the two-stage chain depends on.
+ * One display frame of `-[_UITextMagnifiedGlassLoupeView _displayLinkFired:]` (`0x1c4108e34`).
+ *
+ * UIKit keeps **two** positions and this function needs both to be faithful:
+ *
+ * 1. `model` is the model `center`. The display link blends it towards the constrained touch point
+ *    with the 60 Hz coefficient `0.3` (`0x1c4108e34`, `center' = 0.3 * target + 0.7 * center`, read
+ *    back from `-center`), and that blended value is what the portal is transformed by, so the
+ *    magnified content sits on this series.
+ * 2. `position` is the presentation `center`, which the re-targeted `damping 0.7 / response 0.2`
+ *    spring drags towards the model it was last given.
+ *
+ * The order matters. Low-passing `position` instead of `model` folds the spring's own lag back into
+ * the filter, so the remaining distance to the finger has to satisfy `alpha * gap == spring error`
+ * and the two lags compose in the wrong proportion: a 500 dp/s drag then trails by ~73 dp instead of
+ * ~35 dp, which reads as the lens not keeping up.
  */
 internal fun loupeFollowStep(
     position: Offset,
     velocity: Offset,
+    model: Offset,
     target: Offset,
     motion: GlasmioLoupeMotion,
     elapsedSeconds: Float,
 ): LoupeFollowFrame {
     val dt = elapsedSeconds.coerceIn(0f, MaxFrameSeconds)
-    if (dt <= 0f) return LoupeFollowFrame(position, velocity, position)
-    if ((position - target).getDistance() < ParkDistance && velocity.getDistance() < ParkSpeed) {
+    if (dt <= 0f) return LoupeFollowFrame(position, velocity, model)
+    // UIKit pauses the display link once `dist(modelPosition, center)` collapses, so parking needs
+    // both series on the target rather than just the presentation.
+    if ((model - target).getDistance() < ParkDistance &&
+        (position - model).getDistance() < ParkDistance &&
+        velocity.getDistance() < ParkSpeed
+    ) {
         return LoupeFollowFrame(target, Offset.Zero, target)
     }
-    val goal = loupeLowPass(position, target, motion.followLowPass, dt)
+    val goal = loupeLowPass(model, target, motion.followLowPass, dt)
     val stiffness = loupeSpringStiffness(motion.followResponseSeconds)
     val damping = 2f * motion.followDampingRatio * sqrt(stiffness)
     var integrated = position
@@ -313,10 +335,14 @@ private fun flexUpperBound(dimension: Float, motion: GlasmioLoupeFlexMotion): Fl
  * the motion axis towards [GlasmioLoupeFlexMotion.maxScale] and compresses the perpendicular one
  * towards [GlasmioLoupeFlexMotion.minScale], and a negative value interpolates the other way. Each
  * interpolated term then passes through [loupeSoftClamp], which is what keeps the mirrored halves
- * near ±30% instead of letting a hard flick collapse the body. The sign is only meaningful with a
- * real acceleration estimate: differentiating raw pointer positions twice turns sub-pixel
- * quantisation into thousands of dp/s² and would leave the body permanently deformed, so callers
- * pass [rememberLoupeVelocitySample]'s windowed estimate.
+ * near ±30% instead of letting a hard flick collapse the body.
+ *
+ * The sign is not the direction of travel. UIKit feeds a directionless acceleration
+ * ([loupeDirectionlessAcceleration]), so a positive entry means the finger is speeding up and a
+ * negative one means it is slowing down; dragging left and dragging right flatten the same way, and
+ * only the drift's `sign(velocity)` mirrors. Callers must not differentiate raw pointer positions:
+ * sub-pixel quantisation turns into thousands of dp/s² and would leave the body permanently
+ * deformed.
  *
  * `_UIFlexInteraction.update` reads the interaction view's live `bounds` every frame, so both the
  * absolute budget and the drift length follow the body while the opening pass grows it from the
@@ -387,10 +413,10 @@ class GlasmioLoupeFollowState internal constructor(initialPosition: Offset) {
     /**
      * Point the magnified sample is anchored to, in overlay pixels.
      *
-     * UIKit's display link places the portal at the low-passed position and only then springs the body
-     * towards it, so the content leads the body. Anchoring the sample to [position] instead adds the
-     * spring's lag on top of the low-pass, which is what makes a dragged lens feel late under the
-     * finger.
+     * This is UIKit's model `center`: the display link blends it towards the touch point and hands
+     * it to `_updatePortalViewTransformForPosition:zoomScale:` before the body springs after it, so
+     * the content leads the body. It has to be a series of its own — low-passing [position] instead
+     * folds the spring's lag into the filter and doubles the distance the body trails by.
      */
     var samplePosition by mutableStateOf(initialPosition)
         private set
@@ -406,10 +432,10 @@ class GlasmioLoupeFollowState internal constructor(initialPosition: Offset) {
     }
 
     internal fun advance(target: Offset, motion: GlasmioLoupeMotion, elapsedSeconds: Float) {
-        val frame = loupeFollowStep(position, velocity, target, motion, elapsedSeconds)
+        val frame = loupeFollowStep(position, velocity, samplePosition, target, motion, elapsedSeconds)
         velocity = frame.velocity
         if (frame.position != position) position = frame.position
-        if (frame.lowPassed != samplePosition) samplePosition = frame.lowPassed
+        if (frame.model != samplePosition) samplePosition = frame.model
     }
 }
 
@@ -516,11 +542,35 @@ private const val AccelerationWindowNanos = 56_000_000L
 private const val AccelerationSmoothingSeconds = 0.1f
 
 /**
+ * Acceleration as `_UIVelocityIntegrator` reports it to the flex interaction: the difference of the
+ * **absolute** velocity components over [spanSeconds].
+ *
+ * `_UIFlexInteraction` sets `prefersDirectionlessAcceleration = YES` in its initializer
+ * (`0x1c5079d30`, `MOV W2, #1`), and `-[_UIVelocityIntegrator addSample3D:withTimestamp:]` then
+ * runs both samples through `fabs` before subtracting (`0x1c484ee38`–`0x1c484ee80`). Speeding up is
+ * therefore positive and slowing down is negative **no matter which way the finger travels**, which
+ * is why the native lens flattens for a drag in either direction and only rises when the drag is
+ * arrested. Differentiating the signed velocity instead would mirror the body on reversal.
+ */
+internal fun loupeDirectionlessAcceleration(
+    velocity: Offset,
+    previousVelocity: Offset,
+    spanSeconds: Float,
+): Offset {
+    if (spanSeconds <= 0f) return Offset.Zero
+    return Offset(
+        (abs(velocity.x) - abs(previousVelocity.x)) / spanSeconds,
+        (abs(velocity.y) - abs(previousVelocity.y)) / spanSeconds,
+    )
+}
+
+/**
  * Velocity and acceleration of [position], mirroring `_UIVelocityIntegrator` closely enough to drive
  * [loupeFlex]: the velocity is fitted over a 56 ms window and the acceleration is the difference
  * between that fit and the fit 56 ms earlier, low-passed with a 100 ms time constant. The exact
  * smoothing of the UIKit integrator is not recovered, so these windows are the smallest values that
- * keep pointer quantisation below a few percent of [GlasmioLoupeFlexMotion.normalization].
+ * keep pointer quantisation below a few percent of [GlasmioLoupeFlexMotion.normalization]. The
+ * acceleration is directionless; see [loupeDirectionlessAcceleration].
  */
 @Composable
 internal fun rememberLoupeVelocitySample(position: Offset, enabled: Boolean = true): LoupeVelocitySample {
@@ -571,9 +621,10 @@ internal fun rememberLoupeVelocitySample(position: Offset, enabled: Boolean = tr
             if (previousIndex != null) {
                 val span = (frameTime - velocityTimes[previousIndex]) / 1_000_000_000f
                 if (span > 1f / 240f) {
-                    val instant = Offset(
-                        (velocity.x - velocityX[previousIndex]) / span,
-                        (velocity.y - velocityY[previousIndex]) / span,
+                    val instant = loupeDirectionlessAcceleration(
+                        velocity = velocity,
+                        previousVelocity = Offset(velocityX[previousIndex], velocityY[previousIndex]),
+                        spanSeconds = span,
                     )
                     acceleration = acceleration + (instant - acceleration) *
                         loupeLowPassAlpha(AccelerationTimeAlpha, elapsed)

@@ -68,19 +68,47 @@ class LoupeMotionTest {
     @Test fun followerLagsThenSettlesOnTarget() {
         val motion = GlasmioLoupeMotion()
         val target = Offset(100f, 0f)
-        val first = loupeFollowStep(Offset.Zero, Offset.Zero, target, motion, frame)
+        val first = loupeFollowStep(Offset.Zero, Offset.Zero, Offset.Zero, target, motion, frame)
         assertTrue(first.position.x > 0f && first.position.x < 30f)
         assertTrue(first.velocity.x > 0f)
 
         var position = Offset.Zero
         var velocity = Offset.Zero
+        var model = Offset.Zero
         repeat(120) {
-            val step = loupeFollowStep(position, velocity, target, motion, frame)
+            val step = loupeFollowStep(position, velocity, model, target, motion, frame)
             position = step.position
             velocity = step.velocity
+            model = step.model
         }
         assertEquals(0f, (position - target).getDistance(), 0.05f)
         assertTrue(velocity.getDistance() < 1f)
+    }
+
+    @Test fun steadyDragLagMatchesTheTwoSeriesFollower() {
+        // A 500 dp/s drag at 60 Hz settles with the model ~19.4 dp behind (0.3 blending: 0.7/0.3 *
+        // v/60) and the sprung body ANOTHER ~16 dp behind the model, so the body trails by ~35.5 dp
+        // while the sampled content trails by ~19.4 dp. Low-passing the presentation folds those two
+        // lags together and trails 73 dp instead, which is the "lens does not keep up" regression
+        // this test pins.
+        val motion = GlasmioLoupeMotion()
+        val speed = 500f
+        var target = Offset.Zero
+        var position = Offset.Zero
+        var velocity = Offset.Zero
+        var model = Offset.Zero
+        repeat(180) {
+            target += Offset(speed * frame, 0f)
+            val step = loupeFollowStep(position, velocity, model, target, motion, frame)
+            position = step.position
+            velocity = step.velocity
+            model = step.model
+        }
+        val bodyLag = target.x - position.x
+        val sampleLag = target.x - model.x
+        assertTrue("body lag $bodyLag", bodyLag in 34f..37f)
+        assertTrue("sample lag $sampleLag", sampleLag in 18.5f..20.5f)
+        assertTrue("content must lead the body", sampleLag < bodyLag)
     }
 
     @Test fun followerRestartsWhenItsTargetJumpsOutsideTheLens() {
@@ -90,7 +118,7 @@ class LoupeMotionTest {
         val far = Offset(600f, 0f)
         // A single step cannot reach the far point; the caller is responsible for snapping and
         // GlasmioMagnifier does so through GlasmioLoupeFollowState.snapTo.
-        val step = loupeFollowStep(position, velocity, far, motion, frame)
+        val step = loupeFollowStep(position, velocity, position, far, motion, frame)
         assertTrue(step.position.getDistance() < 60f)
         position = step.position
         assertTrue(position.x < 60f)
@@ -152,14 +180,39 @@ class LoupeMotionTest {
     }
 
     @Test fun signedAccelerationMirrorsTheDeformation() {
-        // UIKit interpolates the signed normalized acceleration, so reversing the sign swaps the
-        // stretched and compressed axes instead of producing the same shape.
+        // loupeFlex mirrors on the sign of the acceleration it is given. The sampler never hands it a
+        // mirrored pair for mirrored travel, because UIKit differentiates absolute velocity; see
+        // deformationIgnoresTravelDirection below.
         val motion = GlasmioLoupeFlexMotion()
         val forward = loupeFlex(Offset(1800f, 0f), Offset(10f, 0f), 115f, 85f, motion)
         val backward = loupeFlex(Offset(-1800f, 0f), Offset(10f, 0f), 115f, 85f, motion)
         assertTrue(forward.scale.x > 1f && forward.scale.y < 1f)
         assertTrue(backward.scale.x < 1f && backward.scale.y > 1f)
         assertTrue(forward.drift.x < 0f && backward.drift.x > 0f)
+    }
+
+    @Test fun deformationIgnoresTravelDirection() {
+        // _UIFlexInteraction sets prefersDirectionlessAcceleration = YES (0x1c5079d30), so the
+        // integrator differentiates |v|. Speeding up in either direction is the same positive value,
+        // which is why the native lens flattens for a drag both ways instead of mirroring.
+        val rightward = loupeDirectionlessAcceleration(Offset(900f, 0f), Offset.Zero, 0.05f)
+        val leftward = loupeDirectionlessAcceleration(Offset(-900f, 0f), Offset.Zero, 0.05f)
+        assertEquals(rightward.x, leftward.x, 0.0001f)
+        assertTrue(rightward.x > 0f)
+
+        val motion = GlasmioLoupeFlexMotion()
+        val right = loupeFlex(rightward, Offset(900f, 0f), 115f, 85f, motion)
+        val left = loupeFlex(leftward, Offset(-900f, 0f), 115f, 85f, motion)
+        assertEquals(right.scale, left.scale)
+        assertTrue(right.scale.x > 1f && right.scale.y < 1f)      // 两侧都变扁
+        assertEquals(-right.drift.x, left.drift.x, 0.0001f)       // 只有漂移跟着方向翻转
+
+        // Arresting the drag is the negative half, again in either direction.
+        val brakingRight = loupeDirectionlessAcceleration(Offset(100f, 0f), Offset(900f, 0f), 0.05f)
+        val brakingLeft = loupeDirectionlessAcceleration(Offset(-100f, 0f), Offset(-900f, 0f), 0.05f)
+        assertEquals(brakingRight.x, brakingLeft.x, 0.0001f)
+        assertTrue(brakingRight.x < 0f)
+        assertTrue(loupeFlex(brakingRight, Offset(100f, 0f), 115f, 85f, motion).scale.y > 1f)
     }
 
     @Test fun softClampSaturatesInsteadOfOvershooting() {
@@ -283,7 +336,7 @@ class LoupeMotionTest {
         var position = Offset.Zero
         var velocity = Offset.Zero
         repeat(40) {
-            val step = loupeFollowStep(position, velocity, target, motion, 0.1f)
+            val step = loupeFollowStep(position, velocity, position, target, motion, 0.1f)
             position = step.position
             velocity = step.velocity
             assertTrue("diverged at frame " + it, (position - target).getDistance() < 2000f)
