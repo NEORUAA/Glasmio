@@ -9,6 +9,7 @@ Initial Android Compose framework extraction from MeiloX.
 - Preserve backdrop sampling, liquid refraction, press highlights, shadows, navigation contact effects, and menu morph rendering.
 - Provide buttons, switches, sliders, segmented controls, text/search fields, steppers, cards, lists, toolbars, navigation bars, menus, alerts, sheets, a color picker, and reorderable groups.
 - Add collapsing large-title pages, lazy content, overscroll, pull-refresh rebound, insets, and generic anchor-based sheet state.
+- Collapse large titles on a scroll breakpoint (56 dp enter, 24 dp exit) instead of mapping the scroll offset, and play the collapse with the navigation spring. `rememberGlasmioGridCollapseProgress` keeps its name but returns the animated breakpoint value; `rememberGlasmioHeaderScrollEdge` exposes the still-continuous top-bar material progress.
 - Separate preference presentation from persistence and symbol rendering from application resources.
 - Provide one root-level SF symbol font provider, a replaceable icon resolver, and a local debug font option for the sample.
 - Add an independent interactive sample and documentation for component use, backdrop hosting, and migration.

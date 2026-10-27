@@ -5,6 +5,9 @@ import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.ui.*
 import io.github.neoruaa.glasmio.icons.*
 
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,10 +34,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -51,23 +58,154 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawPlainBackdrop
 
+/**
+ * A collapsed large title is a state, not a scroll position. Past the enter breakpoint the header
+ * plays one spring to its collapsed state instead of tracking the finger; it only expands again
+ * below the exit breakpoint, so a scroll resting near the boundary cannot retrigger the motion.
+ */
+object GlasmioHeaderCollapseDefaults {
+    /** Scroll offset at which the large title starts collapsing. */
+    val EnterBreakpoint: Dp = 56.dp
+
+    /** Scroll offset the header must return above before expanding again. */
+    val ExitBreakpoint: Dp = 24.dp
+
+    /**
+     * SwiftUI `Spring(duration: 0.416, bounce: 0.25)` expressed as a Compose spring:
+     * damping ratio 0.75 and stiffness `(2π / 0.416)²`. It matches HeaderSprings.geometry.
+     */
+    val Spring: AnimationSpec<Float> = spring(dampingRatio = .75f, stiffness = 228.125f)
+}
+
+/**
+ * Breakpoint state machine for the collapsing large title. Pure so the hysteresis is testable
+ * without a Compose runtime: collapsing needs a deeper scroll than expanding does.
+ */
+internal fun nextCollapsed(
+    collapsed: Boolean,
+    firstVisibleItemIndex: Int,
+    firstVisibleItemScrollOffset: Int,
+    enterBreakpoint: Float,
+    exitBreakpoint: Float,
+): Boolean = when {
+    firstVisibleItemIndex > 0 -> true
+    collapsed -> firstVisibleItemScrollOffset > exitBreakpoint
+    else -> firstVisibleItemScrollOffset >= enterBreakpoint
+}
+
+/**
+ * Scroll-linked edge progress for the top bar material. Unlike the title collapse this stays
+ * continuous, so the blur fades in with the finger instead of pulsing on a breakpoint.
+ */
 @Composable
-fun rememberGlasmioGridCollapseProgress(
-    gridState: LazyGridState,
-    collapseDistance: Dp = 56.dp,
+fun rememberGlasmioHeaderScrollEdge(
+    state: LazyListState,
+    distance: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
 ): Float {
-    val collapseDistancePx = with(LocalDensity.current) { collapseDistance.toPx().coerceAtLeast(1f) }
-    val progress by remember(gridState, collapseDistancePx) {
-        derivedStateOf {
-            if (gridState.firstVisibleItemIndex > 0) {
-                1f
-            } else {
-                (gridState.firstVisibleItemScrollOffset / collapseDistancePx).coerceIn(0f, 1f)
-            }
-        }
+    val distancePx = with(LocalDensity.current) { distance.toPx().coerceAtLeast(1f) }
+    val progress by remember(state, distancePx) {
+        derivedStateOf { scrollEdge(state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset, distancePx) }
     }
     return progress
 }
+
+/** Grid counterpart of [rememberGlasmioHeaderScrollEdge]. */
+@Composable
+fun rememberGlasmioHeaderScrollEdge(
+    state: LazyGridState,
+    distance: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
+): Float {
+    val distancePx = with(LocalDensity.current) { distance.toPx().coerceAtLeast(1f) }
+    val progress by remember(state, distancePx) {
+        derivedStateOf { scrollEdge(state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset, distancePx) }
+    }
+    return progress
+}
+
+internal fun scrollEdge(firstVisibleItemIndex: Int, firstVisibleItemScrollOffset: Int, distancePx: Float): Float =
+    if (firstVisibleItemIndex > 0) 1f
+    else (firstVisibleItemScrollOffset / distancePx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+
+/**
+ * Collapse progress driven by breakpoints instead of the scroll position. The returned value only
+ * animates between 0 and 1; consumers keep their existing visual mapping unchanged.
+ */
+@Composable
+fun rememberGlasmioHeaderCollapse(
+    state: LazyListState,
+    enterBreakpoint: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
+    exitBreakpoint: Dp = GlasmioHeaderCollapseDefaults.ExitBreakpoint,
+    animationSpec: AnimationSpec<Float> = GlasmioHeaderCollapseDefaults.Spring,
+): Float = rememberBreakpointCollapse(
+    stateKey = state,
+    firstVisibleItemIndex = { state.firstVisibleItemIndex },
+    firstVisibleItemScrollOffset = { state.firstVisibleItemScrollOffset },
+    enterBreakpoint = enterBreakpoint,
+    exitBreakpoint = exitBreakpoint,
+    animationSpec = animationSpec,
+)
+
+/** Grid counterpart of [rememberGlasmioHeaderCollapse]. */
+@Composable
+fun rememberGlasmioHeaderCollapse(
+    state: LazyGridState,
+    enterBreakpoint: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
+    exitBreakpoint: Dp = GlasmioHeaderCollapseDefaults.ExitBreakpoint,
+    animationSpec: AnimationSpec<Float> = GlasmioHeaderCollapseDefaults.Spring,
+): Float = rememberBreakpointCollapse(
+    stateKey = state,
+    firstVisibleItemIndex = { state.firstVisibleItemIndex },
+    firstVisibleItemScrollOffset = { state.firstVisibleItemScrollOffset },
+    enterBreakpoint = enterBreakpoint,
+    exitBreakpoint = exitBreakpoint,
+    animationSpec = animationSpec,
+)
+
+@Composable
+private fun rememberBreakpointCollapse(
+    stateKey: Any,
+    firstVisibleItemIndex: () -> Int,
+    firstVisibleItemScrollOffset: () -> Int,
+    enterBreakpoint: Dp,
+    exitBreakpoint: Dp,
+    animationSpec: AnimationSpec<Float>,
+): Float {
+    val density = LocalDensity.current
+    val enterPx = with(density) { enterBreakpoint.toPx().coerceAtLeast(1f) }
+    // A wider exit threshold would make the state flip back and forth around one offset.
+    val exitPx = with(density) { exitBreakpoint.toPx() }.coerceIn(0f, enterPx)
+    var collapsed by remember(stateKey, enterPx, exitPx) {
+        mutableStateOf(nextCollapsed(false, firstVisibleItemIndex(), firstVisibleItemScrollOffset(), enterPx, exitPx))
+    }
+    LaunchedEffect(stateKey, enterPx, exitPx) {
+        snapshotFlow { firstVisibleItemIndex() to firstVisibleItemScrollOffset() }
+            .collect { (index, offset) ->
+                val next = nextCollapsed(collapsed, index, offset, enterPx, exitPx)
+                if (next != collapsed) collapsed = next
+            }
+    }
+    val progress by animateFloatAsState(
+        targetValue = if (collapsed) 1f else 0f,
+        animationSpec = animationSpec,
+        label = "GlasmioHeaderCollapse",
+    )
+    return progress
+}
+
+/**
+ * Grid collapse progress. This keeps the historical name but now plays a breakpoint animation
+ * rather than mapping the scroll offset; [collapseDistance] is the enter breakpoint.
+ */
+@Composable
+fun rememberGlasmioGridCollapseProgress(
+    gridState: LazyGridState,
+    collapseDistance: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
+    exitBreakpoint: Dp = GlasmioHeaderCollapseDefaults.ExitBreakpoint,
+): Float = rememberGlasmioHeaderCollapse(
+    state = gridState,
+    enterBreakpoint = collapseDistance,
+    exitBreakpoint = exitBreakpoint,
+)
 
 /**
  * Fixed iOS navigation bar over a progressively blurred scroll source.
@@ -84,6 +222,9 @@ fun GlasmioPinnedListPage(
     subtitle: String? = null,
     listState: LazyListState = rememberLazyListState(),
     showsLargeTitle: Boolean = true,
+    collapseEnterBreakpoint: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
+    collapseExitBreakpoint: Dp = GlasmioHeaderCollapseDefaults.ExitBreakpoint,
+    collapseAnimationSpec: AnimationSpec<Float> = GlasmioHeaderCollapseDefaults.Spring,
     largeTitleHorizontalPadding: Dp = 4.dp,
     verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(10.dp),
     onNavigateBack: (() -> Unit)? = null,
@@ -96,18 +237,15 @@ fun GlasmioPinnedListPage(
     bottomPaddingValues: PaddingValues? = null,
     content: LazyListScope.() -> Unit,
 ) {
-    val collapseDistancePx = with(LocalDensity.current) { 56.dp.toPx() }
-    val collapseProgress by remember(listState, showsLargeTitle) {
-        derivedStateOf {
-            if (!showsLargeTitle) {
-                1f
-            } else if (listState.firstVisibleItemIndex > 0) {
-                1f
-            } else {
-                (listState.firstVisibleItemScrollOffset / collapseDistancePx).coerceIn(0f, 1f)
-            }
-        }
-    }
+    // The title collapses on a breakpoint, while the material keeps fading with the scroll offset.
+    val animatedCollapse = rememberGlasmioHeaderCollapse(
+        state = listState,
+        enterBreakpoint = collapseEnterBreakpoint,
+        exitBreakpoint = collapseExitBreakpoint,
+        animationSpec = collapseAnimationSpec,
+    )
+    val collapseProgress = if (showsLargeTitle) animatedCollapse else 1f
+    val scrollEdgeProgress = rememberGlasmioHeaderScrollEdge(listState, collapseEnterBreakpoint)
     GlasmioPinnedPage(
         title = title,
         subtitle = subtitle,
@@ -119,6 +257,7 @@ fun GlasmioPinnedListPage(
         actionsStyle = actionsStyle,
         actionsSeparationProgress = actionsSeparationProgress,
         collapseProgress = collapseProgress,
+        topBarBlurProgress = scrollEdgeProgress,
         backgroundColor = backgroundColor,
         backgroundBrush = backgroundBrush,
     ) { contentPadding ->

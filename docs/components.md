@@ -127,6 +127,8 @@ Single-line `GlasmioEditableText`, text fields, search fields and Alert fields u
 
 `GlasmioPinnedListPage` owns a collapsing large title and its fixed toolbar. Its content uses `LazyListScope`, so item keys and lazy content remain under application control. The page owns its top inset; `bottomPadding` can include the space occupied by an application bottom bar.
 
+The large title collapses on a breakpoint rather than tracking the finger: it expands below `collapseExitBreakpoint` (24 dp by default) and collapses once the list passes `collapseEnterBreakpoint` (56 dp by default), playing one spring between the two states. The gap between the thresholds is hysteresis, so a scroll resting near the boundary cannot retrigger the motion. The top bar material stays continuous and still fades with the scroll offset.
+
 ```kotlin
 @Composable
 fun PreferencesScreen() = ExampleHost {
@@ -154,7 +156,7 @@ fun PreferencesScreen() = ExampleHost {
 }
 ```
 
-For independently measured bars, use `GlasmioScaffold` and pass its `PaddingValues` to `GlasmioListPage(contentPadding = padding)`. The list applies and consumes that padding once. Use `GlasmioPinnedPage` with `rememberGlasmioGridCollapseProgress` when the body is a lazy grid rather than a list.
+For independently measured bars, use `GlasmioScaffold` and pass its `PaddingValues` to `GlasmioListPage(contentPadding = padding)`. The list applies and consumes that padding once. Use `GlasmioPinnedPage` with `rememberGlasmioHeaderCollapse(gridState)` when the body is a lazy grid rather than a list; `rememberGlasmioGridCollapseProgress` is the legacy name for the same breakpoint-driven value. `rememberGlasmioHeaderScrollEdge` returns the continuous progress for a top bar material that must not pulse with the collapse.
 
 The sample's Lists page switches between a lazy list and an adaptive grid while preserving each scroll state. Its toolbar refresh and pull gesture share one caller-owned callback, rotating the visible items after a short refresh. `Modifier.pullToRefreshRebound` animates only the body; the refresh indicator sits below the fixed toolbar, and both layouts apply the pinned page's content padding once.
 

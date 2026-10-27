@@ -575,16 +575,16 @@ private fun SamplePinnedPage(
     content: @Composable (SamplePageLayout) -> Unit,
 ) {
     val state = listState ?: rememberLazyListState()
-    val collapseDistance = with(LocalDensity.current) { 56.dp.toPx() }
-    val progress by remember(state, collapseDistance) {
-        derivedStateOf {
-            if (state.firstVisibleItemIndex > 0) 1f
-            else (state.firstVisibleItemScrollOffset / collapseDistance).coerceIn(0f, 1f)
-        }
-    }
+    // The title collapses on a breakpoint; the top bar material keeps tracking the scroll offset.
+    val animatedCollapse = rememberGlasmioHeaderCollapse(state)
+    val animatedEdge = rememberGlasmioHeaderScrollEdge(state)
+    val collapseProgress = if (alwaysCompact) 1f else animatedCollapse
+    val edgeProgress = if (alwaysCompact) 1f else animatedEdge
     val entry = LocalSampleHeaderEntry.current
-    val scroll = remember(state, alwaysCompact, collapseDistance) {
-        GlasmioHeaderScrollState({ if (alwaysCompact) 1f else if (state.firstVisibleItemIndex > 0) 1f else (state.firstVisibleItemScrollOffset / collapseDistance).coerceIn(0f, 1f) })
+    val currentCollapse = rememberUpdatedState(collapseProgress)
+    val currentEdge = rememberUpdatedState(edgeProgress)
+    val scroll = remember {
+        GlasmioHeaderScrollState({ currentCollapse.value }, { currentEdge.value })
     }
     SideEffect { entry.scroll = scroll }
     val hostPadding = LocalSampleBodyPadding.current
@@ -597,7 +597,7 @@ private fun SamplePinnedPage(
         backgroundColor = backgroundColor,
     ) { padding ->
         if (wallpaper) SampleBackdrop(true)
-        content(SamplePageLayout(title, padding, state, progress))
+        content(SamplePageLayout(title, padding, state, collapseProgress))
     }
 }
 
@@ -945,18 +945,12 @@ private fun ListDemo() {
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     val refreshState = rememberPullToRefreshState()
-    val collapseDistance = with(LocalDensity.current) { 56.dp.toPx() }
-    val listCollapseProgress by remember(listState, collapseDistance) {
-        derivedStateOf {
-            if (listState.firstVisibleItemIndex > 0) 1f
-            else (listState.firstVisibleItemScrollOffset / collapseDistance).coerceIn(0f, 1f)
-        }
-    }
-    val gridCollapseProgress = rememberGlasmioGridCollapseProgress(gridState)
-    val collapseProgress = if (grid) gridCollapseProgress else listCollapseProgress
+    val collapseProgress = if (grid) rememberGlasmioHeaderCollapse(gridState) else rememberGlasmioHeaderCollapse(listState)
+    val edgeProgress = if (grid) rememberGlasmioHeaderScrollEdge(gridState) else rememberGlasmioHeaderScrollEdge(listState)
     val headerEntry = LocalSampleHeaderEntry.current
     val currentCollapse = rememberUpdatedState(collapseProgress)
-    val headerScroll = remember { GlasmioHeaderScrollState({ currentCollapse.value }) }
+    val currentEdge = rememberUpdatedState(edgeProgress)
+    val headerScroll = remember { GlasmioHeaderScrollState({ currentCollapse.value }, { currentEdge.value }) }
     val currentRefresh = rememberUpdatedState(refresh)
     val headerActions = remember(grid, refreshing) {
         val layoutSymbol = if (grid) "list.bullet" else "rectangle.grid.2x2"
