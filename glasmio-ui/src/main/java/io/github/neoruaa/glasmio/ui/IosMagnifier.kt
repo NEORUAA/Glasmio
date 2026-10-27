@@ -76,7 +76,8 @@ internal val GlasmioLoupeBodyHeight: Dp = 85.dp
  * Place this in a bounded overlay that shares the source content's coordinate space.
  * [sourcePosition] and optional [viewportBounds] use physical pixels relative to this
  * overlay's top-left, including in RTL. [backdrop] must record the source content without
- * this magnifier or its other overlay siblings, preventing a recursive sample graph.
+ * this magnifier, preventing a recursive sample graph. Include selection widgets in the source
+ * when they should stay attached to the magnified text through deformation and refraction.
  * [originSize] is the shape the lens grows out of: the caret rect, or the selection lollipop dot
  * when a selection widget owns the gesture. UIKit reads it from `originShape` rather than assuming
  * a size, so a line height change changes the opening shape too.

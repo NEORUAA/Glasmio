@@ -88,6 +88,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.core.IosTypography
 import io.github.neoruaa.glasmio.core.LocalGlassColors
@@ -679,20 +680,17 @@ internal fun GlasmioTextEditingOverlay(host: GlasmioTextEditingHost, backdrop: B
     if (!editor.chromeVisible) return
     val viewport = editor.viewportBounds() ?: return
     val popOffset = with(LocalDensity.current) { 8.dp.toPx() }
-    if (editor.showHandles && editor.value.text.isNotEmpty()) {
-        val collapsed = editor.value.selection.collapsed && !editor.draggingSelection
-        (if (collapsed) listOf(false) else listOf(true, false)).forEach { start ->
-            val rect = editor.handleRect(start) ?: return@forEach
-            val edge = if (start) rect.top else rect.bottom
-            val popDirection = if (start) -popOffset else popOffset
-            val anchor = Offset(rect.left, edge + popDirection)
-            val dragging = editor.draggingHandle == start
-            key(editor, start) {
-                if (dragging || (anchor.x in viewport.left..viewport.right && edge in (viewport.top - 1f)..(viewport.bottom + 1f))) {
-                    val visibleAnchor = if (dragging) Offset(anchor.x.coerceIn(viewport.left, viewport.right), edge.coerceIn(viewport.top, viewport.bottom) + popDirection) else anchor
-                    GlasmioEditingHandle(editor, start, root.screenToLocal(visibleAnchor), rect.height)
-                }
-            }
+    // UIKit has no selection widget for a collapsed caret: the caret is its own grab point and the
+    // loupe magnifies the caret itself, so only a range owns the two lollipops.
+    val handles = if (editor.showHandles && !editor.value.selection.collapsed && editor.value.text.isNotEmpty()) {
+        listOf(true, false).mapNotNull { editingHandle(editor, root, viewport, popOffset, it) }
+    } else emptyList()
+    val handlesBackdrop = rememberLayerBackdrop()
+    // Record the actual widgets at their laid-out positions. The loupe samples this layer with the
+    // same coordinate mapping as the text, so both stay attached through all lens transforms.
+    Box(Modifier.fillMaxSize().layerBackdrop(handlesBackdrop)) {
+        handles.forEach { handle ->
+            key(editor, handle.start) { GlasmioEditingHandle(editor, handle.start, handle.anchor, handle.lineHeight) }
         }
     }
 
@@ -700,13 +698,15 @@ internal fun GlasmioTextEditingOverlay(host: GlasmioTextEditingHost, backdrop: B
     val source = liveSource ?: editor.magnifierRetainedSource ?: return
     val originSize = editor.magnifierOriginSize() ?: return
     if (!editor.allowsMagnifier()) return
-    val combined = remember(backdrop, host.recording) {
+    val combined = remember(backdrop, host.recording, handlesBackdrop) {
         object : Backdrop {
             override val isCoordinatesDependent: Boolean
-                get() = backdrop.isCoordinatesDependent || host.recording.isCoordinatesDependent
+                get() = backdrop.isCoordinatesDependent || host.recording.isCoordinatesDependent ||
+                    handlesBackdrop.isCoordinatesDependent
             override fun DrawScope.drawBackdrop(density: Density, coordinates: LayoutCoordinates?, layerBlock: (GraphicsLayerScope.() -> Unit)?) {
                 with(backdrop) { drawBackdrop(density, coordinates, layerBlock) }
                 with(host.recording) { drawBackdrop(density, coordinates, layerBlock) }
+                with(handlesBackdrop) { drawBackdrop(density, coordinates, layerBlock) }
             }
         }
     }
@@ -756,9 +756,42 @@ private fun GlasmioEditingHandle(editor: GlasmioTextEditor, start: Boolean, anch
                 }
             },
     ) {
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val stickLength = lineHeight + 11.dp.toPx()
-        drawLine(color, center, center + Offset(0f, if (start) stickLength else -stickLength), 2.dp.toPx())
-        drawCircle(color, 8.dp.toPx(), center)
+        drawEditingHandle(Offset(size.width / 2f, size.height / 2f), lineHeight, start, color)
     }
+}
+
+/**
+ * One iOS selection widget: an 8 dp dot 8 dp off the line, joined to it by a 2 dp stick.
+ * [center] is the dot in the handle's own 44 dp touch box. The loupe samples the recorded widget.
+ */
+private fun DrawScope.drawEditingHandle(center: Offset, lineHeight: Float, start: Boolean, color: Color) {
+    val stickLength = lineHeight + 11.dp.toPx()
+    drawLine(color, center, center + Offset(0f, if (start) stickLength else -stickLength), 2.dp.toPx())
+    drawCircle(color, 8.dp.toPx(), center)
+}
+
+/** A drawable selection widget, in overlay pixels. */
+private class EditingHandle(val start: Boolean, val anchor: Offset, val lineHeight: Float)
+
+/**
+ * Where one widget sits, or null when UIKit would not show it. The widget the finger holds stays
+ * drawn outside the field; the idle one is only shown while its line is still on screen.
+ */
+private fun editingHandle(
+    editor: GlasmioTextEditor,
+    root: LayoutCoordinates,
+    viewport: Rect,
+    popOffset: Float,
+    start: Boolean,
+): EditingHandle? {
+    val rect = editor.handleRect(start) ?: return null
+    val edge = if (start) rect.top else rect.bottom
+    val popDirection = if (start) -popOffset else popOffset
+    val anchor = Offset(rect.left, edge + popDirection)
+    val dragging = editor.draggingHandle == start
+    if (!dragging && !(anchor.x in viewport.left..viewport.right && edge in (viewport.top - 1f)..(viewport.bottom + 1f))) return null
+    val visibleAnchor = if (dragging) {
+        Offset(anchor.x.coerceIn(viewport.left, viewport.right), edge.coerceIn(viewport.top, viewport.bottom) + popDirection)
+    } else anchor
+    return EditingHandle(start, root.screenToLocal(visibleAnchor), rect.height)
 }
