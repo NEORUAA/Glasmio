@@ -13,6 +13,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.isUnspecified
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -116,8 +118,11 @@ class GlasmioTextStyles internal constructor(
 }
 
 /** Default Large-category values in sp, following the host's Android font scaling. */
-fun glasmioTextStyles(fontFamily: FontFamily = FontFamily.Default): GlasmioTextStyles =
-    buildTextStyles(null, fontFamily, dynamicTypeSize = null, density = null)
+fun glasmioTextStyles(
+    fontFamily: FontFamily = FontFamily.Default,
+    letterSpacing: TextUnit = TextUnit.Unspecified,
+): GlasmioTextStyles =
+    buildTextStyles(null, fontFamily, dynamicTypeSize = null, density = null, letterSpacing = letterSpacing)
 
 /**
  * An explicit Apple category in logical points. [density] is required so Android's fontScale
@@ -127,7 +132,8 @@ fun glasmioTextStyles(
     fontFamily: FontFamily,
     dynamicTypeSize: IosDynamicTypeSize,
     density: Density,
-): GlasmioTextStyles = buildTextStyles(null, fontFamily, dynamicTypeSize, density)
+    letterSpacing: TextUnit = TextUnit.Unspecified,
+): GlasmioTextStyles = buildTextStyles(null, fontFamily, dynamicTypeSize, density, letterSpacing)
 
 /**
  * Inherits each role's font family and platform settings from [typography].
@@ -138,20 +144,35 @@ fun glasmioTextStyles(
 fun rememberGlasmioTextStyles(
     dynamicTypeSize: IosDynamicTypeSize? = null,
     typography: Typography = MaterialTheme.typography,
+    letterSpacing: TextUnit = TextUnit.Unspecified,
 ): GlasmioTextStyles {
     val density = LocalDensity.current
-    return remember(typography, dynamicTypeSize, density) {
-        buildTextStyles(typography, FontFamily.Default, dynamicTypeSize, density)
+    return remember(typography, dynamicTypeSize, density, letterSpacing) {
+        buildTextStyles(typography, FontFamily.Default, dynamicTypeSize, density, letterSpacing)
     }
 }
 
 val LocalGlasmioTextStyles = staticCompositionLocalOf { glasmioTextStyles() }
+val LocalGlasmioLetterSpacing = staticCompositionLocalOf { TextUnit.Unspecified }
+
+internal fun Typography.withLetterSpacing(letterSpacing: TextUnit): Typography {
+    if (letterSpacing.isUnspecified) return this
+    fun TextStyle.tracked() = copy(letterSpacing = letterSpacing)
+    return copy(
+        displayLarge = displayLarge.tracked(), displayMedium = displayMedium.tracked(), displaySmall = displaySmall.tracked(),
+        headlineLarge = headlineLarge.tracked(), headlineMedium = headlineMedium.tracked(), headlineSmall = headlineSmall.tracked(),
+        titleLarge = titleLarge.tracked(), titleMedium = titleMedium.tracked(), titleSmall = titleSmall.tracked(),
+        bodyLarge = bodyLarge.tracked(), bodyMedium = bodyMedium.tracked(), bodySmall = bodySmall.tracked(),
+        labelLarge = labelLarge.tracked(), labelMedium = labelMedium.tracked(), labelSmall = labelSmall.tracked(),
+    )
+}
 
 private fun buildTextStyles(
     typography: Typography?,
     fontFamily: FontFamily,
     dynamicTypeSize: IosDynamicTypeSize?,
     density: Density?,
+    letterSpacing: TextUnit,
 ): GlasmioTextStyles {
     val category = dynamicTypeSize ?: IosDynamicTypeSize.Large
     fun Float.textUnit() = if (dynamicTypeSize == null) sp else {
@@ -189,7 +210,7 @@ private fun buildTextStyles(
                 put(role to variant, source.copy(
                     fontSize = size.toFloat().textUnit(),
                     lineHeight = leading.toFloat().textUnit(),
-                    letterSpacing = role.tracking.textUnit(),
+                    letterSpacing = if (letterSpacing.isUnspecified) role.tracking.textUnit() else letterSpacing,
                     fontWeight = FontWeight(weight),
                     fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
                     // Keep first/last-line font extents: a host font can exceed the nominal

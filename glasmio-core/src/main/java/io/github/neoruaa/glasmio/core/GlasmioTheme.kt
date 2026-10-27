@@ -15,10 +15,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.isUnspecified
 import androidx.compose.ui.unit.dp
 import com.kyant.capsule.ContinuousRoundedRectangle
 
@@ -97,11 +100,13 @@ fun GlasmioTheme(
     shapes: GlasmioShapes = GlasmioShapes(),
     spacing: GlasmioSpacing = GlasmioSpacing(),
     dynamicTypeSize: IosDynamicTypeSize? = null,
+    letterSpacing: TextUnit = TextUnit.Unspecified,
     content: @Composable () -> Unit,
 ) {
-    val textStyles = rememberGlasmioTextStyles(dynamicTypeSize, typography)
-    val materialTypography = if (dynamicTypeSize == null) typography
+    val textStyles = rememberGlasmioTextStyles(dynamicTypeSize, typography, letterSpacing)
+    val sizedTypography = if (dynamicTypeSize == null) typography
         else textStyles.resizeMaterialTypography(typography)
+    val materialTypography = remember(sizedTypography, letterSpacing) { sizedTypography.withLetterSpacing(letterSpacing) }
     CompositionLocalProvider(
         LocalGlassColors provides colors,
         LocalGlassAppearance provides appearance,
@@ -109,6 +114,7 @@ fun GlasmioTheme(
         LocalGlasmioShapes provides shapes,
         LocalGlasmioSpacing provides spacing,
         LocalGlasmioTextStyles provides textStyles,
+        LocalGlasmioLetterSpacing provides letterSpacing,
         LocalContentColor provides colors.content,
     ) {
         MaterialTheme(colorScheme, shapes.materialShapes(), materialTypography, content)
@@ -116,6 +122,11 @@ fun GlasmioTheme(
 }
 
 object GlasmioTheme {
+    /** Honors the host override while retaining each component's reference tracking by default. */
+    @Composable @ReadOnlyComposable
+    fun letterSpacing(fallback: TextUnit): TextUnit = LocalGlasmioLetterSpacing.current.let {
+        if (it.isUnspecified) fallback else it
+    }
     val colors: GlassColors @Composable @ReadOnlyComposable get() = LocalGlassColors.current
     val appearance: GlassAppearance @Composable @ReadOnlyComposable get() = LocalGlassAppearance.current
     val dimensions: GlassDimensions @Composable @ReadOnlyComposable get() = LocalGlassDimensions.current

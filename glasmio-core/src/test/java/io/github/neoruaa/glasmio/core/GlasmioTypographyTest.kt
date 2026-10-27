@@ -12,6 +12,24 @@ import org.junit.Test
 
 class GlasmioTypographyTest {
     @Test
+    fun hostTrackingOverrideCoversSemanticVariantsAndMaterialRoles() {
+        val defaults = glasmioTextStyles(FontFamily.Monospace)
+        val tracked = glasmioTextStyles(FontFamily.Monospace, letterSpacing = 0.6.sp)
+        for (role in IosTextStyle.entries) for (variant in role.variants) {
+            assertEquals(defaults[role, variant].copy(letterSpacing = 0.6.sp), tracked[role, variant])
+        }
+        val material = glasmioTypography(FontFamily.Serif).withLetterSpacing(0.6.sp)
+        listOf(material.displayLarge, material.displayMedium, material.displaySmall,
+            material.headlineLarge, material.headlineMedium, material.headlineSmall,
+            material.titleLarge, material.titleMedium, material.titleSmall,
+            material.bodyLarge, material.bodyMedium, material.bodySmall,
+            material.labelLarge, material.labelMedium, material.labelSmall).forEach {
+            assertEquals(0.6.sp, it.letterSpacing)
+            assertEquals(FontFamily.Serif, it.fontFamily)
+        }
+    }
+
+    @Test
     fun defaultPresetsUseLargeMetricsAndTheHostFont() {
         val text = glasmioTextStyles(FontFamily.Monospace)
 
