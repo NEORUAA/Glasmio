@@ -19,7 +19,7 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Menus | `GlasmioMenu`, `GlasmioMenuItem`, `GlasmioContextMenu`, `GlasmioCascadingMenu`, `GlasmioCascadingMenuItem`, `GlasmioPopUpButton`, `rememberGlasmioMenuAnchorState`, `Modifier.glasmioMenuAnchor` |
 | Alerts | `GlasmioAlertDialog`, `GlasmioAlertButtonSpec`, `GlasmioAlertButtonRole`, `GlasmioAlertButtonLayout`, `GlasmioAlertSurface`, `GlasmioAlertButton`, `GlasmioAlertFieldGroup`, `GlasmioAlertTextField` |
 | Sheets and overlays | `GlasmioBottomSheet`, `GlasmioSheetSurface`, `GlasmioActionSheet`, `GlasmioActionSheetContent`, `GlasmioModalOverlay` |
-| Pages | `GlasmioScaffold`, `GlasmioListPage`, `GlasmioPinnedListPage`, `GlasmioPinnedPage`, `rememberGlasmioGridCollapseProgress`, `GlasmioOverscrollHost`, `Modifier.pullToRefreshRebound`, `rememberGlasmioAppBarScrollBehavior` |
+| Pages | `GlasmioNavigationScaffold`, `GlasmioPageBody`, `GlasmioPageTitle`, `GlasmioScaffold`, `GlasmioListPage`, `GlasmioPinnedListPage`, `GlasmioPinnedPage`, `rememberGlasmioGridCollapseProgress`, `GlasmioOverscrollHost`, `Modifier.pullToRefreshRebound`, `rememberGlasmioAppBarScrollBehavior` |
 | Floating search | `GlasmioFloatingSearch`, `GlasmioFloatingSearchButton` |
 | Sheet motion | `GlasmioSheetState`, `rememberGlasmioSheetState`, `GlasmioSheetValue`; custom player containers retain `GlasmioBottomSheetState` and `GlasmioSheetDefaults` |
 | Preferences | `GlasmioPreferenceEntry`, `GlasmioSwitchPreference`, `GlasmioEditTextPreference`, `GlasmioListPreference`, `GlasmioEnumListPreference`, `GlasmioPreferenceGroupTitle` |
@@ -301,17 +301,37 @@ Header material starts clear by default. Supply the actual scroll edge through
 do not imply an already visible blur. The same scroll-edge default applies to page
 and shared navigation headers.
 
-Progressive blur belongs to each page. `GlasmioNavigationScaffold` keeps the shared
-title/button animations but does not draw a combined blur over multiple navigation entries.
+Progressive blur and the title belong to each page. `GlasmioNavigationScaffold` keeps
+only the toolbar buttons shared; it does not draw a shared title or a combined blur over
+multiple navigation entries. Put `GlasmioPageTitle(entryKey)` after the page body inside
+each navigation entry's root Box, outside its content mask and blur recording. Use the
+actual entry key, including repeated instances of the same destination. The title follows
+the page's transition and its own collapse state. It reserves space from that entry's
+measured left/right button widths, so changing or merging shared actions cannot cover it.
+
+```kotlin
+NavEntry(key = entryKey, contentKey = entryKey) {
+    Box(Modifier.fillMaxSize()) {
+        GlasmioPageBody(padding, topBarBlurProgress = scrollEdge) { contentPadding ->
+            PageContent(contentPadding)
+        }
+        GlasmioPageTitle(entryKey)
+    }
+}
+```
+
 Pass the page's edge value to `GlasmioPageBody(topBarBlurProgress = edge)` inside each
 entry. The body records its own background and already-masked foreground, then overlays full progressive blur, so the blur
 follows that page during push, pop, tab changes and predictive Back. `GlasmioPinnedPage`
-uses the same page-owned implementation. Glass controls keep their existing independent
+uses the same page-owned implementation; its standalone toolbar is already inside the page.
+Glass controls keep their existing independent
 backdrop source; the header's recording excludes its own foreground.
 
 Normal blur preserves the sampled colors and the full spatially variable radius profile.
-The foreground opacity mask uses the same bounds as the Reduce Transparency header block:
-alpha is 0.25 at its top and rises linearly to 1 at its bottom. The blur's separate 34dp
+The foreground opacity mask retains alpha 1 at the Reduce Transparency header block's
+bottom. Its alpha 0.25 endpoint starts at the toolbar's top, below the status bar on a
+page or below the grabber in a sheet. It rises linearly between those endpoints and
+stays at 0.25 above the toolbar. The blur's separate 34dp
 extension remains unchanged. Scroll progress blends this content fade in
 from a fully visible foreground. Background color, brush and the `GlasmioPageBody.background`
 slot stay outside the mask, so wallpaper and page canvas remain intact. Place wallpaper

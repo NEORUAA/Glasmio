@@ -41,7 +41,7 @@ Run the component behavior tests on an Android device or emulator:
 ./gradlew :sample:connectedDebugAndroidTest
 ```
 
-The sample demonstrates materials, controls, navigation, lists, preferences, text styles, search, menus, and sheets. Its Home, Materials, Settings, and About tabs share a navigation bar with a separate floating search control. Pages use collapsing titles and progressive edge blur. Root tabs fade between destinations; detail pages use Miuix transitions. It builds independently of MeiloX.
+The sample demonstrates materials, controls, navigation, lists, preferences, text styles, search, menus, and sheets. Its Home, Materials, Settings, and About tabs share a navigation bar with a separate floating search control. Each page owns its collapsing title and progressive edge blur; only the top toolbar buttons are shared between destinations. Root tabs fade between destinations; detail pages use Miuix transitions. It builds independently of MeiloX.
 
 Build the Demo with SF Pro and its real italic font:
 

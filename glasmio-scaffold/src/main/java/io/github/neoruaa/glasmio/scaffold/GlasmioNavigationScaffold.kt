@@ -18,7 +18,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.SubcomposeLayout
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -80,6 +79,108 @@ data class GlasmioHeaderAction(
     val content: @Composable () -> Unit,
 )
 
+private data class HeaderEndpointKey(val group: Any, val actions: List<LayerKey>)
+private fun endpointKeys(groups: List<GlasmioHeaderGroup>): List<HeaderEndpointKey> =
+    groups.filter { it.actions.isNotEmpty() }.map { group ->
+        HeaderEndpointKey(group.key, group.actions.map { LayerKey(it.key, it.visualKey) })
+    }
+
+private data class PageTitleSpec(
+    val title: String,
+    val subtitle: String?,
+    val style: GlasmioTopBarStyle,
+    val scrollState: GlasmioHeaderScrollState?,
+    val leading: List<HeaderEndpointKey>,
+    val trailing: List<HeaderEndpointKey>,
+)
+private fun GlasmioHeaderSpec.pageTitleSpec() = PageTitleSpec(
+    title, subtitle, style, scrollState, endpointKeys(leading), endpointKeys(trailing),
+)
+
+private data class HeaderEndpointWidth(
+    val keys: List<HeaderEndpointKey>,
+    val width: Int,
+    val density: Float,
+    val fontScale: Float,
+)
+private class PageTitleEntry {
+    var spec by mutableStateOf<PageTitleSpec?>(null)
+    var leading by mutableStateOf<HeaderEndpointWidth?>(null)
+    var trailing by mutableStateOf<HeaderEndpointWidth?>(null)
+}
+
+/** Stores title data only; action callbacks and composed button content stay in the shared bar. */
+private class PageTitleRegistry {
+    private val entries = mutableMapOf<Any, PageTitleEntry>()
+    private val mounted = mutableMapOf<Any, Int>()
+    private var active = emptySet<Any>()
+    fun entry(key: Any): PageTitleEntry = entries.getOrPut(key) { PageTitleEntry() }
+    fun mount(key: Any) { mounted[key] = (mounted[key] ?: 0) + 1 }
+    fun unmount(key: Any) {
+        val count = (mounted[key] ?: 1) - 1
+        if (count == 0) mounted.remove(key) else mounted[key] = count
+        prune()
+    }
+    fun update(frame: GlasmioNavigationFrame, source: GlasmioHeaderSpec, target: GlasmioHeaderSpec) {
+        active = setOf(frame.fromEntryKey, frame.toEntryKey)
+        entry(frame.fromEntryKey).spec = source.pageTitleSpec()
+        entry(frame.toEntryKey).spec = target.pageTitleSpec()
+        prune()
+    }
+    fun publish(key: Any, leading: Boolean, groups: List<GlasmioHeaderGroup>, width: Int?, density: Density) {
+        if (width == null || key !in active && key !in mounted) return
+        val value = HeaderEndpointWidth(endpointKeys(groups), width, density.density, density.fontScale)
+        val entry = entry(key)
+        if (leading) entry.leading = value else entry.trailing = value
+    }
+    private fun prune() { entries.keys.retainAll(active + mounted.keys) }
+}
+
+private val LocalPageTitles = staticCompositionLocalOf<PageTitleRegistry?> { null }
+
+/**
+ * Place after a page's body inside its navigation entry. The title follows that page's transform,
+ * while its space is reserved from that entry's measured button endpoints, not the shared morph.
+ */
+@Composable
+fun GlasmioPageTitle(entryKey: Any, modifier: Modifier = Modifier) {
+    val registry = requireNotNull(LocalPageTitles.current) { "GlasmioPageTitle requires GlasmioNavigationScaffold" }
+    val entry = remember(registry, entryKey) { registry.entry(entryKey) }
+    DisposableEffect(registry, entryKey) {
+        registry.mount(entryKey)
+        onDispose { registry.unmount(entryKey) }
+    }
+    val spec = entry.spec ?: return
+    val density = LocalDensity.current
+    fun width(keys: List<HeaderEndpointKey>, measured: HeaderEndpointWidth?): Int? = when {
+        keys.isEmpty() -> 0
+        measured?.keys == keys && measured.density == density.density && measured.fontScale == density.fontScale -> measured.width
+        else -> null
+    }
+    val leading = width(spec.leading, entry.leading) ?: return
+    val trailing = width(spec.trailing, entry.trailing) ?: return
+    val startsAtLeading = spec.style == GlasmioTopBarStyle.TwoLineLeading || spec.style == GlasmioTopBarStyle.CompactLargeTitle
+    val widest = maxOf(leading, trailing)
+    val start = with(density) { (if (startsAtLeading) leading else widest).toDp() } +
+        if ((if (startsAtLeading) leading else widest) > 0) 8.dp else 0.dp
+    val end = with(density) { (if (startsAtLeading) trailing else widest).toDp() } +
+        if ((if (startsAtLeading) trailing else widest) > 0) 8.dp else 0.dp
+    CompositionLocalProvider(LocalContentColor provides LocalGlassColors.current.content) {
+        Box(modifier.fillMaxWidth().statusBarsPadding().height(62.dp).padding(horizontal = IosPageHorizontalPadding)) {
+            Column(
+                Modifier.align(if (startsAtLeading) Alignment.CenterStart else Alignment.Center)
+                    .fillMaxWidth().padding(start = start, end = end)
+                    .graphicsLayer { alpha = (spec.scrollState?.collapseProgress?.invoke() ?: 1f).coerceIn(0f, 1f) },
+                horizontalAlignment = if (startsAtLeading) Alignment.Start else Alignment.CenterHorizontally,
+            ) {
+                Text(spec.title, style = if (spec.style == GlasmioTopBarStyle.CompactLargeTitle) IosTypography.largeTitle else IosTypography.headline,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                spec.subtitle?.let { Text(it, style = IosTypography.caption, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            }
+        }
+    }
+}
+
 /** Shared controls remain outside NavDisplay transforms; each page owns its scroll-edge blur. */
 @Composable
 fun GlasmioNavigationScaffold(
@@ -93,14 +194,18 @@ fun GlasmioNavigationScaffold(
     val frame by motion.frame
     val source = key(frame.fromEntryKey) { header(frame.fromEntryKey) }
     val target = key(frame.toEntryKey) { header(frame.toEntryKey) }
+    val titles = remember { PageTitleRegistry() }
+    SideEffect { titles.update(frame, source, target) }
     val status = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val padding = PaddingValues(start = IosPageHorizontalPadding, top = status + 72.dp, end = IosPageHorizontalPadding)
+    CompositionLocalProvider(LocalPageTitles provides titles) {
     Box(modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().glassBackdropSource(backdrop).trackBackdropPosition(backdrop)) { content(padding) }
         GlasmioBackdropProvider(backdrop) {
-            GlasmioNavigationHeader(source, target, frame, Modifier.fillMaxWidth().padding(top = status))
+            GlasmioNavigationHeader(source, target, frame, titles, Modifier.fillMaxWidth().padding(top = status))
             bottomBar()
         }
+    }
     }
 }
 
@@ -122,7 +227,8 @@ fun GlasmioPageBody(
     content: @Composable BoxScope.(PaddingValues) -> Unit,
 ) {
     val appearance = LocalGlassAppearance.current
-    val headerHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 62.dp
+    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val headerHeight = statusBarHeight + 62.dp
     val progress = topBarBlurProgress.coerceIn(0f, 1f)
     Box(modifier.fillMaxSize()) {
         Box(
@@ -132,7 +238,7 @@ fun GlasmioPageBody(
                 Modifier.matchParentSize()
                     .then(if (backgroundBrush != null) Modifier.background(backgroundBrush) else Modifier.background(backgroundColor)),
             ) { background?.invoke(this) }
-            Box(Modifier.fillMaxSize().scrollEdgeContentFade(progress, headerHeight)) {
+            Box(Modifier.fillMaxSize().scrollEdgeContentFade(progress, headerHeight, headerTop = statusBarHeight)) {
                 GlasmioOverscrollHost { content(contentPadding) }
             }
         }
@@ -195,6 +301,7 @@ private fun GlasmioNavigationHeader(
     source: GlasmioHeaderSpec,
     target: GlasmioHeaderSpec,
     frame: GlasmioNavigationFrame,
+    titles: PageTitleRegistry,
     modifier: Modifier,
 ) {
     val tracking = frame.phase == GlasmioNavigationPhase.Tracking
@@ -203,24 +310,20 @@ private fun GlasmioNavigationHeader(
     val progress = when { tracking -> frame.gestureProgress.coerceIn(0f, 1f); canceling -> 0f; else -> 1f }
     val retainedLeading = remember { linkedMapOf<Any, GlasmioHeaderGroup>() }
     val retainedTrailing = remember { linkedMapOf<Any, GlasmioHeaderGroup>() }
+    val density = LocalDensity.current
     // Retained groups are disposed only after their own tracks settle, not when the body ends.
     CompositionLocalProvider(LocalContentColor provides LocalGlassColors.current.content) {
         Box(modifier.height(62.dp).padding(horizontal = IosPageHorizontalPadding)) {
-            var leadingWidth by remember { mutableIntStateOf(0) }
-            var trailingWidth by remember { mutableIntStateOf(0) }
-            val density = LocalDensity.current
-            Column(Modifier.align(if (owner.style == GlasmioTopBarStyle.TwoLineLeading || owner.style == GlasmioTopBarStyle.CompactLargeTitle) Alignment.CenterStart else Alignment.Center)
-                .padding(start = with(density) { if (owner.style == GlasmioTopBarStyle.TwoLineLeading) leadingWidth.toDp() + 8.dp else maxOf(leadingWidth, trailingWidth).toDp() + 8.dp },
-                    end = with(density) { if (owner.style == GlasmioTopBarStyle.TwoLineLeading) trailingWidth.toDp() + 8.dp else maxOf(leadingWidth, trailingWidth).toDp() + 8.dp })
-                .graphicsLayer { alpha = owner.scrollState?.collapseProgress?.invoke() ?: 1f },
-                horizontalAlignment = if (owner.style == GlasmioTopBarStyle.TwoLineLeading) Alignment.Start else Alignment.CenterHorizontally) {
-                Text(owner.title, style = if (owner.style == GlasmioTopBarStyle.CompactLargeTitle) IosTypography.largeTitle else IosTypography.headline, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                owner.subtitle?.let { Text(it, style = IosTypography.caption, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            }
             HeaderSide(source.leading, target.leading, owner.leading, retainedLeading, progress, tracking,
-                Modifier.align(Alignment.CenterStart), onWidth = { leadingWidth = it })
+                Modifier.align(Alignment.CenterStart)) { old, new ->
+                titles.publish(frame.fromEntryKey, true, source.leading, old, density)
+                titles.publish(frame.toEntryKey, true, target.leading, new, density)
+            }
             HeaderSide(source.trailing, target.trailing, owner.trailing, retainedTrailing, progress, tracking,
-                Modifier.align(Alignment.CenterEnd), onWidth = { trailingWidth = it })
+                Modifier.align(Alignment.CenterEnd)) { old, new ->
+                titles.publish(frame.fromEntryKey, false, source.trailing, old, density)
+                titles.publish(frame.toEntryKey, false, target.trailing, new, density)
+            }
         }
     }
 }
@@ -229,30 +332,62 @@ private fun GlasmioNavigationHeader(
 private fun HeaderSide(
     from: List<GlasmioHeaderGroup>, to: List<GlasmioHeaderGroup>, owner: List<GlasmioHeaderGroup>,
     retained: MutableMap<Any, GlasmioHeaderGroup>, progress: Float, tracking: Boolean,
-    modifier: Modifier, onWidth: (Int) -> Unit,
+    modifier: Modifier, onEndpointWidths: (Int?, Int?) -> Unit,
 ) {
     require(from.map { it.key }.distinct().size == from.size && to.map { it.key }.distinct().size == to.size) { "Duplicate header group keys" }
     var retainedRevision by remember { mutableIntStateOf(0) }
+    val measured = remember { mutableMapOf<Any, GroupEndpointWidths>() }
+    val density = LocalDensity.current
+    fun total(groups: List<GlasmioHeaderGroup>, old: Boolean): Int? {
+        val active = groups.filter { it.actions.isNotEmpty() }
+        if (active.isEmpty()) return 0
+        var width = with(density) { 8.dp.roundToPx() } * (active.size - 1)
+        active.forEach { group ->
+            val endpoint = measured[group.key] ?: return null
+            if (endpoint.density != density.density || endpoint.fontScale != density.fontScale) return null
+            val keys = group.actions.map { LayerKey(it.key, it.visualKey) }
+            if ((if (old) endpoint.oldKeys else endpoint.newKeys) != keys) return null
+            width += if (old) endpoint.oldWidth else endpoint.newWidth
+        }
+        return width
+    }
+    fun publish() { onEndpointWidths(total(from, true), total(to, false)) }
+    SideEffect { publish() }
     retainedRevision
     (from + to).forEach { retained[it.key] = it }
-    Row(modifier.then(Modifier.onHeaderWidth(onWidth)), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         retained.toMap().forEach { (groupKey, fallback) -> key(groupKey) {
             val old = from.firstOrNull { it.key == groupKey }
             val new = to.firstOrNull { it.key == groupKey }
-            HeaderGroup(old, new, owner.firstOrNull { it.key == groupKey }, fallback, progress, tracking) {
-                retained.remove(groupKey)
-                retainedRevision++
-            }
+            HeaderGroup(old, new, owner.firstOrNull { it.key == groupKey }, fallback, progress, tracking,
+                onEndpoints = { oldWidth, newWidth ->
+                    measured[groupKey] = GroupEndpointWidths(
+                        old?.actions.orEmpty().map { LayerKey(it.key, it.visualKey) },
+                        new?.actions.orEmpty().map { LayerKey(it.key, it.visualKey) },
+                        oldWidth, newWidth, density.density, density.fontScale,
+                    )
+                    publish()
+                },
+                onGone = {
+                    retained.remove(groupKey)
+                    measured.remove(groupKey)
+                    retainedRevision++
+                },
+            )
         } }
     }
 }
 
-private fun Modifier.onHeaderWidth(onWidth: (Int) -> Unit) = onSizeChanged { onWidth(it.width) }
+private data class GroupEndpointWidths(
+    val oldKeys: List<LayerKey>, val newKeys: List<LayerKey>,
+    val oldWidth: Int, val newWidth: Int,
+    val density: Float, val fontScale: Float,
+)
 
 @Composable
 private fun HeaderGroup(
     from: GlasmioHeaderGroup?, to: GlasmioHeaderGroup?, owner: GlasmioHeaderGroup?, fallback: GlasmioHeaderGroup,
-    progress: Float, tracking: Boolean, onGone: () -> Unit,
+    progress: Float, tracking: Boolean, onEndpoints: (Int, Int) -> Unit, onGone: () -> Unit,
 ) {
     val state = remember { HeaderGroupPresentation() }
     var revision by remember { mutableIntStateOf(0) }
@@ -379,6 +514,7 @@ private fun HeaderGroup(
         }
         val (oldWidth, oldX) = endpoint(fromKeys)
         val (newWidth, newX) = endpoint(toKeys)
+        onEndpoints(oldWidth.roundToInt(), newWidth.roundToInt())
         if (state.kickRequested) {
             // Compatibility policy: only semantic matches contribute local member offsets.
             // UIKit's complete offset-vector membership rules remain unverified.

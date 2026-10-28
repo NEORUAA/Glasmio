@@ -18,14 +18,17 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.scaffold.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.ui.GlasmioTopBarStyle
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -82,7 +85,7 @@ class NavigationHeaderTest {
             density = LocalDensity.current.density
             Box(Modifier.fillMaxSize().background(background).testTag("linear-content-fade")) {
                 Box(Modifier.fillMaxSize()
-                    .scrollEdgeContentFade(edge, headerHeight = 60.dp)
+                    .scrollEdgeContentFade(edge, headerHeight = 60.dp, headerTop = 20.dp)
                     .background(Color.White))
             }
         }
@@ -101,13 +104,14 @@ class NavigationHeaderTest {
         }
         assertSample(pixels(), 20f, 1f)
         rule.runOnIdle { edge = 0.5f }
-        assertSample(pixels(), 20f, 0.75f)
+        assertSample(pixels(), 20f, 0.625f)
         rule.runOnIdle { edge = 1f }
         val faded = pixels()
         assertSample(faded, 0f, 0.25f)
-        assertSample(faded, 15f, 0.4375f)
-        assertSample(faded, 30f, 0.625f)
-        assertSample(faded, 45f, 0.8125f)
+        assertSample(faded, 20f, 0.25f)
+        assertSample(faded, 30f, 0.4375f)
+        assertSample(faded, 40f, 0.625f)
+        assertSample(faded, 50f, 0.8125f)
         assertSample(faded, 60f, 1f)
         assertSample(faded, 80f, 1f)
         rule.runOnIdle { edge = 0f }
@@ -120,6 +124,7 @@ class NavigationHeaderTest {
         var pattern by mutableStateOf(false)
         var widthPx = 0f
         var density = 1f
+        var headerTopPx = 0f
         var headerHeightPx = 0f
         var blurHeightPx = 0f
         val blue = Color(0xFF004488)
@@ -128,9 +133,9 @@ class NavigationHeaderTest {
         rule.setContent {
             GlasmioTheme {
                 density = LocalDensity.current.density
-                headerHeightPx = with(LocalDensity.current) {
-                    (WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 62.dp).toPx()
-                }
+                val headerTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+                headerTopPx = with(LocalDensity.current) { headerTop.toPx() }
+                headerHeightPx = with(LocalDensity.current) { (headerTop + 62.dp).toPx() }
                 blurHeightPx = headerHeightPx + 34f * density
                 GlasmioNavigationScaffold(motion, header = { entry ->
                     GlasmioHeaderSpec("Page $entry",
@@ -173,6 +178,7 @@ class NavigationHeaderTest {
         val root = rule.onRoot()
         val origin = root.fetchSemanticsNode().boundsInRoot.topLeft
         val upperY = 20f * density
+        val toolbarMiddleY = headerTopPx + (headerHeightPx - headerTopPx) * 0.5f
         val belowHeaderY = headerHeightPx + 8f * density
         val tailY = blurHeightPx + 8f * density
         fun stats(image: androidx.compose.ui.graphics.PixelMap, left: Float, right: Float, y: Float): Pair<Float, Color> {
@@ -201,12 +207,13 @@ class NavigationHeaderTest {
         assertColor(blue, background(clear))
         rule.runOnIdle { edge = 0.5f }
         val partial = root.captureToImage().toPixelMap()
-        val headerFraction = (upperY / headerHeightPx).coerceIn(0f, 1f)
+        val headerFraction = ((upperY - headerTopPx) / (headerHeightPx - headerTopPx)).coerceIn(0f, 1f)
         assertColor(whiteOverBackground(0.625f + 0.375f * headerFraction), foreground(partial))
         assertColor(blue, background(partial))
         rule.runOnIdle { edge = 1f }
         val full = root.captureToImage().toPixelMap()
         assertColor(whiteOverBackground(0.25f + 0.75f * headerFraction), foreground(full))
+        assertColor(whiteOverBackground(0.625f), foreground(full, toolbarMiddleY))
         assertColor(blue, background(full))
         assertColor(Color.White, foreground(full, belowHeaderY))
         assertColor(Color.White, foreground(full, tailY))
@@ -247,6 +254,98 @@ class NavigationHeaderTest {
         assertEquals(button.center.x - origin.x, after.center.x - origin.x, 0.5f)
         assertEquals(button.center.y - origin.y, after.center.y - origin.y, 0.5f)
         rule.onAllNodesWithContentDescription("Shared action").assertCountEquals(1)
+    }
+
+    @Test fun pageTitlesReserveTheirOwnButtonWidthsWithoutDuplicatingSharedActions() {
+        val titleA = "Collection A has a deliberately long title that must fit between its own toolbar buttons"
+        val titleB = "Collection B has another deliberately long title that must fit between different toolbar buttons"
+        val mountsByPage = mutableMapOf<String, Int>()
+        var leadingTitleB by mutableStateOf(false)
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavigationScaffold(motion, header = { entry ->
+                    val page = entry.toString()
+                    val first = page == "A"
+                    GlasmioHeaderSpec(
+                        title = if (first) titleA else titleB,
+                        subtitle = if (!first && leadingTitleB) "Subtitle B" else null,
+                        style = if (!first && leadingTitleB) GlasmioTopBarStyle.TwoLineLeading else GlasmioTopBarStyle.Default,
+                        leading = listOf(GlasmioHeaderGroup("leading", listOf(
+                            GlasmioHeaderAction("back", if (first) "previous" else "short-back", "Leading $page", {}) {
+                                DisposableEffect(Unit) {
+                                    mountsByPage[page] = mountsByPage.getOrDefault(page, 0) + 1
+                                    onDispose {}
+                                }
+                                Text(if (first) "Previous" else "X")
+                            },
+                        ))),
+                        trailing = listOf(GlasmioHeaderGroup("trailing", listOf(
+                            GlasmioHeaderAction("apply", if (first) "short-apply" else "apply-changes", "Trailing $page", {}) {
+                                DisposableEffect(Unit) {
+                                    mountsByPage[page] = mountsByPage.getOrDefault(page, 0) + 1
+                                    onDispose {}
+                                }
+                                Text(if (first) "X" else "Apply changes")
+                            },
+                        ))),
+                    )
+                }) {
+                    Box(Modifier.fillMaxSize().background(Color.White)) {
+                        GlasmioPageTitle("A", Modifier.testTag("width-title-A"))
+                        GlasmioPageTitle("B", Modifier.offset(y = 120.dp).testTag("width-title-B"))
+                    }
+                }
+            }
+        }
+        fun title(page: String) = rule.onNode(
+            hasText(if (page == "A") titleA else titleB) and hasAnyAncestor(hasTestTag("width-title-$page")),
+        )
+        fun assertOneEllipsizedLine(page: String) {
+            val layouts = mutableListOf<TextLayoutResult>()
+            title(page).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            assertEquals(1, layouts.single().lineCount)
+            assertTrue("Long page titles must ellipsize inside the reserved space", layouts.single().isLineEllipsized(0))
+        }
+        rule.waitForIdle()
+        val root = rule.onRoot().fetchSemanticsNode().boundsInRoot
+        val pageInset = with(rule.density) { 16.dp.toPx() }
+        val actionGap = with(rule.density) { 8.dp.toPx() }
+        val leadingA = rule.onNodeWithContentDescription("Leading A").fetchSemanticsNode().boundsInRoot.width
+        val trailingA = rule.onNodeWithContentDescription("Trailing A").fetchSemanticsNode().boundsInRoot.width
+        fun assertCentered(page: String, leading: Float, trailing: Float) {
+            val text = title(page).fetchSemanticsNode().boundsInRoot
+            val side = pageInset + maxOf(leading, trailing) + actionGap
+            assertEquals("The title must clear its own wider button side", root.left + side, text.left, 2f)
+            assertEquals(root.right - side, text.right, 2f)
+            assertEquals("Centered titles keep equal visible edge insets", root.center.x, text.center.x, 1f)
+            assertOneEllipsizedLine(page)
+        }
+        assertCentered("A", leadingA, trailingA)
+        assertEquals("A title must not compose copies of the shared actions", 2, mountsByPage["A"])
+        rule.mainClock.autoAdvance = false
+        rule.runOnUiThread {
+            motion.state.value = GlasmioNavigationFrame(1, "A", "B", phase = GlasmioNavigationPhase.Settling)
+        }
+        rule.mainClock.advanceTimeBy(1200)
+        val leadingB = rule.onNodeWithContentDescription("Leading B").fetchSemanticsNode().boundsInRoot.width
+        val trailingB = rule.onNodeWithContentDescription("Trailing B").fetchSemanticsNode().boundsInRoot.width
+        assertTrue("The fixture must exercise different natural button widths", maxOf(leadingB, trailingB) > maxOf(leadingA, trailingA) + actionGap)
+        assertCentered("A", leadingA, trailingA)
+        assertCentered("B", leadingB, trailingB)
+        assertEquals(2, mountsByPage["A"])
+        assertEquals("The incoming title must not remount its buttons", 2, mountsByPage["B"])
+        rule.onAllNodesWithContentDescription("Leading A").assertCountEquals(0)
+        rule.onAllNodesWithContentDescription("Leading B").assertCountEquals(1)
+
+        rule.runOnUiThread { leadingTitleB = true }
+        rule.mainClock.advanceTimeBy(64)
+        val leadingTitle = title("B").fetchSemanticsNode().boundsInRoot
+        assertEquals(root.left + pageInset + leadingB + actionGap, leadingTitle.left, 2f)
+        assertEquals(root.right - pageInset - trailingB - actionGap, leadingTitle.right, 2f)
+        assertCentered("A", leadingA, trailingA)
+        assertOneEllipsizedLine("B")
+        rule.onNodeWithText("Subtitle B").assertIsDisplayed()
     }
 
     @Test fun exitingCircleCanExpandBeyondItsOriginalSlotWithoutRectangularClipping() {

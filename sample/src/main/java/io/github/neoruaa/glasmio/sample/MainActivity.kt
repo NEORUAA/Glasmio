@@ -499,7 +499,7 @@ private fun SampleNavigation(
                                                         }
                                                     }
                                                 }
-
+                                                GlasmioPageTitle(entryKey)
                                             }
                                         }
                                     },

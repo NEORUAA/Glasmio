@@ -1082,8 +1082,10 @@ class ComponentBehaviorTest {
             assertEquals(expected.blue, actual.blue, 3f / 255f)
         }
         val upperY = bounds.top + 24f * density
-        val middleY = bounds.top + headerHeightPx * 0.5f
-        val partialY = bounds.top + headerHeightPx * 0.8f
+        val headerTopPx = 20f * density
+        val fadeHeightPx = headerHeightPx - headerTopPx
+        val middleY = bounds.top + headerTopPx + fadeHeightPx * 0.5f
+        val partialY = bounds.top + headerTopPx + fadeHeightPx * 0.8f
         val bodyY = bounds.top + headerHeightPx + 17f * density
         val tailY = bounds.top + headerHeightPx + 8f * density
         val backgroundX = bounds.width * 0.72f / density
@@ -1111,7 +1113,7 @@ class ComponentBehaviorTest {
         assertTrue("Scrolled rows must pass behind the pinned header", underlappingRow.top < header.bottom)
         assertTrue("The list must extend into the header's viewport", underlappingRow.bottom > header.top)
         val pixels = rule.onNode(isDialog()).captureToImage().toPixelMap()
-        val upperAlpha = 0.25f + 0.75f * ((upperY - bounds.top) / headerHeightPx)
+        val upperAlpha = 0.25f + 0.75f * ((upperY - bounds.top - headerTopPx) / fadeHeightPx)
         assertColor(whiteOverBackground(upperAlpha), pixel(pixels, 80f, upperY))
         assertColor(bodyColor, pixel(pixels, backgroundX, upperY))
         val middle = pixel(pixels, 80f, middleY)

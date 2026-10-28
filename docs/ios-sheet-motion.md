@@ -527,8 +527,9 @@ hardware corner radius using the native concentric rule.
 The optional `topBar` slot adopts Glasmio's navigation-header treatment: a separate
 body-only backdrop feeds the shared untinted 10dp progressive blur, extending 34dp below
 the measured header. The handle and toolbar are overlaid after recording, avoiding
-feedback. A foreground-only mask matches the Reduce Transparency header block:
-alpha rises linearly from 0.25 at its top to 1 at its bottom. The blur still extends
+feedback. A foreground-only mask retains alpha 1 at the Reduce Transparency header
+block's bottom and alpha 0.25 at the toolbar's top, below the grabber. Alpha rises
+linearly within that toolbar region. The blur still extends
 34dp below the header. The native backplate and table canvas remain separate from
 this mask. The full original progressive blur samples
 the already-faded content, with no extra spatial attenuation or dim/tint paint.

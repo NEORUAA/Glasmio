@@ -403,7 +403,7 @@ fun GlasmioBottomSheet(
                                         ) { contentBackground?.invoke(this) }
                                         Column(
                                             (if (contentSized) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
-                                                .scrollEdgeContentFade(topBarBlurProgress, headerHeight),
+                                                .scrollEdgeContentFade(topBarBlurProgress, headerHeight, headerTop = handleHeight),
                                         ) {
                                             CompositionLocalProvider(LocalGlasmioSheetContentPadding provides chromePadding) { content() }
                                         }

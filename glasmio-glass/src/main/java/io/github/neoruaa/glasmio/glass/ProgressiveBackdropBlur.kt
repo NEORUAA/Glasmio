@@ -189,12 +189,13 @@ fun Modifier.progressiveBlurBackdrop(
 
 /**
  * Apply to foreground content before recording the blur source, leaving its background separate.
- * At full reveal alpha rises linearly from 25% at the solid header's top to 100% at
- * [headerHeight], matching the Reduce Transparency block. The Gaussian blur remains independent.
+ * At full reveal alpha rises linearly from 25% at [headerTop] to 100% at [headerHeight].
+ * The end stays aligned with the solid header's bottom; the Gaussian blur remains independent.
  */
 fun Modifier.scrollEdgeContentFade(
     progress: Float,
     headerHeight: Dp,
+    headerTop: Dp = 0.dp,
 ): Modifier {
     val reveal = progress.coerceIn(0f, 1f)
     if (reveal == 0f) return this
@@ -202,9 +203,10 @@ fun Modifier.scrollEdgeContentFade(
         compositingStrategy = CompositingStrategy.Offscreen
     }.drawWithCache {
         val header = headerHeight.toPx().coerceAtLeast(1f)
+        val top = headerTop.toPx().coerceIn(0f, header - 1f)
         val opacityMask = Brush.verticalGradient(
             colors = listOf(Color.White.copy(alpha = 1f - reveal * 0.75f), Color.White),
-            startY = 0f,
+            startY = top,
             endY = header,
         )
         onDrawWithContent {
