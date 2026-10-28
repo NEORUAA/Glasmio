@@ -307,7 +307,7 @@ fun GlasmioListSwipeActions(
     val colors = LocalGlassColors.current
     val background = if (colors.isDark) Color(0xFF1C1C1E) else Color(0xFFF2F2F7)
     val rowBackground = if (colors.isDark) Color.Black else Color.White
-    Layout(modifier = modifier.fillMaxWidth().clipToBounds().background(background), content = {
+    Layout(modifier = modifier.swipeBackExcluded().fillMaxWidth().clipToBounds().background(background), content = {
         Row(
             Modifier.onSizeChanged { actionWidth = it.width }
                 .padding(start = if (actionsAtStart) 16.dp else 0.dp, end = if (actionsAtStart) 0.dp else 16.dp)

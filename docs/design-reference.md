@@ -39,4 +39,4 @@ Only the Materials tab and Materials catalog page use these original Apple iPhon
 | `sample/src/main/res/drawable-nodpi/ios27_wallpaper_light.png` | `0:5245` | `a05c7053f66c8f97d7a7dc57056ee1fa18527120b5307c0b8b6658130d39798d` |
 | `sample/src/main/res/drawable-nodpi/ios27_wallpaper_dark.png` | `5707:9421` | `51be07df4d5969ae035066af28eb3a995b78f22ce04df49c590d24b11b46b946` |
 
-Apple retains rights to those assets. They are Sample resources, excluded from the six library artifacts. Other reference screenshots remain local in `build/reports/design`.
+Apple retains rights to those assets. They are Sample resources, excluded from the six library artifacts. Other reference screenshots and inspection receipts remain local in the ignored `.local-research/design/` directory.

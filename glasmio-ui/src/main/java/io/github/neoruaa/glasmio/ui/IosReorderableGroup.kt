@@ -156,6 +156,7 @@ fun <T> GlasmioReorderableGroup(
                     }
                     Box(
                         modifier = Modifier
+                            .swipeBackExcluded()
                             .width(38.dp)
                             .fillMaxHeight()
                             .draggableHandle(

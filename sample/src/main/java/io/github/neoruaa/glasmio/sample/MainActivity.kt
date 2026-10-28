@@ -88,9 +88,9 @@ import io.github.neoruaa.glasmio.scaffold.navigation.GlasmioNavDisplay
 import io.github.neoruaa.glasmio.scaffold.navigation.GlasmioNavHeaderMotion
 import androidx.navigation3.ui.NavDisplay
 import androidx.navigation3.ui.NavDisplayTransitionEffects
-import androidx.navigation3.ui.defaultTransitionSpec
-import androidx.navigation3.ui.defaultPopTransitionSpec
-import androidx.navigation3.ui.defaultPredictivePopTransitionSpec
+import io.github.neoruaa.glasmio.scaffold.navigation.iosTransitionSpec
+import io.github.neoruaa.glasmio.scaffold.navigation.iosPopTransitionSpec
+import io.github.neoruaa.glasmio.scaffold.navigation.iosPredictivePopTransitionSpec
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -292,6 +292,8 @@ private fun SampleNavigation(
     rtl: Boolean,
     onRtl: (Boolean) -> Unit,
 ) {
+    val layoutDirection = LocalLayoutDirection.current
+    val navigationDensity = LocalDensity.current.density
     val backStack = rememberSaveable(
         saver = listSaver<SnapshotStateList<String>, String>(save = { it.toList() }, restore = { it.toMutableStateList() }),
     ) { mutableStateListOf(sampleEntryKey("Home")) }
@@ -306,7 +308,6 @@ private fun SampleNavigation(
     var preferenceChoice by rememberSaveable { mutableStateOf("System") }
     var searchQuery by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     var navigationBarVisible by rememberSaveable { mutableStateOf(true) }
-    var usesMiuixTransitionEffects by remember { mutableStateOf(true) }
     val currentRoute = rememberUpdatedState(backStack.lastOrNull()?.sampleRouteName())
     val searchTransition = rememberGlasmioSearchTransition(currentRoute.value == "Search")
     val scrollConnection = remember {
@@ -334,20 +335,17 @@ private fun SampleNavigation(
     val currentPreferenceChoice by rememberUpdatedState(preferenceChoice)
     val navigate: (String) -> Unit = { route ->
         if (backStack.lastOrNull()?.sampleRouteName() != route) {
-            usesMiuixTransitionEffects = backStack.lastOrNull()?.sampleRouteName() !in topLevelRoutes || route !in topLevelRoutes
             backStack.add(sampleEntryKey(route))
         }
     }
     val navigateBack: () -> Unit = {
         if (backStack.size > 1) {
             val target = backStack[backStack.lastIndex - 1].sampleRouteName()
-            usesMiuixTransitionEffects = backStack.lastOrNull()?.sampleRouteName() !in topLevelRoutes || target !in topLevelRoutes
             backStack.removeAt(backStack.lastIndex)
         }
     }
     val selectTab: (String) -> Unit = { route ->
         if (backStack.lastOrNull()?.sampleRouteName() != route) {
-            usesMiuixTransitionEffects = backStack.lastOrNull()?.sampleRouteName() !in topLevelRoutes || route !in topLevelRoutes
             backStack.clear()
             backStack.add(sampleEntryKey("Home"))
             if (route != "Home") backStack.add(sampleEntryKey(route))
@@ -421,22 +419,15 @@ private fun SampleNavigation(
                         onBack = navigateBack,
                         transitionSpec = {
                             if (usesRootTabTransition()) rootTabTransition()
-                            else defaultTransitionSpec<String>().invoke(this)
+                            else iosTransitionSpec<String>(layoutDirection, navigationDensity).invoke(this)
                         },
                         popTransitionSpec = {
                             if (usesRootTabTransition()) rootTabTransition()
-                            else defaultPopTransitionSpec<String>().invoke(this)
+                            else iosPopTransitionSpec<String>(layoutDirection, navigationDensity).invoke(this)
                         },
                         predictivePopTransitionSpec = { swipeEdge ->
                             if (usesRootTabTransition()) rootTabTransition()
-                            else defaultPredictivePopTransitionSpec<String>().invoke(this, swipeEdge)
-                        },
-                        transitionEffects = remember(usesMiuixTransitionEffects) {
-                            NavDisplayTransitionEffects(
-                                enableCornerClip = usesMiuixTransitionEffects,
-                                dimAmount = if (usesMiuixTransitionEffects) 0.5f else 0f,
-                                blockInputDuringTransition = false,
-                            )
+                            else iosPredictivePopTransitionSpec<String>(layoutDirection, navigationDensity).invoke(this, swipeEdge)
                         },
                         entryProvider = { entryKey ->
                             NavEntry(key = entryKey, contentKey = entryKey) {

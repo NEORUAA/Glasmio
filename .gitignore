@@ -12,3 +12,4 @@ local.properties
 .env
 __pycache__/
 *.pyc
+.local-research/

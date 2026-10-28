@@ -96,6 +96,7 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.core.IosTypography
 import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.core.swipeBackExcluded
 import io.github.neoruaa.glasmio.glass.rememberCrossWindowBackdrop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -161,10 +162,11 @@ fun GlasmioEditableText(
     decorationBox: @Composable (innerTextField: @Composable () -> Unit) -> Unit = { it() },
 ) {
     require(maxLines > 0) { "maxLines must be positive." }
+    val inputModifier = modifier.swipeBackExcluded(enabled)
     val host = LocalGlasmioTextEditingHost.current
     val view = LocalView.current
     if (host == null || host.windowView !== view.rootView) {
-        BasicTextField(value, onValueChange, modifier, enabled, readOnly, textStyle,
+        BasicTextField(value, onValueChange, inputModifier, enabled, readOnly, textStyle,
             keyboardOptions, keyboardActions, singleLine, maxLines,
             visualTransformation = visualTransformation, onTextLayout = onTextLayout,
             cursorBrush = cursorBrush, decorationBox = decorationBox)
@@ -244,7 +246,7 @@ fun GlasmioEditableText(
             editor.scrollAtEdge()
         }
     }
-    val fieldModifier = modifier.onFocusChanged {
+    val fieldModifier = inputModifier.onFocusChanged {
         editor.focused = it.isFocused
         if (it.isFocused) host.activate(editor) else if (!host.menuOwnsFocus) editor.dismiss()
     }.onGloballyPositioned { editor.decoration = it }

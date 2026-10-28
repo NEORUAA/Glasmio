@@ -28,16 +28,23 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.SeekableTransitionState
-import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.rememberTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.RectangleShape
+import io.github.neoruaa.glasmio.glass.navigationGlassDropShadow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.withFrameNanos
+import io.github.neoruaa.glasmio.glass.LiquidMenuSpring
+import io.github.neoruaa.glasmio.glass.LiquidMenuSpringSpec
+import kotlinx.coroutines.isActive
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -55,6 +62,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
+import android.view.RoundedCorner
+import androidx.compose.ui.platform.LocalView
+import com.kyant.capsule.AbsoluteContinuousRoundedRectangle
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import io.github.neoruaa.glasmio.core.GlasmioSwipeBackExclusionRegistry
+import io.github.neoruaa.glasmio.core.LocalGlasmioSwipeBackExclusions
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -88,11 +104,12 @@ import androidx.navigationevent.NavigationEvent
 import androidx.navigationevent.NavigationEventTransitionState.Idle
 import androidx.navigationevent.NavigationEventTransitionState.InProgress
 import androidx.navigationevent.compose.NavigationEventState
-import androidx.compose.foundation.shape.AbsoluteRoundedCornerShape
 import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
 import kotlin.jvm.JvmMultifileClass
 import kotlin.jvm.JvmName
 import kotlin.reflect.KClass
@@ -117,13 +134,14 @@ fun <T : Any> GlasmioNavDisplay(
         listOf(rememberSaveableStateHolderNavEntryDecorator()),
     sizeTransform: SizeTransform? = null,
     transitionSpec: AnimatedContentTransitionScope<Scene<T>>.() -> ContentTransform =
-        defaultTransitionSpec(),
+        iosTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     popTransitionSpec: AnimatedContentTransitionScope<Scene<T>>.() -> ContentTransform =
-        defaultPopTransitionSpec(),
+        iosPopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     predictivePopTransitionSpec:
     AnimatedContentTransitionScope<Scene<T>>.(@NavigationEvent.SwipeEdge Int) -> ContentTransform =
-        defaultPredictivePopTransitionSpec(),
-    transitionEffects: NavDisplayTransitionEffects = NavDisplayTransitionEffects.Default,
+        iosPredictivePopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
+    transitionEffects: NavDisplayTransitionEffects = IosNavigationTransitionEffects,
+    swipeBackEnabled: Boolean = true,
     entryProvider: (key: T) -> NavEntry<T>,
 ) {
     require(backStack.isNotEmpty()) { "NavDisplay backstack cannot be empty" }
@@ -145,6 +163,7 @@ fun <T : Any> GlasmioNavDisplay(
         popTransitionSpec = popTransitionSpec,
         predictivePopTransitionSpec = predictivePopTransitionSpec,
         transitionEffects = transitionEffects,
+        swipeBackEnabled = swipeBackEnabled,
         onBack = onBack,
     )
 }
@@ -205,13 +224,14 @@ private fun <T : Any> GlasmioNavDisplay(
     contentAlignment: Alignment = Alignment.TopStart,
     sizeTransform: SizeTransform? = null,
     transitionSpec: AnimatedContentTransitionScope<Scene<T>>.() -> ContentTransform =
-        defaultTransitionSpec(),
+        iosTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     popTransitionSpec: AnimatedContentTransitionScope<Scene<T>>.() -> ContentTransform =
-        defaultPopTransitionSpec(),
+        iosPopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     predictivePopTransitionSpec:
     AnimatedContentTransitionScope<Scene<T>>.(@NavigationEvent.SwipeEdge Int) -> ContentTransform =
-        defaultPredictivePopTransitionSpec(),
-    transitionEffects: NavDisplayTransitionEffects = NavDisplayTransitionEffects.Default,
+        iosPredictivePopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
+    transitionEffects: NavDisplayTransitionEffects = IosNavigationTransitionEffects,
+    swipeBackEnabled: Boolean,
     onBack: () -> Unit,
 ) {
     require(entries.isNotEmpty()) { "NavDisplay entries cannot be empty" }
@@ -240,6 +260,8 @@ private fun <T : Any> GlasmioNavDisplay(
         popTransitionSpec,
         predictivePopTransitionSpec,
         transitionEffects,
+        swipeBackEnabled = swipeBackEnabled,
+        onBack = onBack,
     )
 }
 
@@ -277,13 +299,15 @@ fun <T : Any> GlasmioNavDisplay(
     contentAlignment: Alignment = Alignment.TopStart,
     sizeTransform: SizeTransform? = null,
     transitionSpec: AnimatedContentTransitionScope<Scene<T>>.() -> ContentTransform =
-        defaultTransitionSpec(),
+        iosTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     popTransitionSpec: AnimatedContentTransitionScope<Scene<T>>.() -> ContentTransform =
-        defaultPopTransitionSpec(),
+        iosPopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     predictivePopTransitionSpec:
     AnimatedContentTransitionScope<Scene<T>>.(@NavigationEvent.SwipeEdge Int) -> ContentTransform =
-        defaultPredictivePopTransitionSpec(),
-    transitionEffects: NavDisplayTransitionEffects = NavDisplayTransitionEffects.Default,
+        iosPredictivePopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
+    transitionEffects: NavDisplayTransitionEffects = IosNavigationTransitionEffects,
+    swipeBackEnabled: Boolean = true,
+    onBack: (() -> Unit)? = null,
 ) {
     // Calculate current Scene and set up transitions
     val scene = sceneState.currentScene
@@ -323,14 +347,57 @@ fun <T : Any> GlasmioNavDisplay(
     val previousScene = sceneState.previousScenes.lastOrNull()
 
     val hasPreviousScene = previousScene != null
+    val swipe = remember { IosSwipeBackState() }
+    val systemTracking = navigationEventState.transitionState is InProgress
+    SideEffect { if (systemTracking) swipe.cancel() }
+    val layoutDirection = LocalLayoutDirection.current
+    val density = LocalDensity.current
+    val windowInsets = LocalView.current.rootWindowInsets
+    val fallbackCorner = if (transitionEffects.enableCornerClip && windowInsets == null) getRoundedCorner() else 0.dp
+    val windowShape = with(density) {
+        fun radius(position: Int) = if (windowInsets == null) fallbackCorner
+            else (windowInsets.getRoundedCorner(position)?.radius ?: 0).toDp()
+        AbsoluteContinuousRoundedRectangle(
+            topLeft = radius(RoundedCorner.POSITION_TOP_LEFT),
+            topRight = radius(RoundedCorner.POSITION_TOP_RIGHT),
+            bottomRight = radius(RoundedCorner.POSITION_BOTTOM_RIGHT),
+            bottomLeft = radius(RoundedCorner.POSITION_BOTTOM_LEFT),
+        )
+    }
+    val exclusions = remember { GlasmioSwipeBackExclusionRegistry() }
+    val displayCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    val currentOnBack by androidx.compose.runtime.rememberUpdatedState(onBack)
+    val currentScene by androidx.compose.runtime.rememberUpdatedState(scene)
+    var predictivePresentation by remember { mutableStateOf(false) }
+    val entryClock = remember { object { var durationNanos = 350_000_000L } }
+    fun currentPopProgress(): Float = when {
+        transitionState.currentState == previousScene && transitionState.targetState == currentScene ->
+            1f - iosNavigationPosition(transitionState.fraction, entryClock.durationNanos)
+        predictivePresentation && transitionState.currentState == currentScene -> transitionState.fraction
+        else -> 0f
+    }.coerceIn(0f, 1f)
+    val canSwipeBack = swipeBackEnabled && hasPreviousScene && onBack != null &&
+        motion.resolveOperation(scene.entries.last().contentKey,
+            previousScene?.entries?.last()?.contentKey ?: scene.entries.last().contentKey, true) != GlasmioNavigationOperation.Tab
+    val currentCanSwipeBack by androidx.compose.runtime.rememberUpdatedState(canSwipeBack)
+    val swipeModifier = Modifier.onGloballyPositioned { displayCoordinates[0] = it }.iosSwipeBack(
+        enabled = canSwipeBack,
+        direction = layoutDirection, entryKey = scene.key, state = swipe, registry = exclusions,
+        coordinates = { displayCoordinates[0] },
+        systemOwnsGesture = { navigationEventState.transitionState is InProgress },
+        anchorProgress = { currentPopProgress() },
+        onCommit = { currentOnBack?.invoke() },
+    )
     val inPredictiveBack by remember(hasPreviousScene) {
         derivedStateOf {
-            navigationEventState.transitionState is InProgress && hasPreviousScene
+            (navigationEventState.transitionState is InProgress || swipe.tracking && swipe.entryKey == currentScene.key) && hasPreviousScene
         }
     }
-    val swipeEdge by remember {
+    val swipeEdge by remember(layoutDirection) {
         derivedStateOf {
-            when (val gesture = navigationEventState.transitionState) {
+            if (swipe.tracking) {
+                if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) NavigationEvent.EDGE_LEFT else NavigationEvent.EDGE_RIGHT
+            } else when (val gesture = navigationEventState.transitionState) {
                 is Idle -> NavigationEvent.EDGE_NONE
                 is InProgress -> gesture.latestEvent.swipeEdge
             }
@@ -339,7 +406,15 @@ fun <T : Any> GlasmioNavDisplay(
 
     // Remember the swipe edge for use after finger lift (when isPop but not inPredictiveBack)
     var lastSwipeEdge by remember { mutableStateOf(NavigationEvent.EDGE_NONE) }
+    var localPredictive by remember { mutableStateOf(false) }
+    var interruptedPushPresentation by remember { mutableStateOf(false) }
+    if (!inPredictiveBack && !predictivePresentation && transition.totalDurationNanos > 0L) {
+        entryClock.durationNanos = transition.totalDurationNanos
+    }
     if (inPredictiveBack) {
+        if (!predictivePresentation) interruptedPushPresentation = transition.currentState == previousScene
+        predictivePresentation = true
+        localPredictive = swipe.tracking && navigationEventState.transitionState !is InProgress
         lastSwipeEdge = swipeEdge
     }
 
@@ -372,124 +447,123 @@ fun <T : Any> GlasmioNavDisplay(
             transition.targetState
         }
 
-    // check if in gesture back
-    // Capture the fraction when we start interrupting an entry animation
-    var entryInterruptionFraction by remember { mutableFloatStateOf(1f) }
-    LaunchedEffect(inPredictiveBack) {
-        if (inPredictiveBack && transition.currentState == previousScene) {
-            entryInterruptionFraction = transitionState.fraction
-        }
-    }
-
     if (inPredictiveBack && previousScene != null) {
         LaunchedEffect(previousScene) {
             motion.begin(scene.entries.last().contentKey, previousScene.entries.last().contentKey,
                 GlasmioNavigationOperation.Pop, GlasmioNavigationPhase.Tracking)
-            snapshotFlow { navigationEventState.transitionState }
-                .collectLatest { gestureState ->
-                    if (gestureState is InProgress) {
-                        val progress = gestureState.latestEvent.progress
-                        motion.gesture(progress, gestureState.latestEvent.frameTimeMillis)
-                        if (transition.currentState == previousScene) {
-                            // Interrupting entry: A -> B
-                            // Scale progress to match the partial entry state
-                            val startPhysical =
-                                NavAnimationEasing.transform(entryInterruptionFraction)
-                            val targetPhysical = startPhysical * (1f - progress)
-                            val targetFraction =
-                                NavAnimationEasing.inverseTransform(targetPhysical)
-                            transitionState.seekTo(targetFraction, scene)
-                        } else {
-                            // Standard back: B -> A
-                            transitionState.seekTo(progress, previousScene)
-                        }
-                    }
+            val initialProgress = if (swipe.tracking) swipe.startProgress else currentPopProgress()
+            val following = LiquidMenuSpring(valueTolerance = 0.0001f, velocityTolerance = 0.001f).apply {
+                reset(initialProgress)
+            }
+            val trackingSpring = LiquidMenuSpringSpec(dampingRatio = 0.85f, response = 0.08f)
+            fun latestSample(): Pair<Float, Long>? =
+                (navigationEventState.transitionState as? InProgress)?.latestEvent?.let {
+                    (initialProgress + it.progress).coerceIn(0f, 1f) to it.frameTimeMillis
+                } ?: if (swipe.tracking) swipe.progress to swipe.lastEventTimeMillis else null
+            // Register the destination even at zero progress; an immediate Back commit
+            // must still settle toward the previous scene rather than snap to it.
+            if (transition.currentState == previousScene) {
+                transitionState.seekTo(iosNavigationFraction(1f - initialProgress, entryClock.durationNanos), scene)
+            } else {
+                transitionState.seekTo(following.value.coerceIn(0f, 1f), previousScene)
+            }
+            var previousFrame = withFrameNanos { it }
+            var previousSample: Pair<Float, Long>? = null
+            var sample = latestSample()
+            // Retarget one running oscillator rather than restart animateTo at every MOVE.
+            // Once settled, suspend on input instead of requesting idle frames indefinitely.
+            while (isActive && sample != null) {
+                if (sample != previousSample) {
+                    motion.gesture(sample.first, sample.second)
+                    following.target(sample.first, trackingSpring)
+                    previousSample = sample
                 }
+                if (following.isSettled) {
+                    sample = snapshotFlow { latestSample() }.first { it != previousSample }
+                    if (sample == null) break
+                    // Time spent resting must not be integrated into the newly retargeted spring.
+                    previousFrame = withFrameNanos { it }
+                    continue
+                }
+                val frame = withFrameNanos { it }
+                following.advance(((frame - previousFrame) / 1e9).toFloat())
+                previousFrame = frame
+                val progress = following.value.coerceIn(0f, 1f)
+                if (transition.currentState == previousScene) {
+                    transitionState.seekTo(iosNavigationFraction(1f - progress, entryClock.durationNanos), scene)
+                } else {
+                    transitionState.seekTo(progress, previousScene)
+                }
+                sample = latestSample()
+            }
         }
     } else {
         LaunchedEffect(scene) {
             val key = scene.entries.last().contentKey
-            if (motion.frame.value.phase == GlasmioNavigationPhase.Tracking &&
-                key in setOf(motion.frame.value.fromEntryKey, motion.frame.value.toEntryKey)) {
+            val gestureFrame = motion.frame.value
+            val resolvesGesture = key == gestureFrame.fromEntryKey || key == gestureFrame.toEntryKey
+            if (predictivePresentation && !resolvesGesture) {
+                // A new push owns the presentation immediately. It must not finish the old
+                // swipe's cancellation and then snap directly to the unrelated destination.
+                predictivePresentation = false
+                interruptedPushPresentation = false
+            }
+            if (motion.frame.value.phase == GlasmioNavigationPhase.Tracking && resolvesGesture) {
                 motion.phase(if (motion.frame.value.toEntryKey == key) GlasmioNavigationPhase.Settling else GlasmioNavigationPhase.Canceling)
             } else if (motion.frame.value.toEntryKey != key || motion.frame.value.phase == GlasmioNavigationPhase.Tracking) {
                 motion.beginNavigation(motion.interactionKey, key, isPop)
             }
-            if (transitionState.currentState != scene) {
-                if (transitionState.targetState == scene) {
-                    // Predictive Back has been committed
-                    // so now we need to animate to the final state
-                    transitionState.animateTo(
-                        scene,
-                        animationSpec = tween(500, easing = NavAnimationEasing),
-                    )
-                } else {
-                    // We are animating to the final state for regular navigate forward
-                    // and regular pop
-                    transitionState.animateTo(scene)
-                }
-            } else {
-                // Predictive Back has either been completed or cancelled
-                // so now we need to seekTo+snapTo the final state
-
-                // convert from nanoseconds to milliseconds
-                val totalDuration = transition.totalDurationNanos / 1000000
-                // Which way we have to seek depends on whether the
-                // Predictive Back was completed or cancelled
-                val predictiveBackCompleted = transition.targetState == scene
-                val (finalFraction, remainingDuration) =
-                    if (predictiveBackCompleted) {
-                        // If it completed, animate to the state we were
-                        // already seeking to with the remaining duration
-                        1f to ((1f - transitionState.fraction) * totalDuration).toInt()
-                    } else {
-                        // It it got cancelled, animate back to the
-                        // initial state, reversing what we seeked to
-                        0f to (transitionState.fraction * totalDuration).toInt()
-                    }
-                animate(
-                    transitionState.fraction,
-                    finalFraction,
-                    animationSpec = tween(remainingDuration, easing = NavAnimationEasing),
-                ) { value, _ ->
-                    this@LaunchedEffect.launch {
-                        if (value != finalFraction) {
-                            // Seek the transition towards the finalFraction
-                            transitionState.seekTo(value)
-                        }
-                        if (value == finalFraction) {
-                            // Once the animation finishes, we need to snap to the right state.
-                            transitionState.snapTo(scene)
-                            motion.finish(key)
+            if (predictivePresentation) {
+                // Keep the tracking transform linear until the release spring settles. Switching
+                // back to the noninteractive easing here would move the page at finger lift.
+                val finalFraction = if (transitionState.targetState == scene) 1f else 0f
+                val velocity = if (localPredictive) swipe.releaseVelocity else motion.frame.value.gestureVelocity
+                val releaseVelocity = if (interruptedPushPresentation) -velocity else velocity
+                val startPosition = if (interruptedPushPresentation)
+                    iosNavigationPosition(transitionState.fraction, entryClock.durationNanos) else transitionState.fraction
+                val settling = Animatable(startPosition)
+                coroutineScope {
+                    val seek = launch {
+                        snapshotFlow { settling.value }.collectLatest {
+                            val fraction = if (interruptedPushPresentation)
+                                iosNavigationFraction(it, entryClock.durationNanos) else it.coerceIn(0f, 1f)
+                            transitionState.seekTo(fraction)
                         }
                     }
+                    settling.animateTo(finalFraction, initialVelocity = releaseVelocity,
+                        animationSpec = spring(dampingRatio = 0.85f,
+                            stiffness = IosNavigationStiffness, visibilityThreshold = 0.0001f))
+                    seek.cancel()
                 }
+                transitionState.snapTo(scene)
+            } else if (transitionState.currentState != scene) {
+                transitionState.animateTo(scene)
             }
-            if (transitionState.currentState == scene && transitionState.targetState == scene) motion.finish(key)
+            if (transitionState.currentState == scene && transitionState.targetState == scene) {
+                motion.finish(key)
+                predictivePresentation = false
+                interruptedPushPresentation = false
+            }
         }
     }
 
-    val shouldFlipDirection = transitionEffects.popDirectionFollowsSwipeEdge &&
-            (if (inPredictiveBack) swipeEdge else lastSwipeEdge) == NavigationEvent.EDGE_RIGHT
+    val activeSwipeEdge = if (inPredictiveBack) swipeEdge else lastSwipeEdge
 
     val contentTransform: AnimatedContentTransitionScope<Scene<T>>.() -> ContentTransform = {
         when {
-            inPredictiveBack -> {
-                if (shouldFlipDirection) {
-                    flippedPredictivePopTransitionSpec()
+            inPredictiveBack || predictivePresentation -> {
+                if (interruptedPushPresentation) {
+                    transitionScene.contentTransform(NavDisplay.TransitionKey)?.invoke(this)
+                        ?: transitionSpec(this)
                 } else {
-                    transitionScene.predictivePopSpec()?.invoke(this, swipeEdge)
-                        ?: predictivePopTransitionSpec(swipeEdge)
+                    transitionScene.predictivePopSpec()?.invoke(this, activeSwipeEdge)
+                        ?: predictivePopTransitionSpec(activeSwipeEdge)
                 }
             }
 
             isPop -> {
-                if (shouldFlipDirection) {
-                    flippedPopTransitionSpec()
-                } else {
-                    transitionScene.contentTransform(NavDisplay.PopTransitionKey)?.invoke(this)
-                        ?: popTransitionSpec(this)
-                }
+                transitionScene.contentTransform(NavDisplay.PopTransitionKey)?.invoke(this)
+                    ?: popTransitionSpec(this)
             }
 
             else -> {
@@ -506,7 +580,7 @@ fun <T : Any> GlasmioNavDisplay(
     transition.AnimatedContent(
         contentKey = { scene -> AnimatedSceneKey(scene) },
         contentAlignment = contentAlignment,
-        modifier = modifier,
+        modifier = modifier.then(swipeModifier),
         transitionSpec = {
             ContentTransform(
                 targetContentEnter = contentTransform(this).targetContentEnter,
@@ -529,6 +603,7 @@ fun <T : Any> GlasmioNavDisplay(
             )
         animatedContentScope = remember { this }
         CompositionLocalProvider(
+            LocalGlasmioSwipeBackExclusions provides exclusions,
             LocalLifecycleOwner provides sceneLifecycleOwner,
             LocalNavAnimatedContentScope provides animatedContentScope,
         ) {
@@ -541,47 +616,44 @@ fun <T : Any> GlasmioNavDisplay(
                         myZIndex > minOf(initialZIndex, targetZIndex) &&
                         initialZIndex != targetZIndex
 
-            val roundedModifier = if (transitionEffects.enableCornerClip && isTopScene) {
-                val corner = if (!isInMultiWindowMode()) getRoundedCorner() else 0.dp
-                if (shouldFlipDirection) {
-                    Modifier.clip(AbsoluteRoundedCornerShape(
-                        topLeft = 0.dp,
-                        topRight = corner,
-                        bottomRight = corner,
-                        bottomLeft = 0.dp,
-                    ))
-                } else {
-                    Modifier.clip(AbsoluteRoundedCornerShape(
-                        topLeft = corner,
-                        topRight = 0.dp,
-                        bottomRight = 0.dp,
-                        bottomLeft = corner,
-                    ))
-                }
+            val roundedModifier = if (transitionEffects.enableCornerClip && isTopScene &&
+                motion.frame.value.operation != GlasmioNavigationOperation.Tab) {
+                Modifier.clip(windowShape)
             } else {
                 Modifier
             }
 
+            val blockerCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
             val blockInputModifier =
                 if (transitionEffects.blockInputDuringTransition && !isSettled && targetScene != transition.targetState) {
-                    remember {
-                        Modifier.pointerInput(Unit) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    val event =
-                                        awaitPointerEvent(pass = PointerEventPass.Initial)
-                                    event.changes.fastForEach { it.consume() }
+                    Modifier.onGloballyPositioned { blockerCoordinates[0] = it }.pointerInput(targetScene.key) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            val point = blockerCoordinates[0]?.takeIf { it.isAttached }?.localToWindow(down.position)
+                            val allowNavigationMove = currentCanSwipeBack && point != null && !exclusions.hitTest(point)
+                            down.consume()
+                            do {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                event.changes.fastForEach { change ->
+                                    // Keep outgoing content inert to taps while allowing the parent
+                                    // navigation recognizer to grab the visible moving presentation.
+                                    if (!allowNavigationMove || change.positionChangeIgnoreConsumed() == Offset.Zero || !change.pressed) {
+                                        change.consume()
+                                    }
                                 }
-                            }
+                            } while (event.changes.any { it.pressed })
                         }
                     }
-                } else {
-                    Modifier
-                }
+                } else Modifier
+            val shadowModifier = if (isTopScene && motion.frame.value.operation != GlasmioNavigationOperation.Tab) {
+                Modifier.navigationGlassDropShadow(shape = { if (transitionEffects.enableCornerClip) windowShape else RectangleShape }, cacheBlurResult = true,
+                    shadowRadius = 12.dp, shadowOffsetY = (-3).dp, shadowAlpha = 0.04f)
+            } else Modifier
 
             Box(
                 modifier =
                     Modifier
+                        .then(shadowModifier)
                         .then(roundedModifier)
                         .then(blockInputModifier),
             ) {
@@ -596,14 +668,10 @@ fun <T : Any> GlasmioNavDisplay(
                                 .graphicsLayer {
                                     val settled =
                                         transition.currentState == transition.targetState
+                                    val physical = if (predictivePresentation) transitionState.fraction
+                                        else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
                                     alpha = if (!settled) {
-                                        if (isCurrentScene) {
-                                            transitionState.fraction *
-                                                    transitionEffects.dimAmount
-                                        } else {
-                                            (1f - transitionState.fraction) *
-                                                    transitionEffects.dimAmount
-                                        }
+                                        (if (isCurrentScene) physical else 1f - physical) * transitionEffects.dimAmount
                                     } else {
                                         0f
                                     }
@@ -664,36 +732,6 @@ private fun <T : Any> Scene<T>.predictivePopSpec():
             as?
             AnimatedContentTransitionScope<Scene<T>>.(@NavigationEvent.SwipeEdge Int) -> ContentTransform?
 }
-
-/** Default [transitionSpec] for forward navigation to be used by [NavDisplay]. */
-/** Flipped [popTransitionSpec] for right-edge swipe (exit to left). */
-private fun flippedPopTransitionSpec(): ContentTransform =
-    ContentTransform(
-        slideInHorizontally(
-            initialOffsetX = { it / 4 },
-            animationSpec = tween(durationMillis = 500, easing = NavAnimationEasing),
-        ),
-        slideOutHorizontally(
-            targetOffsetX = { -it },
-            animationSpec = tween(durationMillis = 500, easing = NavAnimationEasing),
-        ),
-    )
-
-/** Flipped [predictivePopTransitionSpec] for right-edge swipe (exit to left). */
-private fun flippedPredictivePopTransitionSpec(): ContentTransform =
-    ContentTransform(
-        slideInHorizontally(
-            initialOffsetX = { it / 4 },
-            animationSpec = tween(durationMillis = 550, easing = LinearEasing),
-        ),
-        slideOutHorizontally(
-            targetOffsetX = { -it },
-            animationSpec = tween(durationMillis = 550, easing = LinearEasing),
-        ),
-    )
-
-/** Default easing for navigation animations. */
-private val NavAnimationEasing = NavTransitionEasing(0.8f, 0.95f)
 
 internal data class AnimatedSceneKey(val clazz: KClass<*>, val key: Any) {
     constructor(scene: Scene<*>) : this(scene::class, scene.key)

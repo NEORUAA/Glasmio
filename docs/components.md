@@ -398,6 +398,15 @@ fun ModalScreen() = ExampleHost {
 
 ## Navigation and reorderable content
 
+`GlasmioNavDisplay` uses iOS spring push/pop, parallax, dimming and shadows by
+default. `swipeBackEnabled` allows a pushed page to return from a horizontal drag
+anywhere in the content: rightward in LTR and leftward in RTL. Root and tab
+transitions do not pop this way. Child controls retain their gestures; mark
+application-owned pagers, charts or embedded views with
+`Modifier.swipeBackExcluded()` from `glasmio-core` when they need the full region.
+The host continues to own the back stack and `onBack`. Custom transition
+metadata remains supported. See the [native navigation reference](ios-navigation-motion.md).
+
 `GlasmioFloatingSearch` combines the floating input toolbar, results overlay, keyboard
 insets and focus cleanup. The host owns its route, query and results; its navigation
 handles Back by default so the first Back can dismiss the IME. Set `handleBack = true`

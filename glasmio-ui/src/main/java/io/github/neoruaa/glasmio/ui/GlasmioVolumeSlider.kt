@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.segmentedControlBackground
+import io.github.neoruaa.glasmio.core.swipeBackExcluded
 import io.github.neoruaa.glasmio.icons.SfIcon
 import kotlin.math.abs
 
@@ -101,6 +102,7 @@ fun GlasmioVolumeSlider(
 
     Box(
         modifier
+            .swipeBackExcluded(enabled)
             .fillMaxWidth()
             .height(52.dp)
             .alpha(if (enabled) 1f else 0.45f)

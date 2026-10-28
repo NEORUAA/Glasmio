@@ -213,7 +213,7 @@ private fun IosOpacitySlider(
 ) {
     val density = LocalDensity.current
     BoxWithConstraints(
-        modifier.height(34.dp),
+        modifier.swipeBackExcluded().height(34.dp),
     ) {
         val widthPx = constraints.maxWidth
         Box(

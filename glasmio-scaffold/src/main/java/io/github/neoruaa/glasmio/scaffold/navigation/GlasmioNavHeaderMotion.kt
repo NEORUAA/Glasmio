@@ -24,6 +24,7 @@ class GlasmioNavHeaderMotion(
     private var eventTimeMillis = 0L
     private var eventProgress = 0f
     private var sampleTimeNanos = 0L
+    internal fun resolveOperation(from: Any, to: Any, isPop: Boolean) = operationFor(from, to, isPop)
     fun beginNavigation(from: Any, to: Any, isPop: Boolean) {
         begin(from, to, operationFor(from, to, isPop), GlasmioNavigationPhase.Settling)
     }

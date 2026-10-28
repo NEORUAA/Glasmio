@@ -236,7 +236,7 @@ private fun <T> AdaptiveSegmentedRenderer(
     val source = rememberLayerBackdrop()
     val combined = rememberCombinedBackdrop(backdrop, source)
     val trackColor = colors.systemGray5
-    BoxWithConstraints(modifier.fillMaxWidth().then(if (standalone) Modifier.semantics(mergeDescendants = true) { } else Modifier)) {
+    BoxWithConstraints(modifier.swipeBackExcluded(enabled).fillMaxWidth().then(if (standalone) Modifier.semantics(mergeDescendants = true) { } else Modifier)) {
         val weights = items.map { (key, _) ->
             if (key in hiddenItems) 0f else if (key == adaptiveItem && expanded) 3f else 1f
         }

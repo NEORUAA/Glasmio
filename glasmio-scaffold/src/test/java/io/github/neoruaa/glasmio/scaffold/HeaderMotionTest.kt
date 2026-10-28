@@ -3,8 +3,75 @@ package io.github.neoruaa.glasmio.scaffold
 import org.junit.Assert.*
 import org.junit.Test
 import kotlin.math.abs
+import io.github.neoruaa.glasmio.scaffold.navigation.IosSwipeBackArbitrator
+import io.github.neoruaa.glasmio.scaffold.navigation.IosSwipeBackRelease
+import io.github.neoruaa.glasmio.scaffold.navigation.IosNavigationEasing
+import io.github.neoruaa.glasmio.scaffold.navigation.IosNavigationFloatSpring
+import io.github.neoruaa.glasmio.scaffold.navigation.iosNavigationFraction
+import io.github.neoruaa.glasmio.scaffold.navigation.iosNavigationParallaxOffset
 
 class HeaderMotionTest {
+    @Test fun navigationProjectionAndChildOwnershipFollowNativeRules() {
+        val child = IosSwipeBackArbitrator(10f)
+        assertEquals(0, child.observe(4f, 0f, false))
+        assertEquals(-1, child.observe(12f, 0f, true))
+        assertEquals("A child cannot hand its drag to the page at its scroll boundary", -1,
+            child.observe(100f, 0f, false))
+        val vertical = IosSwipeBackArbitrator(10f)
+        assertEquals(-1, vertical.observe(2f, 20f, false))
+        assertEquals(-1, vertical.observe(100f, 0f, false))
+        val wrongDirection = IosSwipeBackArbitrator(10f)
+        assertEquals(-1, wrongDirection.observe(-20f, 0f, false))
+        assertEquals(-1, wrongDirection.observe(100f, 0f, false))
+        val page = IosSwipeBackArbitrator(10f)
+        assertEquals(0, page.observe(8f, 1f, false))
+        assertEquals(1, page.observe(12f, 0f, false))
+        assertEquals(10f, page.initialTravel, .001f)
+        fun resting(progress: Float, width: Float): Boolean = IosSwipeBackRelease(width).let {
+            repeat(5) { sample -> it.sample(progress, sample * 20L) }
+            it.shouldCommit(progress)
+        }
+        assertFalse(resting(.49f, 320f))
+        assertTrue(resting(.51f, 320f))
+        assertFalse(resting(.30f, 600f))
+        assertTrue("The native distance threshold is capped at 187.5 points", resting(.32f, 600f))
+        val reversed = IosSwipeBackRelease(400f)
+        listOf(.3f, .4f, .45f, .4f, .25f, .1f).forEachIndexed { index, progress ->
+            reversed.sample(progress, index * 100L)
+        }
+        assertFalse("A reversed drag cancels even after reaching the midpoint", reversed.shouldCommit(.1f))
+        assertFalse(IosSwipeBackRelease(400f).shouldCommit(.8f))
+    }
+
+    @Test fun navigationSeekInversionPreservesPhysicalPositionAcrossInterruption() {
+        assertEquals("UIKit rounds parallax in points before mapping to pixels", 363,
+            iosNavigationParallaxOffset(1206, 3f))
+        assertEquals(121, iosNavigationParallaxOffset(402, 1f))
+        assertTrue("The coordinator duration cannot truncate the physical spring",
+            IosNavigationEasing.transform(1f) < 1f)
+        var previous = -1f
+        repeat(101) { index ->
+            val fraction = index / 100f
+            val physical = IosNavigationEasing.transform(fraction)
+            assertTrue(physical >= previous)
+            assertEquals(fraction, iosNavigationFraction(physical), .0001f)
+            previous = physical
+        }
+        val spring = IosNavigationFloatSpring
+        val duration = spring.getDurationNanos(1220f, 0f, 0f)
+        val entering = spring.getValueFromNanos(48_000_000L, 1220f, 0f, 0f)
+        val desired = entering + 150.5f
+        val seek = iosNavigationFraction(1f - desired / 1220f, duration)
+        val actual = spring.getValueFromNanos((seek.toDouble() * duration).toLong(), 1220f, 0f, 0f)
+        assertEquals("Inverse seeking must preserve pixel travel between millisecond boundaries", desired, actual, .001f)
+        assertTrue("The default body must evaluate sub-millisecond time without truncation",
+            abs(spring.getValueFromNanos(31_625_562L, 1220f, 0f, 0f) -
+                spring.getValueFromNanos(31_000_000L, 1220f, 0f, 0f)) > 5f)
+        assertEquals("Retargeted springs retain their initial velocity", 180f,
+            spring.getVelocityFromNanos(0L, 100f, 0f, 180f), 0f)
+        assertTrue("The physical spring retains its full settle tail", duration > 350_000_000L)
+    }
+
     @Test fun integrationDoesNotDependOnDisplayRefreshRate() {
         fun sample(hz: Int): Pair<Float, Float> {
             val track = HeaderTrack(0f)

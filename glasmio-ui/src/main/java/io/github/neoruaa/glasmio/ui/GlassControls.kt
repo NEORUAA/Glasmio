@@ -225,6 +225,7 @@ fun GlasmioSwitch(
     }
     Box(
         modifier = modifier
+            .swipeBackExcluded(enabled)
             .size(width = 64.dp, height = 28.dp)
             .semantics(mergeDescendants = true) {
                 role = Role.Switch
@@ -311,6 +312,7 @@ fun GlasmioSlider(
 
     BoxWithConstraints(
         modifier
+            .swipeBackExcluded(enabled)
             .fillMaxWidth()
             .height(40.dp)
             .offset(y = 6.dp)
@@ -577,7 +579,7 @@ fun <T> GlasmioSegmentedControl(
     // visible tabs -> invisible exported tabs with content -> movable combined-backdrop lens.
     val dragCoordinateSpace = remember { mutableStateOf<LayoutCoordinates?>(null) }
     BoxWithConstraints(
-        modifier.height(height).selectableGroup().alpha(if (enabled) 1f else 0.45f)
+        modifier.swipeBackExcluded(enabled).height(height).selectableGroup().alpha(if (enabled) 1f else 0.45f)
             .onGloballyPositioned { dragCoordinateSpace.value = it },
     ) {
         val density = LocalDensity.current
