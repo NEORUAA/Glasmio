@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.glass
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -9,6 +10,214 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NavigationIndicatorLensTest {
+    @Test
+    fun queuedDragDeltasKeepTheirFullTargetAndSettledDistance() {
+        listOf(false, true).forEach { batched ->
+            withQueuedDrag { drag, dispatcher, clock ->
+                repeat(3) { batch ->
+                    repeat(4) {
+                        drag.updateValue(drag.targetValue + 0.25f)
+                        if (!batched) dispatcher.drain()
+                    }
+                    assertEquals((batch + 1).toFloat(), drag.targetValue, 0f)
+                    dispatcher.drain()
+                }
+                clock.settle(dispatcher)
+                assertEquals(3f, drag.value, 0.001f)
+            }
+        }
+    }
+
+    @Test
+    fun queuedDragReversalAndBoundsDoNotReuseAnOldAnimationTarget() {
+        withQueuedDrag { drag, dispatcher, clock ->
+            listOf(1f, 1f, 2f, -0.25f, -0.25f, -0.5f).forEach {
+                drag.updateValue(drag.targetValue + it)
+            }
+            assertEquals(2f, drag.targetValue, 0f)
+            dispatcher.drain()
+            clock.settle(dispatcher)
+            assertEquals(2f, drag.value, 0.001f)
+            drag.updateValue(-4f)
+            assertEquals(0f, drag.targetValue, 0f)
+            drag.updateValue(drag.targetValue + 0.5f)
+            dispatcher.drain()
+            clock.settle(dispatcher)
+            assertEquals(0.5f, drag.value, 0.001f)
+        }
+    }
+
+    @Test
+    fun immediateReleaseAndProgrammaticRetargetUseTheLatestRequestedPosition() {
+        withQueuedDrag { drag, dispatcher, clock ->
+            repeat(7) { drag.updateValue(drag.targetValue + 0.25f) }
+            val selected = kotlin.math.round(drag.targetValue).toInt()
+            assertEquals(2, selected)
+            drag.animateToValue(selected.toFloat(), animatePress = false)
+            drag.release()
+            assertEquals(2f, drag.targetValue, 0f)
+            dispatcher.drain()
+            clock.settle(dispatcher)
+            assertEquals(2f, drag.value, 0.001f)
+            drag.animateToValue(1f, animatePress = false)
+            drag.updateValue(drag.targetValue + 0.5f)
+            assertEquals(1.5f, drag.targetValue, 0f)
+            dispatcher.drain()
+            clock.settle(dispatcher)
+            assertEquals(1.5f, drag.value, 0.001f)
+        }
+    }
+
+    private class QueuedDragDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
+        private val pending = ArrayDeque<Runnable>()
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { pending.addLast(block) }
+        fun drain() { while (pending.isNotEmpty()) pending.removeFirst().run() }
+    }
+
+    private class DragFrameClock : androidx.compose.runtime.MonotonicFrameClock {
+        private val waiting = ArrayList<(Long) -> Unit>()
+        private var time = 0L
+        override suspend fun <R> withFrameNanos(onFrame: (Long) -> R): R =
+            kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+                waiting.add { nanos -> if (continuation.isActive) continuation.resumeWith(runCatching { onFrame(nanos) }) }
+            }
+        fun settle(dispatcher: QueuedDragDispatcher) {
+            repeat(180) {
+                time += 16_666_667L
+                val ready = waiting.toList()
+                waiting.clear()
+                ready.forEach { it(time) }
+                dispatcher.drain()
+            }
+        }
+    }
+
+    private fun withQueuedDrag(block: (DampedDragAnimation, QueuedDragDispatcher, DragFrameClock) -> Unit) {
+        val dispatcher = QueuedDragDispatcher()
+        val clock = DragFrameClock()
+        val scope = kotlinx.coroutines.CoroutineScope(dispatcher + clock)
+        val drag = DampedDragAnimation(scope, 0f, 0f..3f, 0.001f, 1f, 78f / 56f,
+            onDragStarted = {}, onDragStopped = {}, onDrag = { _, _ -> })
+        try { block(drag, dispatcher, clock) } finally {
+            scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+            dispatcher.drain()
+        }
+    }
+
+    @Test
+    fun contactFieldUsesOnlyTheExposedNeckAndKeepsBothDetachedContours() {
+        val left = listOf(Offset(0f, 0f), Offset(100f, 0f), Offset(100f, 80f), Offset(0f, 80f))
+        val right = left.map { it + Offset(120f, 0f) }
+        val detached = NavigationContactField().grid(NavigationContactContour(pathApproximation(left, right)), 24f)
+        assertField(detached, Offset(98f, 40f), -2f, Offset(1f, 0f))
+        assertField(detached, Offset(122f, 40f), -2f, Offset(-1f, 0f))
+        // These are the exposed upper/lower necks after the two facing sides vanish.
+        val joined = listOf(
+            Offset(0f, 0f), Offset(80f, 0f), Offset(100f, 20f), Offset(120f, 20f),
+            Offset(140f, 0f), Offset(220f, 0f), Offset(220f, 80f), Offset(140f, 80f),
+            Offset(120f, 60f), Offset(100f, 60f), Offset(80f, 80f), Offset(0f, 80f),
+        )
+        listOf(joined, joined.asReversed()).forEach { contour ->
+            val field = NavigationContactField()
+            val snapshot = NavigationContactContour(pathApproximation(contour))
+            val grid = field.grid(snapshot, 24f)
+            assertField(grid, Offset(110f, 22f), -2f, Offset(0f, -1f))
+            assertField(grid, Offset(110f, 58f), -2f, Offset(0f, 1f))
+            assertField(grid, Offset(100f, 38f), -18f, Offset(0f, -1f))
+            assertTrue("A smaller optical band must reuse the same geometry", field.grid(snapshot, 10f) === grid)
+        }
+    }
+
+    @Test
+    fun contactFieldKeepsSubpixelMotionAndExcludesBuriedEdgesAtTheOldSeam() {
+        val silhouette = listOf(Offset(0f, 0f), Offset(220f, 0f), Offset(220f, 80f), Offset(0f, 80f))
+        listOf(0f, 0.25f, 0.5f, 1f).forEach { shift ->
+            val field = NavigationContactField()
+            val grid = field.grid(NavigationContactContour(pathApproximation(silhouette.map { it + Offset(shift, shift) })), 12f)
+            assertField(grid, Offset(100f, 2f), -(2f - shift), Offset(0f, -1f))
+            val x = ((100f - grid.origin.x) / grid.step).toInt()
+            val y = ((40f - grid.origin.y) / grid.step).toInt()
+            assertTrue("The old facing edge must not create a refraction band",
+                grid.rgba[(y * grid.width + x) * 4] < -12f)
+        }
+    }
+
+    @Test
+    fun contactFieldReusesLargeStorageAcrossDragFramesAndBuildsEachSnapshotOnce() {
+        val renderer = NavigationContactField()
+        val rectangle = listOf(Offset(0f, 0f), Offset(220f, 0f), Offset(220f, 80f), Offset(0f, 80f))
+        val arrays = HashSet<FloatArray>()
+        repeat(120) { frame ->
+            val contour = NavigationContactContour(pathApproximation(rectangle.map { it + Offset(frame / 120f, 0f) }))
+            val sharedBand = 32f
+            val visible = renderer.grid(contour, sharedBand)
+            arrays.add(visible.rgba)
+            val hidden = renderer.grid(contour, 29f)
+            assertTrue("Both material passes must use one field generation", visible === hidden)
+            assertEquals(frame + 1, renderer.buildCount)
+            assertField(visible, Offset(100f, 2f), -2f, Offset(0f, -1f))
+        }
+        assertEquals("Stable-sized animation frames must rotate only three arrays", 3, arrays.size)
+    }
+
+    @Test
+    fun contactFieldPruningMatchesUnprunedExposedEdges() {
+        val left = listOf(Offset(0f, 0f), Offset(100f, 0f), Offset(100f, 80f), Offset(0f, 80f))
+        val neck = listOf(Offset(0f, 0f), Offset(80f, 0f), Offset(100f, 20f), Offset(120f, 20f),
+            Offset(140f, 0f), Offset(220f, 0f), Offset(220f, 80f), Offset(140f, 80f),
+            Offset(120f, 60f), Offset(100f, 60f), Offset(80f, 80f), Offset(0f, 80f))
+        listOf(pathApproximation(left, left.map { it + Offset(120f, 0f) }),
+            pathApproximation(neck), pathApproximation(neck.asReversed())).forEach { path ->
+            val contour = NavigationContactContour(path)
+            val grid = NavigationContactField().grid(contour, 32f)
+            for (y in 0 until grid.height) for (x in 0 until grid.width) {
+                val point = grid.origin + Offset(x * grid.step, y * grid.step)
+                var nearest = grid.band + 2f * grid.step
+                for (edge in contour.edges.indices step 6) {
+                    val a = Offset(contour.edges[edge], contour.edges[edge + 1])
+                    val b = Offset(contour.edges[edge + 2], contour.edges[edge + 3])
+                    val delta = b - a
+                    val relative = point - a
+                    val t = ((relative.x * delta.x + relative.y * delta.y) / delta.getDistanceSquared()).coerceIn(0f, 1f)
+                    nearest = minOf(nearest, (point - (a + delta * t)).getDistance())
+                }
+                assertEquals(nearest, kotlin.math.abs(grid.rgba[(y * grid.width + x) * 4]), 0.0001f)
+            }
+        }
+    }
+
+    @Test
+    fun nativeFieldUploadPreservesSignedHalfFloatChannels() {
+        val packed = java.nio.ByteBuffer.allocateDirect(16).order(java.nio.ByteOrder.nativeOrder())
+        org.junit.Assume.assumeTrue("Host native library is optional",
+            LiquidMenuNativeField.pack(floatArrayOf(-2f, 0f, -1f, 1f), 1, 1, 16, packed))
+        assertEquals(0xc000, packed.getShort(0).toInt() and 0xffff)
+        assertEquals(0, packed.getShort(2).toInt())
+        assertEquals(0xbc00, packed.getShort(4).toInt() and 0xffff)
+        assertEquals(0x3c00, packed.getShort(6).toInt() and 0xffff)
+    }
+
+    private fun pathApproximation(vararg contours: List<Offset>): FloatArray {
+        val result = ArrayList<Float>()
+        var fraction = 0f
+        contours.forEach { contour ->
+            (contour + contour.first()).forEachIndexed { i, point ->
+                if (i > 0) fraction += 1f
+                result.add(fraction); result.add(point.x); result.add(point.y)
+            }
+        }
+        return result.toFloatArray()
+    }
+
+    private fun assertField(grid: NavigationContactField.Grid, point: Offset, distance: Float, normal: Offset) {
+        val x = ((point.x - grid.origin.x) / grid.step).toInt()
+        val y = ((point.y - grid.origin.y) / grid.step).toInt()
+        val index = (y * grid.width + x) * 4
+        assertEquals(distance, grid.rgba[index], 0.001f)
+        assertEquals(normal.x, grid.rgba[index + 1], 0.001f)
+        assertEquals(normal.y, grid.rgba[index + 2], 0.001f)
+    }
+
     @Test
     fun sharedPanelTransformAlignsTheIndicatorAndIconsWithAndWithoutLensAnchoring() {
         listOf(1f, 2.75f, 3.5f).forEach { density ->

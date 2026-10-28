@@ -830,6 +830,18 @@ data class LiquidContactShape(
     private var baseGeometry = lazy(LazyThreadSafetyMode.NONE) {
         contactCapsulePath(first, second, contactDistance)
     }
+    private var opticalContour = lazy(LazyThreadSafetyMode.NONE) {
+        NavigationContactContour(baseGeometry.value.path.asAndroidPath().approximate(0.25f))
+    }
+    private var opticalField: NavigationContactField? = null
+    internal var refractionBand: Float = 0f
+        private set
+    internal fun refractionContour(): NavigationContactContour = opticalContour.value
+    internal fun refractionField(): NavigationContactField = opticalField ?: NavigationContactField().also { opticalField = it }
+    internal fun withRefractionField(field: NavigationContactField, band: Float): LiquidContactShape = apply {
+        opticalField = field
+        refractionBand = band
+    }
     private var cachedOutline: Outline? = null
     val isConnected: Boolean get() = !(second.bounds.left - first.bounds.right >= contactDistance ||
         min(first.bounds.bottom, second.bounds.bottom) <= maxOf(first.bounds.top, second.bounds.top))
@@ -838,10 +850,20 @@ data class LiquidContactShape(
 
     override fun copy(topStart: CornerSize, topEnd: CornerSize, bottomEnd: CornerSize, bottomStart: CornerSize): CornerBasedShape =
         LiquidContactShape(first, second, contactDistance, topStart, topEnd, bottomEnd, bottomStart,
-            outlineScale, outlineTranslation).also { it.baseGeometry = baseGeometry }
+            outlineScale, outlineTranslation).also {
+                it.baseGeometry = baseGeometry
+                it.opticalContour = opticalContour
+                it.opticalField = opticalField
+                it.refractionBand = refractionBand
+            }
 
     fun withOutlineTransform(scale: Offset, translation: Offset): LiquidContactShape =
-        copy(outlineScale = scale, outlineTranslation = translation).also { it.baseGeometry = baseGeometry }
+        copy(outlineScale = scale, outlineTranslation = translation).also {
+            it.baseGeometry = baseGeometry
+            it.opticalContour = opticalContour
+            it.opticalField = opticalField
+            it.refractionBand = refractionBand
+        }
 
     override fun createOutline(
         size: Size, topStart: Float, topEnd: Float, bottomEnd: Float, bottomStart: Float,

@@ -65,7 +65,9 @@ fun BottomNavigationContact(
     val renderedLensTransform = remember { mutableStateOf<BottomContactLensTransform?>(null) }
     val renderedLensPress = remember { mutableStateOf(0f) }
     val contact = remember(density) {
-        BottomControlContact(with(density) { 4.dp.roundToPx().toFloat() })
+        BottomControlContact(with(density) { 4.dp.roundToPx().toFloat() }).apply {
+            maximumRefractionHeight = with(density) { 24.dp.toPx() }
+        }
     }
     val materialBackdrop = rememberLayerBackdrop()
     val materialRecordingModifier = remember(materialBackdrop) {
@@ -110,6 +112,9 @@ fun BottomNavigationContact(
                         innerShadows = innerShadows,
                         isDark = colors.isDark,
                         pressProgressState = press,
+                        opticalCenter = {
+                            contact.referenceCenter() - (renderedSurface.value?.bounds?.topLeft ?: Offset.Zero)
+                        },
                         pressOverlay = {
                             renderedSurface.value?.let { contact.drawPressHighlight(this, it.bounds.topLeft) }
                         },
@@ -147,6 +152,9 @@ fun BottomNavigationContact(
                     appearance = appearance,
                     pressProgressState = renderedLensPress,
                     innerShadows = lensInnerShadows,
+                    opticalCenter = {
+                        contact.referenceCenter() - (renderedLensSurface.value?.bounds?.topLeft ?: Offset.Zero)
+                    },
                     pressOverlay = {
                         if (contact.surface.value != null) {
                             val source = renderedSurface.value
@@ -310,6 +318,8 @@ class BottomControlContact(
         private set
     private val pressRenderer = PressHighlightRenderer()
     private val lensPressRenderer = PressHighlightRenderer()
+    private val refractionField = NavigationContactField()
+    internal var maximumRefractionHeight: Float = 0f
     val capturesLensSource = derivedStateOf(structuralEqualityPolicy()) { members.any { it.needsLensSource() } }
 
     val surface = derivedStateOf { createSurface() }
@@ -340,6 +350,11 @@ class BottomControlContact(
         )
         val local = capsules.map { it.copy(bounds = it.bounds.translate(-bounds.topLeft)) }
         return liquidContactShape(local[0], local[1], contactDistance, includeDisconnected = true)?.let { shape ->
+            // Plan for both passes before either can populate the field. The sampled
+            // source shrinks vertically, so 24dp alone is not a sufficient base band.
+            val scale = lensTransform.value?.scale ?: Offset(1f, 1f)
+            val minimumScale = minOf(1f, scale.x, scale.y).coerceAtLeast(0.0001f)
+            (shape as LiquidContactShape).withRefractionField(refractionField, maximumRefractionHeight / minimumScale)
             BottomContactSurface(bounds, shape)
         }
     }

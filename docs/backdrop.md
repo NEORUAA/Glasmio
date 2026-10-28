@@ -28,7 +28,11 @@ Standalone surfaces use the shared navigation material. The default preserves Me
 Keep a navigation bar and its floating search control inside one
 `BottomNavigationContact`. The container owns their glass material while they
 are separated as well as while their outlines merge. Both controls sample the
-same page backdrop. Each separated control retains its own capsule outline.
+same page backdrop, and press deformation does not change the container's
+optical reference. Each separated control retains its own capsule edge.
+During fusion, refraction follows the exposed contour, including the upper and
+lower neck. The former facing edges no longer contribute a second refractive
+rim inside the joined material.
 
 `BottomControlContactMember.connected` describes contour contact;
 `sharesSurface` describes container material ownership. Do not use `connected`
@@ -38,7 +42,7 @@ bottom navigation shows the complete arrangement.
 This follows Apple's shared-container organization, described in
 [GlassEffectContainer](https://developer.apple.com/documentation/swiftui/glasseffectcontainer)
 and [WWDC25's shared sampling explanation](https://developer.apple.com/videos/play/wwdc2025/323/?time=1200).
-The Android rendering is Glasmio's implementation.
+The Android shader and its stable optical reference are Glasmio's implementation.
 
 ## Existing recorded sources
 
