@@ -525,7 +525,7 @@ fun <T> GlasmioNavigationBar(
                 )
             },
         )
-        val sharesContactSurface = contactMember?.connected == true
+        val sharesContactSurface = contactMember?.sharesSurface == true
         val lensAnchoring = if (appearance.usesRefraction) 1f else 0f
         val tabPanelScale: (Int) -> Float = remember(dragAnimation, panelPressScale, lensAnchoring) {
             { index ->

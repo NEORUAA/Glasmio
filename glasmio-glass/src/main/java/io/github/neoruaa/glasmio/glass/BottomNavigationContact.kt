@@ -52,7 +52,7 @@ import kotlin.math.floor
 
 val LocalBottomControlContact = staticCompositionLocalOf<BottomControlContact?> { null }
 
-/** Independent controls share their outer material only while their visible edges approach. */
+/** One material context owns both separated controls and their joined contour. */
 @Composable
 fun BottomNavigationContact(
     backdrop: Backdrop,
@@ -76,10 +76,8 @@ fun BottomNavigationContact(
     val neighborContentLayer = rememberGraphicsLayer()
     val drawNeighborContent: ContentDrawScope.() -> Unit = remember(contact, neighborContentLayer, renderedLensTransform) {
         {
-            // A disconnected button still owns its visible 2dp background. Only replay
-            // its foreground once the shared hidden material owns that background.
             val transform = renderedLensTransform.value
-            if (contact.connected.value && transform != null) {
+            if (contact.surface.value != null && transform != null) {
                 withTransform({
                     scale(transform.scale.x, transform.scale.y, transform.pivot - contact.neighborOrigin)
                 }) { drawLayer(neighborContentLayer) }
@@ -96,11 +94,11 @@ fun BottomNavigationContact(
     val appearance = LocalGlassAppearance.current
     val innerShadows = rememberNavigationInnerShadows(appearance.usesBackdrop, renderScale = 0.5f)
     val lensInnerShadows = rememberNavigationInnerShadows(appearance.usesRefraction, renderScale = 0.5f)
-    val connected by contact.connected
+    val surfaceReady by remember(contact) { derivedStateOf { contact.surface.value != null } }
     val capturesLensSource by contact.capturesLensSource
     Box(modifier.onGloballyPositioned(contact::updateCoordinates)) {
         Box(Modifier.matchParentSize()) {
-            if (connected) {
+            if (surfaceReady) {
                 val shape = remember(renderedSurface) { { renderedSurface.value?.shape ?: Capsule() } }
                 val press = remember(contact) { derivedStateOf { contact.pressProgress() } }
                 val background = remember(contact, backdrop, shape, press, renderedSurface, colors, appearance, innerShadows) {
@@ -150,7 +148,7 @@ fun BottomNavigationContact(
                     pressProgressState = renderedLensPress,
                     innerShadows = lensInnerShadows,
                     pressOverlay = {
-                        if (contact.connected.value) {
+                        if (contact.surface.value != null) {
                             val source = renderedSurface.value
                             val sampled = renderedLensSurface.value
                             val transform = renderedLensTransform.value
@@ -246,6 +244,7 @@ class BottomControlContactMember(
     private var bounds: Rect? by mutableStateOf(null)
 
     val connected: Boolean get() = contact.connected.value
+    val sharesSurface: Boolean get() = contact.surface.value != null
 
     fun capsule(): LiquidContactCapsule? = bounds?.let {
         LiquidContactCapsule(it.size, visualBounds.value(it.size).translate(it.topLeft))
@@ -313,21 +312,20 @@ class BottomControlContact(
     private val lensPressRenderer = PressHighlightRenderer()
     val capturesLensSource = derivedStateOf(structuralEqualityPolicy()) { members.any { it.needsLensSource() } }
 
-    private val baseSurface = derivedStateOf { createSurface() }
-    val surface = derivedStateOf {
-        baseSurface.value?.takeIf { (it.shape as LiquidContactShape).isConnected }
+    val surface = derivedStateOf { createSurface() }
+    val connected = derivedStateOf(structuralEqualityPolicy()) {
+        (surface.value?.shape as? LiquidContactShape)?.isConnected == true
     }
-    val connected = derivedStateOf(structuralEqualityPolicy()) { surface.value != null }
     val lensTransform = derivedStateOf { members.firstNotNullOfOrNull { it.lensTransform() } }
     val lensSurface = derivedStateOf {
-        val surface = baseSurface.value ?: return@derivedStateOf null
+        val source = surface.value ?: return@derivedStateOf null
         val transform = lensTransform.value ?: return@derivedStateOf null
-        val transformedBounds = transform.bounds(surface.bounds)
+        val transformedBounds = transform.bounds(source.bounds)
         val bounds = Rect(
             floor(transformedBounds.left), floor(transformedBounds.top),
             ceil(transformedBounds.right), ceil(transformedBounds.bottom),
         )
-        BottomContactSurface(bounds, (surface.shape as LiquidContactShape).withOutlineTransform(
+        BottomContactSurface(bounds, (source.shape as LiquidContactShape).withOutlineTransform(
             scale = transform.scale,
             translation = transformedBounds.topLeft - bounds.topLeft,
         ))
@@ -372,6 +370,9 @@ class BottomControlContact(
     }
 
     fun pressProgress(): Float = members.maxOfOrNull { it.materialPressProgress() } ?: 0f
+
+    /** Layout coordinates exclude member press deformation and contact-bound expansion. */
+    fun referenceCenter(): Offset = coordinates?.size?.let { Offset(it.width / 2f, it.height / 2f) } ?: Offset.Zero
 
     fun lensSourcePressProgress(): Float = members.firstNotNullOfOrNull { it.lensSourcePressProgress() } ?: 0f
 

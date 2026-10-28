@@ -756,7 +756,7 @@ fun GlassSurface(
             },
         )
     } else null
-    val sharesContactSurface = contactMember?.connected == true
+    val sharesContactSurface = contactMember?.sharesSurface == true
     LaunchedEffect(interactiveHighlight, cancelPressFeedback) {
         if (cancelPressFeedback) interactiveHighlight.cancelPress()
     }
