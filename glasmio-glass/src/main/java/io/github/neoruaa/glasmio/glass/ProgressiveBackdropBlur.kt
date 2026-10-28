@@ -1,16 +1,24 @@
 package io.github.neoruaa.glasmio.glass
 
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.BackdropEffectScope
+import com.kyant.backdrop.drawPlainBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.runtimeShaderEffect
 import com.kyant.backdrop.isRuntimeShaderSupported
 
 private val HorizontalProgressiveBlurShader = progressiveBlurPassShader(isVertical = false)
-private val VerticalProgressiveBlurShader = progressiveBlurPassShader(
-    isVertical = true,
-    appliesTint = true,
-)
+private val VerticalProgressiveBlurShader = progressiveBlurPassShader(isVertical = true)
 
 /**
  * AndroidX progressive blur uses two separable Gaussian passes and evaluates the blur radius at
@@ -20,7 +28,6 @@ private val VerticalProgressiveBlurShader = progressiveBlurPassShader(
  */
 private fun progressiveBlurPassShader(
     isVertical: Boolean,
-    appliesTint: Boolean = false,
 ): String {
     val pairedOffset =
         if (isVertical) "vec2(0.0, i + weightH / weight)"
@@ -32,24 +39,6 @@ private fun progressiveBlurPassShader(
         } else {
             "return step(bounds.x, sampleCoord.x) * (1.0 - step(bounds.z, sampleCoord.x));"
         }
-    val tintUniforms = if (appliesTint) {
-        """
-        layout(color) uniform half4 tint;
-        uniform float tintIntensity;
-        """.trimIndent()
-    } else {
-        ""
-    }
-    val output = if (appliesTint) {
-        """
-            half4 blurred = half4(blur(coord, blurRadius * intensity));
-            float tintMask = smoothstep(crop.w, crop.w * 0.42, coord.y);
-            return mix(blurred, tint, tintIntensity * tintMask);
-        """.trimIndent()
-    } else {
-        "return half4(blur(coord, blurRadius * intensity));"
-    }
-
     return """
         uniform shader content;
         uniform float blurRadius;
@@ -59,7 +48,6 @@ private fun progressiveBlurPassShader(
         uniform float endIntensity;
         uniform float2 startPoint;
         uniform float2 endPoint;
-        $tintUniforms
         const float maxRadius = 150.0;
 
         float inBoundsOnMovedAxis(vec2 sampleCoord, float4 bounds) {
@@ -131,15 +119,13 @@ private fun progressiveBlurPassShader(
             float2 ba = endPoint - startPoint;
             float fraction = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
             float intensity = mix(startIntensity, endIntensity, fraction);
-            $output
+            return half4(blur(coord, blurRadius * intensity));
         }
     """.trimIndent()
 }
 
 fun BackdropEffectScope.progressiveBackdropBlur(
     maxRadius: Float,
-    tint: Color = Color.Transparent,
-    tintIntensity: Float = 0f,
     startYFraction: Float = 0.42f,
     endYFraction: Float = 1f,
     startIntensity: Float = 1f,
@@ -153,7 +139,7 @@ fun BackdropEffectScope.progressiveBackdropBlur(
 
     val resolvedRadius = maxRadius.coerceAtMost(150f)
 
-    fun applyPass(key: String, shader: String, appliesTint: Boolean = false) {
+    fun applyPass(key: String, shader: String) {
         runtimeShaderEffect(key, shader, "content") {
             setFloatUniform("blurRadius", resolvedRadius)
             setFloatUniform("crop", 0f, 0f, size.width, size.height)
@@ -162,18 +148,69 @@ fun BackdropEffectScope.progressiveBackdropBlur(
             setFloatUniform("endIntensity", endIntensity)
             setFloatUniform("startPoint", 0f, size.height * startYFraction)
             setFloatUniform("endPoint", 0f, size.height * endYFraction)
-            if (appliesTint) {
-                setColorUniform("tint", tint)
-                setFloatUniform("tintIntensity", tintIntensity)
-            }
         }
     }
 
     applyPass("IosTopBarProgressiveBlurHorizontal", HorizontalProgressiveBlurShader)
     applyPass(
-        key = "IosTopBarProgressiveBlurVerticalTint",
+        key = "IosTopBarProgressiveBlurVertical",
         shader = VerticalProgressiveBlurShader,
-        appliesTint = true,
     )
+}
+
+/** Compatibility entry point. A progressive blur preserves source colors and never adds tint. */
+@Deprecated(
+    message = "Tint is no longer applied. Use the untinted overload or Modifier.progressiveBlurBackdrop.",
+    replaceWith = ReplaceWith("progressiveBackdropBlur(maxRadius, startYFraction, endYFraction, startIntensity, endIntensity)"),
+)
+@Suppress("UNUSED_PARAMETER")
+fun BackdropEffectScope.progressiveBackdropBlur(
+    maxRadius: Float,
+    tint: Color,
+    tintIntensity: Float = 0f,
+    startYFraction: Float = 0.42f,
+    endYFraction: Float = 1f,
+    startIntensity: Float = 1f,
+    endIntensity: Float = 0f,
+) = progressiveBackdropBlur(maxRadius, startYFraction, endYFraction, startIntensity, endIntensity)
+
+/** Draw the complete original blur profile; foreground fading belongs to its recorded source. */
+fun Modifier.progressiveBlurBackdrop(
+    backdrop: Backdrop,
+    progress: Float,
+    maxRadius: Dp = 10.dp,
+): Modifier = graphicsLayer {
+    alpha = progress.coerceIn(0f, 1f)
+}.drawPlainBackdrop(
+    backdrop = backdrop,
+    shape = { RectangleShape },
+    effects = { progressiveBackdropBlur(maxRadius.toPx()) },
+)
+
+/**
+ * Apply to foreground content before recording the blur source, leaving its background separate.
+ * At full reveal alpha rises linearly from 25% at the solid header's top to 100% at
+ * [headerHeight], matching the Reduce Transparency block. The Gaussian blur remains independent.
+ */
+fun Modifier.scrollEdgeContentFade(
+    progress: Float,
+    headerHeight: Dp,
+): Modifier {
+    val reveal = progress.coerceIn(0f, 1f)
+    if (reveal == 0f) return this
+    return graphicsLayer {
+        compositingStrategy = CompositingStrategy.Offscreen
+    }.drawWithCache {
+        val header = headerHeight.toPx().coerceAtLeast(1f)
+        val opacityMask = Brush.verticalGradient(
+            colors = listOf(Color.White.copy(alpha = 1f - reveal * 0.75f), Color.White),
+            startY = 0f,
+            endY = header,
+        )
+        onDrawWithContent {
+            drawContent()
+            drawRect(opacityMask, blendMode = BlendMode.DstIn)
+        }
+    }
 }
 

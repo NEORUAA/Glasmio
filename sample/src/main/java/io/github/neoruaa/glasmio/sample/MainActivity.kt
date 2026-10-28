@@ -586,9 +586,8 @@ private fun SamplePinnedPage(
     val edgeProgress = animatedEdge
     val entry = LocalSampleHeaderEntry.current
     val currentCollapse = rememberUpdatedState(collapseProgress)
-    val currentEdge = rememberUpdatedState(edgeProgress)
     val scroll = remember {
-        GlasmioHeaderScrollState({ currentCollapse.value }, { currentEdge.value })
+        GlasmioHeaderScrollState({ currentCollapse.value })
     }
     SideEffect { entry.scroll = scroll }
     val hostPadding = LocalSampleBodyPadding.current
@@ -599,8 +598,9 @@ private fun SamplePinnedPage(
     GlasmioPageBody(
         contentPadding = bodyPadding,
         backgroundColor = backgroundColor,
+        topBarBlurProgress = edgeProgress,
+        background = if (wallpaper) ({ SampleBackdrop(true) }) else null,
     ) { padding ->
-        if (wallpaper) SampleBackdrop(true)
         content(SamplePageLayout(title, padding, state, collapseProgress))
     }
 }
@@ -1034,8 +1034,7 @@ private fun ListDemo() {
     val edgeProgress = if (grid) rememberGlasmioHeaderScrollEdge(gridState) else rememberGlasmioHeaderScrollEdge(listState)
     val headerEntry = LocalSampleHeaderEntry.current
     val currentCollapse = rememberUpdatedState(collapseProgress)
-    val currentEdge = rememberUpdatedState(edgeProgress)
-    val headerScroll = remember { GlasmioHeaderScrollState({ currentCollapse.value }, { currentEdge.value }) }
+    val headerScroll = remember { GlasmioHeaderScrollState({ currentCollapse.value }) }
     val currentRefresh = rememberUpdatedState(refresh)
     val headerActions = remember(grid, refreshing) {
         val layoutSymbol = if (grid) "list.bullet" else "rectangle.grid.2x2"
@@ -1051,6 +1050,7 @@ private fun ListDemo() {
     GlasmioPageBody(
         PaddingValues(start = IosPageHorizontalPadding, top = headerPadding.calculateTopPadding(), end = IosPageHorizontalPadding,
             bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp),
+        topBarBlurProgress = edgeProgress,
     ) { padding ->
         Box(
             Modifier.fillMaxSize().pullToRefresh(
@@ -1383,7 +1383,7 @@ private fun SheetsDemo(layout: SamplePageLayout) {
         },
     ) {
         val sheetPadding = LocalGlasmioSheetContentPadding.current
-        Column(Modifier.fillMaxWidth().weight(1f).background(LocalGlassColors.current.groupedBackground)) {
+        Column(Modifier.fillMaxWidth().weight(1f)) {
         LazyColumn(Modifier.fillMaxWidth().weight(1f), state = sheetListState, contentPadding = PaddingValues(
             start = 16.dp, top = sheetPadding.calculateTopPadding() + 8.dp, end = 16.dp, bottom = 8.dp,
         )) {

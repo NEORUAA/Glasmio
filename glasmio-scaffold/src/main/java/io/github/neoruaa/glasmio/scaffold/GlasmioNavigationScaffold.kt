@@ -12,7 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.LayerOutsets
 import androidx.compose.ui.graphics.graphicsLayer
@@ -26,8 +25,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawPlainBackdrop
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.ui.*
@@ -81,7 +80,7 @@ data class GlasmioHeaderAction(
     val content: @Composable () -> Unit,
 )
 
-/** Only the body is captured. Header and bottom bar live outside all NavDisplay transforms. */
+/** Shared controls remain outside NavDisplay transforms; each page owns its scroll-edge blur. */
 @Composable
 fun GlasmioNavigationScaffold(
     motion: GlasmioHeaderMotion,
@@ -94,38 +93,57 @@ fun GlasmioNavigationScaffold(
     val frame by motion.frame
     val source = key(frame.fromEntryKey) { header(frame.fromEntryKey) }
     val target = key(frame.toEntryKey) { header(frame.toEntryKey) }
-    val owner = if (frame.phase == GlasmioNavigationPhase.Tracking || frame.phase == GlasmioNavigationPhase.Canceling) source else target
     val status = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val padding = PaddingValues(start = IosPageHorizontalPadding, top = status + 72.dp, end = IosPageHorizontalPadding)
     Box(modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().glassBackdropSource(backdrop).trackBackdropPosition(backdrop)) { content(padding) }
         GlasmioBackdropProvider(backdrop) {
-            val colors = LocalGlassColors.current
-            val appearance = LocalGlassAppearance.current
-            val edge = owner.scrollState?.scrollEdgeProgress?.invoke() ?: 0f
-            Box(Modifier.fillMaxWidth().height(status + 96.dp).graphicsLayer { alpha = edge.coerceIn(0f, 1f) }
-                .then(if (appearance.usesBackdrop) Modifier.drawPlainBackdrop(
-                    backdrop, { RectangleShape }, effects = {
-                        progressiveBackdropBlur(10.dp.toPx(), colors.groupedBackground, .78f)
-                    },
-                ) else Modifier.background(colors.groupedBackground)))
             GlasmioNavigationHeader(source, target, frame, Modifier.fillMaxWidth().padding(top = status))
             bottomBar()
         }
     }
 }
 
-/** Body-only counterpart of GlasmioPinnedPage. Insets are supplied by its navigation host. */
+/**
+ * Page-owned body and scroll-edge blur. Insets are supplied by the navigation host.
+ * The untouched background and faded foreground feed [backdrop]; the complete blur profile is
+ * overlaid afterward so it follows this page's transitions without restoring unfaded content.
+ * Descendant glass controls keep their existing backdrop provider.
+ */
 @Composable
 fun GlasmioPageBody(
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
     backgroundColor: androidx.compose.ui.graphics.Color = LocalGlassColors.current.groupedBackground,
     backgroundBrush: androidx.compose.ui.graphics.Brush? = null,
+    topBarBlurProgress: Float = 0f,
+    backdrop: LayerBackdrop = rememberLayerBackdrop(),
+    background: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable BoxScope.(PaddingValues) -> Unit,
 ) {
-    Box(modifier.fillMaxSize().then(if (backgroundBrush != null) Modifier.background(backgroundBrush) else Modifier.background(backgroundColor))) {
-        GlasmioOverscrollHost { content(contentPadding) }
+    val appearance = LocalGlassAppearance.current
+    val headerHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 62.dp
+    val progress = topBarBlurProgress.coerceIn(0f, 1f)
+    Box(modifier.fillMaxSize()) {
+        Box(
+            Modifier.fillMaxSize().glassBackdropSource(backdrop).trackBackdropPosition(backdrop),
+        ) {
+            Box(
+                Modifier.matchParentSize()
+                    .then(if (backgroundBrush != null) Modifier.background(backgroundBrush) else Modifier.background(backgroundColor)),
+            ) { background?.invoke(this) }
+            Box(Modifier.fillMaxSize().scrollEdgeContentFade(progress, headerHeight)) {
+                GlasmioOverscrollHost { content(contentPadding) }
+            }
+        }
+        Box(
+            Modifier.fillMaxWidth().height(headerHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
+                .then(if (appearance.usesBackdrop) {
+                    Modifier.progressiveBlurBackdrop(backdrop, progress)
+                } else {
+                    Modifier.graphicsLayer { alpha = progress }.background(backgroundColor.copy(alpha = 1f))
+                }),
+        )
     }
 }
 

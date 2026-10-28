@@ -18,6 +18,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -1015,6 +1017,7 @@ class ComponentBehaviorTest {
         lateinit var scope: CoroutineScope
         var reduceTransparency by mutableStateOf(false)
         var density = 1f
+        var headerHeightPx = 0f
         var canvas = Color.Unspecified
         val bodyColor = Color(0xFF004488)
         rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
@@ -1036,13 +1039,15 @@ class ComponentBehaviorTest {
                             contentWindowInsets = { WindowInsets(top = 50.dp) },
                             contentNavigationBarInsets = { WindowInsets(bottom = 34.dp) },
                             topBarBlurProgress = rememberGlasmioHeaderScrollEdge(list),
+                            contentBackground = { Box(Modifier.fillMaxSize().background(bodyColor)) },
                             topBar = {
                                 GlasmioSheetTopToolbar("Pinned", Modifier.testTag("sheet-chrome-header"))
                             },
                         ) {
                             canvas = LocalGlassColors.current.groupedBackground
                             val padding = LocalGlasmioSheetContentPadding.current
-                            Column(Modifier.fillMaxSize().background(bodyColor)) {
+                            headerHeightPx = with(LocalDensity.current) { padding.calculateTopPadding().toPx() }
+                            Column(Modifier.fillMaxSize()) {
                                 LazyColumn(
                                     Modifier.fillMaxWidth().weight(1f).testTag("sheet-chrome-list"),
                                     state = list,
@@ -1051,7 +1056,10 @@ class ComponentBehaviorTest {
                                     items(40) { index ->
                                         Text("Row $index", color = Color.White,
                                             modifier = Modifier.fillMaxWidth().height(52.dp)
-                                                .testTag("sheet-chrome-row-$index").padding(start = 200.dp))
+                                                .testTag("sheet-chrome-row-$index").drawBehind {
+                                                    drawRect(Color.White, topLeft = Offset(40.dp.toPx(), 0f),
+                                                        size = Size(80.dp.toPx(), size.height))
+                                                }.padding(start = 200.dp))
                                     }
                                 }
                                 Box(Modifier.fillMaxWidth().padding(bottom = padding.calculateBottomPadding())) {
@@ -1066,23 +1074,34 @@ class ComponentBehaviorTest {
         rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
         val restingHeader = rule.onNodeWithTag("sheet-chrome-header").fetchSemanticsNode().boundsInRoot
         val bounds = rule.onNodeWithTag("sheet-chrome").fetchSemanticsNode().boundsInRoot
-        fun pixel(image: androidx.compose.ui.graphics.PixelMap, y: Float): Color =
-            image[(bounds.left + bounds.width * 0.25f).toInt(), y.toInt()]
+        fun pixel(image: androidx.compose.ui.graphics.PixelMap, xDp: Float, y: Float): Color =
+            image[(bounds.left + xDp * density).toInt(), y.toInt()]
         fun assertColor(expected: Color, actual: Color) {
-            assertEquals(expected.red, actual.red, 2f / 255f)
-            assertEquals(expected.green, actual.green, 2f / 255f)
-            assertEquals(expected.blue, actual.blue, 2f / 255f)
+            assertEquals(expected.red, actual.red, 3f / 255f)
+            assertEquals(expected.green, actual.green, 3f / 255f)
+            assertEquals(expected.blue, actual.blue, 3f / 255f)
         }
         val upperY = bounds.top + 24f * density
-        val middleY = restingHeader.bottom + 10f * density
-        val lowerY = restingHeader.bottom + 36f * density
+        val middleY = bounds.top + headerHeightPx * 0.5f
+        val partialY = bounds.top + headerHeightPx * 0.8f
+        val bodyY = bounds.top + headerHeightPx + 17f * density
+        val tailY = bounds.top + headerHeightPx + 8f * density
+        val backgroundX = bounds.width * 0.72f / density
+        fun whiteOverBackground(alpha: Float) = Color(
+            bodyColor.red + (1f - bodyColor.red) * alpha,
+            bodyColor.green + (1f - bodyColor.green) * alpha,
+            bodyColor.blue + (1f - bodyColor.blue) * alpha,
+        )
         val restingPixels = rule.onNode(isDialog()).captureToImage().toPixelMap()
-        assertColor(bodyColor, pixel(restingPixels, upperY))
-        assertColor(bodyColor, pixel(restingPixels, middleY))
+        assertColor(bodyColor, pixel(restingPixels, backgroundX, upperY))
+        assertColor(Color.White, pixel(restingPixels, 80f, bodyY))
         rule.runOnIdle { scope.launch { list.scrollToItem(0, (28f * density).toInt()) } }
         rule.waitUntil(10_000) { list.firstVisibleItemScrollOffset >= (27f * density).toInt() }
-        val partialUpper = pixel(rule.onNode(isDialog()).captureToImage().toPixelMap(), upperY)
-        assertTrue("The header must begin revealing as content scrolls", partialUpper.red > bodyColor.red + 0.1f)
+        val partialPixels = rule.onNode(isDialog()).captureToImage().toPixelMap()
+        val partialForeground = pixel(partialPixels, 80f, partialY)
+        assertEquals("Partial scroll must fade foreground toward its minimum opacity",
+            0.925f, partialForeground.red, 0.04f)
+        assertColor(bodyColor, pixel(partialPixels, backgroundX, upperY))
 
         rule.runOnIdle { scope.launch { list.scrollToItem(12) } }
         rule.waitUntil(10_000) { list.firstVisibleItemIndex == 12 }
@@ -1092,28 +1111,31 @@ class ComponentBehaviorTest {
         assertTrue("Scrolled rows must pass behind the pinned header", underlappingRow.top < header.bottom)
         assertTrue("The list must extend into the header's viewport", underlappingRow.bottom > header.top)
         val pixels = rule.onNode(isDialog()).captureToImage().toPixelMap()
-        val upper = pixel(pixels, upperY)
-        val middle = pixel(pixels, middleY)
-        val lower = pixel(pixels, lowerY)
-        assertTrue("The scroll reveal must remain gradual", upper.red > partialUpper.red + 0.1f)
-        assertTrue("The header must retain the backdrop rather than draw a solid block", upper.red < canvas.red - 0.05f)
-        assertTrue("Header tint must fade through the content", upper.red > middle.red + 0.08f)
-        assertTrue("The lower blur edge must approach the unmodified content", middle.red > lower.red + 0.03f)
-        assertColor(bodyColor, lower)
-        assertColor(bodyColor, pixel(pixels, bounds.bottom - 8f * density))
+        val upperAlpha = 0.25f + 0.75f * ((upperY - bounds.top) / headerHeightPx)
+        assertColor(whiteOverBackground(upperAlpha), pixel(pixels, 80f, upperY))
+        assertColor(bodyColor, pixel(pixels, backgroundX, upperY))
+        val middle = pixel(pixels, 80f, middleY)
+        assertEquals("The fade midpoint must retain half the range above the 25% floor", 0.625f, middle.red, 0.05f)
+        val fullPartialPosition = pixel(pixels, 80f, partialY)
+        assertEquals("The mask must reach its final linear opacity inside the solid-header bounds", 0.85f, fullPartialPosition.red, 0.04f)
+        assertTrue("The completed reveal must fade more foreground than partial scroll",
+            fullPartialPosition.red < partialForeground.red - 0.03f)
+        assertColor(Color.White, pixel(pixels, 80f, tailY))
+        assertColor(bodyColor, pixel(pixels, backgroundX, tailY))
+        assertColor(bodyColor, pixel(pixels, backgroundX, bounds.bottom - 8f * density))
 
         rule.runOnIdle { reduceTransparency = true }
         rule.waitForIdle()
         val reduced = rule.onNode(isDialog()).captureToImage().toPixelMap()
-        assertColor(canvas, pixel(reduced, upperY))
-        assertColor(canvas, pixel(reduced, header.bottom - 4f * density))
-        assertColor(bodyColor, pixel(reduced, lowerY))
-        assertColor(bodyColor, pixel(reduced, bounds.bottom - 8f * density))
+        assertColor(canvas, pixel(reduced, backgroundX, upperY))
+        assertColor(canvas, pixel(reduced, backgroundX, bounds.top + headerHeightPx - 4f * density))
+        assertColor(Color.White, pixel(reduced, 80f, tailY))
+        assertColor(bodyColor, pixel(reduced, backgroundX, bounds.bottom - 8f * density))
         rule.runOnIdle { scope.launch { list.scrollToItem(0) } }
         rule.waitUntil(10_000) { list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0 }
         val returned = rule.onNode(isDialog()).captureToImage().toPixelMap()
-        assertColor(bodyColor, pixel(returned, upperY))
-        assertColor(bodyColor, pixel(returned, middleY))
+        assertColor(bodyColor, pixel(returned, backgroundX, upperY))
+        assertColor(Color.White, pixel(returned, 80f, bodyY))
     }
 
     @Test fun sheetMaterialRendersOverTheNativeReferenceGradient() {

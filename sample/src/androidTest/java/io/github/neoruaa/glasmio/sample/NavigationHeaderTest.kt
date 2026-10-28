@@ -1,15 +1,23 @@
 package io.github.neoruaa.glasmio.sample
 
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
@@ -63,6 +71,182 @@ class NavigationHeaderTest {
         }
         rule.waitForIdle()
         rule.mainClock.autoAdvance = false
+    }
+
+    @Test fun contentFadeIsLinearAndLeavesTheBackgroundUntouched() {
+        var edge by mutableFloatStateOf(0f)
+        var density = 1f
+        val background = Color(0xFF004488)
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.setContent {
+            density = LocalDensity.current.density
+            Box(Modifier.fillMaxSize().background(background).testTag("linear-content-fade")) {
+                Box(Modifier.fillMaxSize()
+                    .scrollEdgeContentFade(edge, headerHeight = 60.dp)
+                    .background(Color.White))
+            }
+        }
+        rule.waitForIdle()
+        fun pixels() = rule.onNodeWithTag("linear-content-fade").captureToImage().toPixelMap()
+        fun assertSample(image: androidx.compose.ui.graphics.PixelMap, yDp: Float, alpha: Float) {
+            val actual = image[(image.width * 0.25f).toInt(), (yDp * density).toInt()]
+            val expected = Color(
+                background.red + (1f - background.red) * alpha,
+                background.green + (1f - background.green) * alpha,
+                background.blue + (1f - background.blue) * alpha,
+            )
+            assertEquals(expected.red, actual.red, 3f / 255f)
+            assertEquals(expected.green, actual.green, 3f / 255f)
+            assertEquals(expected.blue, actual.blue, 3f / 255f)
+        }
+        assertSample(pixels(), 20f, 1f)
+        rule.runOnIdle { edge = 0.5f }
+        assertSample(pixels(), 20f, 0.75f)
+        rule.runOnIdle { edge = 1f }
+        val faded = pixels()
+        assertSample(faded, 0f, 0.25f)
+        assertSample(faded, 15f, 0.4375f)
+        assertSample(faded, 30f, 0.625f)
+        assertSample(faded, 45f, 0.8125f)
+        assertSample(faded, 60f, 1f)
+        assertSample(faded, 80f, 1f)
+        rule.runOnIdle { edge = 0f }
+        assertSample(pixels(), 20f, 1f)
+    }
+
+    @Test fun pageOwnedBlurPreservesColorsAndMovesIndependentlyOfTheSharedToolbar() {
+        var edge by mutableFloatStateOf(0f)
+        var slide by mutableFloatStateOf(0f)
+        var pattern by mutableStateOf(false)
+        var widthPx = 0f
+        var density = 1f
+        var headerHeightPx = 0f
+        var blurHeightPx = 0f
+        val blue = Color(0xFF004488)
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.runOnUiThread { rule.activity.enableEdgeToEdge() }
+        rule.setContent {
+            GlasmioTheme {
+                density = LocalDensity.current.density
+                headerHeightPx = with(LocalDensity.current) {
+                    (WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 62.dp).toPx()
+                }
+                blurHeightPx = headerHeightPx + 34f * density
+                GlasmioNavigationScaffold(motion, header = { entry ->
+                    GlasmioHeaderSpec("Page $entry",
+                        scrollState = remember { GlasmioHeaderScrollState({ 1f }, { 1f }) },
+                        trailing = listOf(GlasmioHeaderGroup("primary", listOf(
+                            GlasmioHeaderAction("shared", "shared", "Shared action", {}) { Text("Shared") },
+                        ))))
+                }) { padding ->
+                    BoxWithConstraints(Modifier.fillMaxSize().clipToBounds()) {
+                        widthPx = constraints.maxWidth.toFloat()
+                        for (page in listOf("A", "B")) {
+                            val first = if (page == "A") blue else Color(0xFF220066)
+                            val second = if (page == "A") Color(0xFFFFBB77) else Color(0xFFAA88EE)
+                            val stripes = remember(first, second, density) {
+                                Brush.horizontalGradient(
+                                    0f to first, 0.499f to first, 0.5f to second, 1f to second,
+                                    endX = 8f * density, tileMode = TileMode.Repeated,
+                                )
+                            }
+                            GlasmioPageBody(
+                                padding,
+                                modifier = Modifier.fillMaxSize().graphicsLayer {
+                                    translationX = (if (page == "A") 0f else widthPx) - slide
+                                }.testTag("blur-page-$page"),
+                                backgroundColor = first,
+                                backgroundBrush = stripes.takeIf { pattern },
+                                topBarBlurProgress = if (page == "A") edge else 0f,
+                            ) {
+                                if (!pattern) Box(Modifier.fillMaxSize().drawBehind {
+                                    drawRect(Color.White, topLeft = Offset(size.width * 0.6f, 0f),
+                                        size = Size(size.width * 0.1f, size.height))
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        val root = rule.onRoot()
+        val origin = root.fetchSemanticsNode().boundsInRoot.topLeft
+        val upperY = 20f * density
+        val belowHeaderY = headerHeightPx + 8f * density
+        val tailY = blurHeightPx + 8f * density
+        fun stats(image: androidx.compose.ui.graphics.PixelMap, left: Float, right: Float, y: Float): Pair<Float, Color> {
+            val samples = (left.toInt() until right.toInt()).map { image[it, y.toInt()] }
+            return (samples.maxOf { it.red } - samples.minOf { it.red }) to Color(
+                samples.map { it.red }.average().toFloat(), samples.map { it.green }.average().toFloat(),
+                samples.map { it.blue }.average().toFloat(),
+            )
+        }
+        fun assertColor(expected: Color, actual: Color) {
+            assertEquals(expected.red, actual.red, 3f / 255f)
+            assertEquals(expected.green, actual.green, 3f / 255f)
+            assertEquals(expected.blue, actual.blue, 3f / 255f)
+        }
+        fun foreground(image: androidx.compose.ui.graphics.PixelMap, y: Float = upperY) =
+            image[(widthPx * 0.65f).toInt(), y.toInt()]
+        fun background(image: androidx.compose.ui.graphics.PixelMap) =
+            image[(widthPx * 0.25f).toInt(), upperY.toInt()]
+        fun whiteOverBackground(alpha: Float) = Color(
+            blue.red + (1f - blue.red) * alpha,
+            blue.green + (1f - blue.green) * alpha,
+            blue.blue + (1f - blue.blue) * alpha,
+        )
+        val clear = root.captureToImage().toPixelMap()
+        assertColor(Color.White, foreground(clear))
+        assertColor(blue, background(clear))
+        rule.runOnIdle { edge = 0.5f }
+        val partial = root.captureToImage().toPixelMap()
+        val headerFraction = (upperY / headerHeightPx).coerceIn(0f, 1f)
+        assertColor(whiteOverBackground(0.625f + 0.375f * headerFraction), foreground(partial))
+        assertColor(blue, background(partial))
+        rule.runOnIdle { edge = 1f }
+        val full = root.captureToImage().toPixelMap()
+        assertColor(whiteOverBackground(0.25f + 0.75f * headerFraction), foreground(full))
+        assertColor(blue, background(full))
+        assertColor(Color.White, foreground(full, belowHeaderY))
+        assertColor(Color.White, foreground(full, tailY))
+        rule.runOnIdle { edge = 0f }
+        assertColor(Color.White, foreground(root.captureToImage().toPixelMap()))
+
+        // Background detail must retain the original full progressive blur, independently
+        // of the foreground opacity mask. No foreground is drawn in this phase.
+        rule.runOnIdle { pattern = true }
+        val sharpPattern = root.captureToImage().toPixelMap()
+        val clearContrast = stats(sharpPattern, 24f * density, 104f * density, upperY).first
+        assertTrue("Background detail must start sharp", clearContrast > 0.9f)
+        rule.runOnIdle { edge = 1f }
+        val blurredPattern = root.captureToImage().toPixelMap()
+        val (fullContrast, mean) = stats(blurredPattern, 24f * density, 104f * density, upperY)
+        assertTrue("The revealed header must preserve full blur strength", fullContrast < 0.4f)
+        assertEquals("Blur must preserve the background mean", 0.5f, mean.red, 0.03f)
+        assertTrue("The blur's middle must not be diluted with a sharp copy",
+            stats(blurredPattern, 24f * density, 104f * density, blurHeightPx * 0.65f).first < 0.35f)
+        assertEquals("The original radius profile must return to sharp at its tail", clearContrast,
+            stats(blurredPattern, 24f * density, 104f * density, tailY).first, 0.02f)
+
+        val button = rule.onNodeWithContentDescription("Shared action").fetchSemanticsNode().boundsInRoot
+        rule.mainClock.autoAdvance = false
+        rule.runOnUiThread {
+            slide = widthPx / 2f
+            motion.state.value = GlasmioNavigationFrame(1, "A", "B", phase = GlasmioNavigationPhase.Settling)
+        }
+        rule.mainClock.advanceTimeBy(80)
+        val moving = root.captureToImage().toPixelMap()
+        val half = widthPx / 2f
+        val source = stats(moving, half - 70f * density, half - 30f * density, upperY)
+        val target = stats(moving, half + 24f * density, half + 64f * density, upperY)
+        assertTrue("The departing page must retain its own blurred background", source.first < 0.4f)
+        assertTrue("The entering page must retain its clear background", target.first > 0.45f)
+        assertTrue("The entering page must sample its own purple background", target.second.blue > target.second.red + 0.15f)
+        val after = rule.onNodeWithContentDescription("Shared action").fetchSemanticsNode().boundsInRoot
+        assertEquals(button.center.x - origin.x, after.center.x - origin.x, 0.5f)
+        assertEquals(button.center.y - origin.y, after.center.y - origin.y, 0.5f)
+        rule.onAllNodesWithContentDescription("Shared action").assertCountEquals(1)
     }
 
     @Test fun exitingCircleCanExpandBeyondItsOriginalSlotWithoutRectangularClipping() {

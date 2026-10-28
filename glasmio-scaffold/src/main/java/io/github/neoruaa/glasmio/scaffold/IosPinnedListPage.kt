@@ -8,7 +8,6 @@ import io.github.neoruaa.glasmio.icons.*
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -48,15 +47,12 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawPlainBackdrop
 
 /**
  * A collapsed large title is a state, not a scroll position. Past the enter breakpoint the header
@@ -345,7 +341,6 @@ fun GlasmioPinnedPage(
 ) {
     val pageBackdrop = rememberLayerBackdrop()
     val colors = LocalGlassColors.current
-    val appearance = LocalGlassAppearance.current
     val pageBackground = backgroundColor ?: colors.groupedBackground
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val toolbarHeight = statusBarHeight + 62.dp
@@ -358,41 +353,14 @@ fun GlasmioPinnedPage(
 
     CompositionLocalProvider(LocalContentColor provides colors.content) {
         Box(modifier.fillMaxSize()) {
-            // Keep the background inside the recorded draw chain so transparent content regions
-            // sample the real page surface instead of an empty backdrop.
             GlasmioPageBody(
                 contentPadding = contentPadding,
-                modifier = Modifier.fillMaxSize()
-                    .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(pageBackdrop) else Modifier),
+                modifier = Modifier.fillMaxSize(),
                 backgroundColor = pageBackground,
                 backgroundBrush = backgroundBrush,
+                topBarBlurProgress = topBarBlurProgress,
+                backdrop = pageBackdrop,
                 content = content,
-            )
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(toolbarHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
-                    .align(Alignment.TopCenter)
-                    .graphicsLayer {
-                        alpha = topBarBlurProgress.coerceIn(0f, 1f)
-                    }
-                    .then(
-                        if (appearance.usesBackdrop) {
-                            Modifier.drawPlainBackdrop(
-                                backdrop = pageBackdrop,
-                                shape = { RectangleShape },
-                                effects = {
-                                    progressiveBackdropBlur(
-                                        maxRadius = 10.dp.toPx(),
-                                        tint = pageBackground,
-                                        tintIntensity = 0.78f,
-                                    )
-                                },
-                            )
-                        } else {
-                            Modifier.background(pageBackground.copy(alpha = 1f))
-                        },
-                    ),
             )
             CompositionLocalProvider(LocalGlassBackdrop provides pageBackdrop) {
                 GlasmioTopBar(

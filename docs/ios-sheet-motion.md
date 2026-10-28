@@ -525,9 +525,14 @@ and grabber use continuous curves; bottom radii adapt to Android's reported
 hardware corner radius using the native concentric rule.
 
 The optional `topBar` slot adopts Glasmio's navigation-header treatment: a separate
-body-only backdrop feeds the shared 10dp progressive blur, extending 34dp below
+body-only backdrop feeds the shared untinted 10dp progressive blur, extending 34dp below
 the measured header. The handle and toolbar are overlaid after recording, avoiding
-feedback. Reduce Transparency uses an opaque canvas instead. The body extends to
+feedback. A foreground-only mask matches the Reduce Transparency header block:
+alpha rises linearly from 0.25 at its top to 1 at its bottom. The blur still extends
+34dp below the header. The native backplate and table canvas remain separate from
+this mask. The full original progressive blur samples
+the already-faded content, with no extra spatial attenuation or dim/tint paint.
+Reduce Transparency uses an opaque canvas instead. The body extends to
 the sheet's bottom edge; `LocalGlasmioSheetContentPadding` supplies scroll-content
 and footer safe spacing without reserving a differently colored navigation strip.
 This chrome treatment is a Glasmio integration choice, not a recovered UIKit filter.

@@ -286,11 +286,11 @@ fun MenuScreen() = ExampleHost {
 
 The medium background is glass; the large background uses the system background color. Crossing the native full-height threshold retargets a separate background spring. `fitContent = true` presents a short action panel with floating insets. Insets include the IME by default and can be overridden through `contentWindowInsets` and `contentNavigationBarInsets`. See the [native sheet reference](ios-sheet-motion.md) for the recovered implementation and device measurements.
 
-Inside a sheet, grouped rows inherit UIKit's material context. Medium rows transform the sheet's exported backplate with the native vibrancy matrix; Large rows use opaque semantic colors. Labels and separators follow their own native color roles. Apply `GlasmioTheme.colors.groupedBackground` to the table's scroll container: it is transparent in the glass context and resolves to the elevated grouped-table canvas in Large. The sheet's own backing, the table canvas and its cells are separate layers.
+Inside a sheet, grouped rows inherit UIKit's material context. Medium rows transform the sheet's exported backplate with the native vibrancy matrix; Large rows use opaque semantic colors. Labels and separators follow their own native color roles. With `topBar`, the host keeps the grouped-table canvas separate from fading content. Use `contentBackground` for custom backgrounds, rather than painting a background on the foreground scroll container. Without `topBar`, apply `GlasmioTheme.colors.groupedBackground` to the table container as before. The sheet's own backing, the table canvas and its cells are separate layers.
 
 Put `GlasmioSheetTopToolbar` in the modal's `topBar` slot for a pinned progressive-blur header.
 Only the body is recorded into the header's backdrop, excluding the toolbar and grabber.
-The header uses the same 10dp progressive blur and tint as the page navigation header;
+The header uses the same untinted 10dp progressive blur and foreground opacity mask as the page navigation header;
 Reduce Transparency replaces it with a solid canvas color. With this slot, content draws
 behind the handle, header and system navigation bar. Read `LocalGlasmioSheetContentPadding`:
 apply its top value to the list's **content padding**, and its bottom value inside the footer's
@@ -300,6 +300,26 @@ Header material starts clear by default. Supply the actual scroll edge through
 `topBarBlurProgress = rememberGlasmioHeaderScrollEdge(listState)`; compact titles
 do not imply an already visible blur. The same scroll-edge default applies to page
 and shared navigation headers.
+
+Progressive blur belongs to each page. `GlasmioNavigationScaffold` keeps the shared
+title/button animations but does not draw a combined blur over multiple navigation entries.
+Pass the page's edge value to `GlasmioPageBody(topBarBlurProgress = edge)` inside each
+entry. The body records its own background and already-masked foreground, then overlays full progressive blur, so the blur
+follows that page during push, pop, tab changes and predictive Back. `GlasmioPinnedPage`
+uses the same page-owned implementation. Glass controls keep their existing independent
+backdrop source; the header's recording excludes its own foreground.
+
+Normal blur preserves the sampled colors and the full spatially variable radius profile.
+The foreground opacity mask uses the same bounds as the Reduce Transparency header block:
+alpha is 0.25 at its top and rises linearly to 1 at its bottom. The blur's separate 34dp
+extension remains unchanged. Scroll progress blends this content fade in
+from a fully visible foreground. Background color, brush and the `GlasmioPageBody.background`
+slot stay outside the mask, so wallpaper and page canvas remain intact. Place wallpaper
+in that background slot, rather than inside the scrollable foreground.
+The two Gaussian passes sample this already-masked result. Their output has no second
+spatial opacity mask, which would mix sharp detail back in and weaken the original blur.
+No dim or tint color is added.
+Reduce Transparency still uses a solid canvas that follows the same scroll reveal.
 
 When migrating an explicit `sheetState`, replace `rememberModalBottomSheetState` with `rememberGlasmioSheetState` and Material3 `SheetValue` with `GlasmioSheetValue`. The new state's `show`, `hide`, `expand` and `partialExpand` are suspending commands. The separate `GlasmioBottomSheetState` in Scaffold retains its custom player/miniplayer contract.
 
@@ -337,7 +357,7 @@ fun ModalScreen() = ExampleHost {
     ) {
         val safePadding = LocalGlasmioSheetContentPadding.current
         LazyColumn(
-            Modifier.fillMaxWidth().weight(1f).background(GlasmioTheme.colors.groupedBackground),
+            Modifier.fillMaxWidth().weight(1f),
             state = detailsList,
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp,
                 top = safePadding.calculateTopPadding() + 8.dp,

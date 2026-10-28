@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.Interaction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -82,7 +83,8 @@ import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.LocalGlassAppearance
 import io.github.neoruaa.glasmio.glass.LocalBlurBackdrop
 import io.github.neoruaa.glasmio.glass.glassBackdropSource
-import io.github.neoruaa.glasmio.glass.progressiveBackdropBlur
+import io.github.neoruaa.glasmio.glass.progressiveBlurBackdrop
+import io.github.neoruaa.glasmio.glass.scrollEdgeContentFade
 import io.github.neoruaa.glasmio.glass.trackBackdropPosition
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.Flow
@@ -119,6 +121,7 @@ private class SheetDragInteractions : MutableInteractionSource {
  * With [topBar], content extends behind all chrome. Read [LocalGlasmioSheetContentPadding]
  * to keep initial scroll content and footer controls clear of the pinned bar and system insets.
  * [topBarBlurProgress] defaults to hidden; drive it from the content's scroll-edge progress.
+ * [contentBackground] stays visible while scrollable foreground fades beneath [topBar].
  */
 @Composable
 fun GlasmioBottomSheet(
@@ -137,6 +140,7 @@ fun GlasmioBottomSheet(
     title: String = "Sheet",
     topBar: (@Composable () -> Unit)? = null,
     topBarBlurProgress: Float = 0f,
+    contentBackground: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -361,6 +365,7 @@ fun GlasmioBottomSheet(
                 ) {
                     val chromeBackdrop = rememberLayerBackdrop()
                     val chromeColors = LocalGlassColors.current
+                    val sheetBackplate = LocalIosSheetBackdrop.current
                     val appearance = LocalGlassAppearance.current
                     var toolbarHeight by remember(density.density) { mutableStateOf(with(density) { 54.dp.roundToPx() }) }
                     val handleHeight = 20.dp
@@ -384,25 +389,35 @@ fun GlasmioBottomSheet(
                                 }
                             } else {
                                 Box(Modifier.fillMaxWidth()) {
-                                    Column(
+                                    Box(
                                         (if (contentSized) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
                                             .glassBackdropSource(chromeBackdrop)
                                             .trackBackdropPosition(chromeBackdrop),
                                     ) {
-                                        CompositionLocalProvider(LocalGlasmioSheetContentPadding provides chromePadding) { content() }
+                                        Box(
+                                            Modifier.matchParentSize()
+                                                .then(if (sheetBackplate != null) Modifier.drawPlainBackdrop(
+                                                    sheetBackplate, shape = { RectangleShape }, effects = {},
+                                                ) else Modifier)
+                                                .background(chromeColors.groupedBackground),
+                                        ) { contentBackground?.invoke(this) }
+                                        Column(
+                                            (if (contentSized) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
+                                                .scrollEdgeContentFade(topBarBlurProgress, headerHeight),
+                                        ) {
+                                            CompositionLocalProvider(LocalGlasmioSheetContentPadding provides chromePadding) { content() }
+                                        }
                                     }
                                     // Record the body only: the bar and grabber must never sample themselves.
                                     Box(
                                         Modifier.fillMaxWidth()
                                             .height(headerHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
-                                            .graphicsLayer { alpha = topBarBlurProgress.coerceIn(0f, 1f) }
-                                            .then(if (appearance.usesBackdrop) Modifier.drawPlainBackdrop(
+                                            .then(if (appearance.usesBackdrop) Modifier.progressiveBlurBackdrop(
                                                 backdrop = chromeBackdrop,
-                                                shape = { RectangleShape },
-                                                effects = {
-                                                    progressiveBackdropBlur(10.dp.toPx(), chromeColors.groupedBackground, .78f)
-                                                },
-                                            ) else Modifier.background(chromeColors.groupedBackground.copy(alpha = 1f))),
+                                                progress = topBarBlurProgress,
+                                            ) else Modifier.graphicsLayer {
+                                                alpha = topBarBlurProgress.coerceIn(0f, 1f)
+                                            }.background(chromeColors.groupedBackground.copy(alpha = 1f))),
                                     )
                                     Box(Modifier.fillMaxWidth().padding(top = handleHeight).onSizeChanged { toolbarHeight = it.height }) {
                                         topBar()
