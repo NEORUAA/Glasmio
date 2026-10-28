@@ -28,6 +28,11 @@ object LiquidMenuNativeField {
     fun pack(rgba: FloatArray, width: Int, height: Int, rowBytes: Int, target: ByteBuffer): Boolean =
         available && target.isDirect && packNative(rgba, width, height, rowBytes, target)
 
+    fun buildContact(
+        edges: FloatArray, originX: Float, originY: Float, step: Float,
+        width: Int, height: Int, band: Float, rgba: FloatArray,
+    ): Boolean = available && buildContactNative(edges, originX, originY, step, width, height, band, rgba)
+
     fun release() {
         if (available) releaseNative()
     }
@@ -39,6 +44,11 @@ object LiquidMenuNativeField {
 
     private external fun packNative(
         rgba: FloatArray, width: Int, height: Int, rowBytes: Int, target: ByteBuffer,
+    ): Boolean
+
+    private external fun buildContactNative(
+        edges: FloatArray, originX: Float, originY: Float, step: Float,
+        width: Int, height: Int, band: Float, rgba: FloatArray,
     ): Boolean
 
     private external fun releaseNative()

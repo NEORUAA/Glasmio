@@ -20,6 +20,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -778,17 +780,23 @@ fun GlassSurface(
         GlassEmphasis.Regular -> colors.container
         GlassEmphasis.Prominent -> colors.prominentContainer
     }
-    val pressProgressState = remember(interactiveHighlight, pressHighlight) {
-        derivedStateOf { pressHighlight?.invoke()?.progress ?: interactiveHighlight.pressProgress }
+    // Callback identity can change when a parent recomposes without changing these pixels.
+    // Keep the material/effect nodes stable while each draw still invokes the current owner.
+    val currentPressHighlight = rememberUpdatedState(pressHighlight)
+    val currentVisualBoundsChanged = rememberUpdatedState(onVisualBoundsChanged)
+    val pressProgressState = remember(interactiveHighlight) {
+        derivedStateOf(structuralEqualityPolicy()) {
+            currentPressHighlight.value?.invoke()?.progress ?: interactiveHighlight.pressProgress
+        }
     }
     val shapeProvider = remember(shape) { { shape } }
-    val dragScaleLayerBlock: GraphicsLayerScope.() -> Unit = remember(interactiveHighlight, toolbarMember, onVisualBoundsChanged) {
+    val dragScaleLayerBlock: GraphicsLayerScope.() -> Unit = remember(interactiveHighlight, toolbarMember) {
         {
             if (toolbarMember != null) toolbarMember.applyPressTransform(this) else applyGlassDragScale(
                 pressProgress = interactiveHighlight.pressProgress,
                 offset = interactiveHighlight.offset,
             )
-            onVisualBoundsChanged?.invoke(
+            currentVisualBoundsChanged.value?.invoke(
                 Rect(
                     size.width * (1f - scaleX) / 2f + translationX,
                     size.height * (1f - scaleY) / 2f + translationY,
@@ -856,6 +864,8 @@ fun GlassSurface(
             opticalHighlightBoost,
             exportedBackdrop,
             material,
+            frostRadius,
+            preserveBackdropColors,
             navigationSurfaceAlphaMultiplier,
             pressProgressState,
             sampleBackdrop,
@@ -934,18 +944,22 @@ fun GlassSurface(
         usesShadowLift = navigationMaterial && !preserveBackdropColors,
         usesInnerShadows = innerShadows != null && !appearance.reduceTransparency,
     )
+    val externalHighlightModifier = remember(interactiveHighlight) {
+        interactiveHighlight.highlightModifier(
+            progressProvider = { currentPressHighlight.value?.invoke()?.progress ?: interactiveHighlight.pressProgress },
+            positionProvider = { size ->
+                currentPressHighlight.value?.invoke()?.let { Offset(size.width * it.position.x, size.height * it.position.y) }
+                    ?: interactiveHighlight.highlightPosition(size)
+            },
+        )
+    }
     val drawSurface: @Composable (Modifier) -> Unit = { surfaceModifier ->
         Box(
             modifier = surfaceModifier
                 .then(
                     if (sharesToolbarSurface || sharesContactSurface) Modifier
-                    else if (pressHighlight != null) interactiveHighlight.highlightModifier(
-                        progressProvider = { pressHighlight()?.progress ?: interactiveHighlight.pressProgress },
-                        positionProvider = { size ->
-                            pressHighlight()?.let { Offset(size.width * it.position.x, size.height * it.position.y) }
-                                ?: interactiveHighlight.highlightPosition(size)
-                        },
-                    ) else if (onClick != null && enabled) interactiveHighlight.modifier else Modifier,
+                    else if (pressHighlight != null) externalHighlightModifier
+                    else if (onClick != null && enabled) interactiveHighlight.modifier else Modifier,
                 )
                 .then(
                     if (onClick != null) {

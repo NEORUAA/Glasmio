@@ -63,11 +63,15 @@ internal class NavigationContactContour(approximation: FloatArray) {
         contourEdges.minOf { minOf(it.start.x, it.end.x) }, contourEdges.minOf { minOf(it.start.y, it.end.y) },
         contourEdges.maxOf { maxOf(it.start.x, it.end.x) }, contourEdges.maxOf { maxOf(it.start.y, it.end.y) },
     )
+    val fingerprint = edges.contentHashCode()
 }
 
 /** Container-owned storage survives the short-lived contour snapshots of a drag. */
 internal class NavigationContactField {
     private val buffers = ArrayList<Grid>(3)
+    private var outsideXSquared = FloatArray(0)
+    private var xOffset = FloatArray(0)
+    private var xProjection = FloatArray(0)
     var buildCount = 0
         private set
 
@@ -85,7 +89,11 @@ internal class NavigationContactField {
     }
 
     fun grid(contour: NavigationContactContour, band: Float): Grid {
-        buffers.firstOrNull { it.contour === contour && it.band >= band }?.let { return it }
+        buffers.firstOrNull {
+            it.band >= band && (it.contour === contour || it.contour?.let { cached ->
+                cached.fingerprint == contour.fingerprint && cached.edges.contentEquals(contour.edges)
+            } == true)
+        }?.let { return it }
         val bounds = contour.bounds
         val step = 2f
         val origin = Offset(floor(bounds.left / step) * step - step, floor(bounds.top / step) * step - step)
@@ -110,12 +118,19 @@ internal class NavigationContactField {
 
     /** Reject impossible candidates early and resolve each cell's normal only once. */
     private fun build(edges: FloatArray, grid: Grid) {
+        if (LiquidMenuNativeField.buildContact(edges, grid.origin.x, grid.origin.y, grid.step,
+                grid.width, grid.height, grid.band, grid.rgba)) return
         val width = grid.width
         val height = grid.height
         val step = grid.step
         val origin = grid.origin
         val rgba = grid.rgba
         val reach = grid.band + step * 2f
+        if (outsideXSquared.size < width) {
+            outsideXSquared = FloatArray(width)
+            xOffset = FloatArray(width)
+            xProjection = FloatArray(width)
+        }
         for (index in 0 until width * height) {
             val output = index * 4
             rgba[output] = reach * reach
@@ -140,25 +155,36 @@ internal class NavigationContactField {
             val right = ceil((maxOf(ax, bx) + reach - origin.x) / step).toInt().coerceAtMost(width - 1)
             val top = floor((minOf(ay, by) - reach - origin.y) / step).toInt().coerceAtLeast(0)
             val bottom = ceil((maxOf(ay, by) + reach - origin.y) / step).toInt().coerceAtMost(height - 1)
-            for (y in top..bottom) for (x in left..right) {
+            // These terms depend on only one axis. Keep their Float operation order,
+            // but calculate them once per column/row rather than at every band sample.
+            for (x in left..right) {
                 val pointX = origin.x + x * step
-                val pointY = origin.y + y * step
-                val output = (y * width + x) * 4
                 val outsideX = maxOf(minimumX - pointX, pointX - maximumX, 0f)
+                outsideXSquared[x] = outsideX * outsideX
+                xOffset[x] = pointX - ax
+                xProjection[x] = xOffset[x] * dx
+            }
+            for (y in top..bottom) {
+                val pointY = origin.y + y * step
                 val outsideY = maxOf(minimumY - pointY, pointY - maximumY, 0f)
-                if (outsideX * outsideX + outsideY * outsideY >= rgba[output]) continue
-                val px = pointX - ax
+                val outsideYSquared = outsideY * outsideY
                 val py = pointY - ay
-                val t = ((px * dx + py * dy) * inverseLengthSquared).coerceIn(0f, 1f)
-                val nx = px - t * dx
-                val ny = py - t * dy
-                val squared = nx * nx + ny * ny
-                if (squared >= rgba[output]) continue
-                val direction = if (nx * edges[edge + 4] + ny * edges[edge + 5] >= 0f) 1f else -1f
-                rgba[output] = squared
-                rgba[output + 1] = if (squared > 0.00000001f) nx * direction else edges[edge + 4]
-                rgba[output + 2] = if (squared > 0.00000001f) ny * direction else edges[edge + 5]
-                rgba[output + 3] = direction
+                val yProjection = py * dy
+                val row = y * width * 4
+                for (x in left..right) {
+                    val output = row + x * 4
+                    if (outsideXSquared[x] + outsideYSquared >= rgba[output]) continue
+                    val t = ((xProjection[x] + yProjection) * inverseLengthSquared).coerceIn(0f, 1f)
+                    val nx = xOffset[x] - t * dx
+                    val ny = py - t * dy
+                    val squared = nx * nx + ny * ny
+                    if (squared >= rgba[output]) continue
+                    val direction = if (nx * edges[edge + 4] + ny * edges[edge + 5] >= 0f) 1f else -1f
+                    rgba[output] = squared
+                    rgba[output + 1] = if (squared > 0.00000001f) nx * direction else edges[edge + 4]
+                    rgba[output + 2] = if (squared > 0.00000001f) ny * direction else edges[edge + 5]
+                    rgba[output + 3] = direction
+                }
             }
         }
         for (index in 0 until width * height) {

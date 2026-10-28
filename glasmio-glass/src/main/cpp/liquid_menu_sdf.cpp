@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -126,8 +127,28 @@ Sample sample(const RoundedField &incoming, const RoundedField &outgoing, bool h
 }
 struct Scratch {
     std::vector<float> raw, horizontal;
+    std::vector<float> contactEdges, contactColumns;
 };
 thread_local Scratch scratch;
+
+// Match java.lang.Math's signed-zero ordering, including normal channels at exact edges.
+inline float javaMin(float a, float b) {
+    if (std::isnan(a)) return a;
+    if (std::isnan(b)) return b;
+    if (a == 0.0f && b == 0.0f) return std::signbit(a) ? a : b;
+    return a < b ? a : b;
+}
+inline float javaMax(float a, float b) {
+    if (std::isnan(a)) return a;
+    if (std::isnan(b)) return b;
+    if (a == 0.0f && b == 0.0f) return std::signbit(a) ? b : a;
+    return a > b ? a : b;
+}
+inline int gridIndex(double value) {
+    if (value >= std::numeric_limits<int>::max()) return std::numeric_limits<int>::max();
+    if (value <= std::numeric_limits<int>::min()) return std::numeric_limits<int>::min();
+    return static_cast<int>(value);
+}
 } // namespace
 
 // One call covers the entire field. Scratch capacity survives subsequent frames on this thread.
@@ -194,6 +215,77 @@ extern "C" void liquid_menu_sdf_build(const float *geometry, float originX, floa
         }
 }
 
+// Identical Float32 axis-hoisted raster; no contour, sample spacing or optical band changes.
+extern "C" void liquid_menu_contact_field_build(const float *edges, int edgeFloatCount, float originX,
+                                                float originY, float step, int width, int height,
+                                                float band, float *rgba) {
+    const float reach = band + step * 2.0f;
+    const size_t cells = static_cast<size_t>(width) * height;
+    const size_t columns = static_cast<size_t>(width);
+    if (scratch.contactColumns.size() < columns * 3) scratch.contactColumns.resize(columns * 3);
+    float *outsideXSquared = scratch.contactColumns.data();
+    float *xOffset = outsideXSquared + columns;
+    float *xProjection = xOffset + columns;
+    for (size_t index = 0; index < cells; index++) {
+        const size_t output = index * 4;
+        rgba[output] = reach * reach;
+        rgba[output + 1] = 0.0f;
+        rgba[output + 2] = 0.0f;
+        rgba[output + 3] = -1.0f;
+    }
+    for (int edge = 0; edge < edgeFloatCount; edge += 6) {
+        const float ax = edges[edge], ay = edges[edge + 1];
+        const float bx = edges[edge + 2], by = edges[edge + 3];
+        const float dx = bx - ax, dy = by - ay;
+        const float lengthSquared = dx * dx + dy * dy;
+        const float inverseLengthSquared = 1.0f / lengthSquared;
+        const float minimumX = javaMin(ax, bx), maximumX = javaMax(ax, bx);
+        const float minimumY = javaMin(ay, by), maximumY = javaMax(ay, by);
+        const int left = std::max(gridIndex(std::floor(static_cast<double>((minimumX - reach - originX) / step))), 0);
+        const int right = std::min(gridIndex(std::ceil(static_cast<double>((maximumX + reach - originX) / step))), width - 1);
+        const int top = std::max(gridIndex(std::floor(static_cast<double>((minimumY - reach - originY) / step))), 0);
+        const int bottom = std::min(gridIndex(std::ceil(static_cast<double>((maximumY + reach - originY) / step))), height - 1);
+        for (int x = left; x <= right; x++) {
+            const float pointX = originX + x * step;
+            const float outsideX = javaMax(javaMax(minimumX - pointX, pointX - maximumX), 0.0f);
+            outsideXSquared[x] = outsideX * outsideX;
+            xOffset[x] = pointX - ax;
+            xProjection[x] = xOffset[x] * dx;
+        }
+        for (int y = top; y <= bottom; y++) {
+            const float pointY = originY + y * step;
+            const float outsideY = javaMax(javaMax(minimumY - pointY, pointY - maximumY), 0.0f);
+            const float outsideYSquared = outsideY * outsideY;
+            const float py = pointY - ay;
+            const float yProjection = py * dy;
+            const size_t row = static_cast<size_t>(y) * width * 4;
+            for (int x = left; x <= right; x++) {
+                const size_t output = row + static_cast<size_t>(x) * 4;
+                if (outsideXSquared[x] + outsideYSquared >= rgba[output]) continue;
+                const float t = saturate((xProjection[x] + yProjection) * inverseLengthSquared);
+                const float nx = xOffset[x] - t * dx, ny = py - t * dy;
+                const float squared = nx * nx + ny * ny;
+                if (squared >= rgba[output]) continue;
+                const float direction = nx * edges[edge + 4] + ny * edges[edge + 5] >= 0.0f ? 1.0f : -1.0f;
+                rgba[output] = squared;
+                rgba[output + 1] = squared > 0.00000001f ? nx * direction : edges[edge + 4];
+                rgba[output + 2] = squared > 0.00000001f ? ny * direction : edges[edge + 5];
+                rgba[output + 3] = direction;
+            }
+        }
+    }
+    for (size_t index = 0; index < cells; index++) {
+        const size_t output = index * 4;
+        const float distance = static_cast<float>(std::sqrt(static_cast<double>(rgba[output])));
+        rgba[output] = distance * rgba[output + 3];
+        if (distance > 0.0001f) {
+            rgba[output + 1] /= distance;
+            rgba[output + 2] /= distance;
+        }
+        rgba[output + 3] = 1.0f;
+    }
+}
+
 extern "C" void liquid_menu_sdf_pack(const float *rgba, int width, int height, int rowBytes, void *target) {
     for (int row = 0; row < height; row++) {
         const float *source = rgba + static_cast<size_t>(row) * width * 4;
@@ -212,6 +304,37 @@ extern "C" void liquid_menu_sdf_pack(const float *rgba, int width, int height, i
 }
 
 #if !defined(LIQUID_MENU_STANDALONE)
+extern "C" JNIEXPORT jboolean JNICALL Java_io_github_neoruaa_glasmio_glass_LiquidMenuNativeField_buildContactNative(
+    JNIEnv *env, jobject, jfloatArray source, jfloat originX, jfloat originY, jfloat step,
+    jint width, jint height, jfloat band, jfloatArray output) {
+    if (!source || !output) return JNI_FALSE;
+    const int edgeFloatCount = env->GetArrayLength(source);
+    if (width < 1 || height < 1 || !std::isfinite(originX) || !std::isfinite(originY) ||
+        !std::isfinite(step) || step <= 0.0f || !std::isfinite(band) || band < 0.0f ||
+        edgeFloatCount < 6 || edgeFloatCount % 6 != 0 ||
+        static_cast<int64_t>(width) * height > env->GetArrayLength(output) / 4) return JNI_FALSE;
+    if (scratch.contactEdges.size() < static_cast<size_t>(edgeFloatCount)) scratch.contactEdges.resize(edgeFloatCount);
+    env->GetFloatArrayRegion(source, 0, edgeFloatCount, scratch.contactEdges.data());
+    if (env->ExceptionCheck()) return JNI_FALSE;
+    for (int edge = 0; edge < edgeFloatCount; edge += 6) {
+        for (int channel = 0; channel < 6; channel++)
+            if (!std::isfinite(scratch.contactEdges[edge + channel])) return JNI_FALSE;
+        const float dx = scratch.contactEdges[edge + 2] - scratch.contactEdges[edge];
+        const float dy = scratch.contactEdges[edge + 3] - scratch.contactEdges[edge + 1];
+        const float squared = dx * dx + dy * dy;
+        if (!(squared > 0.0f) || !std::isfinite(squared)) return JNI_FALSE;
+    }
+    // Copy the small contour before pinning; no JNI access occurs while the output is critical.
+    const size_t columns = static_cast<size_t>(width) * 3;
+    if (scratch.contactColumns.size() < columns) scratch.contactColumns.resize(columns);
+    auto *rgba = static_cast<float *>(env->GetPrimitiveArrayCritical(output, nullptr));
+    if (!rgba) return JNI_FALSE;
+    liquid_menu_contact_field_build(scratch.contactEdges.data(), edgeFloatCount, originX, originY,
+                                    step, width, height, band, rgba);
+    env->ReleasePrimitiveArrayCritical(output, rgba, 0);
+    return JNI_TRUE;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL Java_io_github_neoruaa_glasmio_glass_LiquidMenuNativeField_buildNative(
     JNIEnv *env, jobject, jfloatArray geometry, jfloat originX, jfloat originY, jfloat step, jint width,
     jint height, jfloatArray weights, jint radius, jfloatArray output) {
@@ -249,5 +372,7 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_neoruaa_glasmio_glass_LiquidMen
                                                                                                  jobject) {
     std::vector<float>().swap(scratch.raw);
     std::vector<float>().swap(scratch.horizontal);
+    std::vector<float>().swap(scratch.contactEdges);
+    std::vector<float>().swap(scratch.contactColumns);
 }
 #endif

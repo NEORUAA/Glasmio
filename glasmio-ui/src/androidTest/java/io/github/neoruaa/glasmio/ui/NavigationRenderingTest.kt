@@ -11,9 +11,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,10 +50,12 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
@@ -86,18 +91,24 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.backdrops.emptyBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
+import io.github.neoruaa.glasmio.core.IosTypography
 import io.github.neoruaa.glasmio.core.GlassAppearance
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.icons.SfSymbol
+import io.github.neoruaa.glasmio.icons.SfIcon
 import io.github.neoruaa.glasmio.glass.LiquidMenuMorphMotion
 import io.github.neoruaa.glasmio.glass.NavigationGlassMaterial
 import io.github.neoruaa.glasmio.glass.NavigationDropShadowRenderer
@@ -1331,6 +1342,143 @@ class NavigationRenderingTest {
                     )
                     assertTrue("$label mean RGBA error: ${total.toDouble() / count}", total.toDouble() / count <= 1.0)
                 }
+            }
+        }
+    }
+
+    @Test
+    fun selectedTabMeasurementMatchesOriginalCompactLayoutAtFractionalDensities() {
+        val progress = mutableFloatStateOf(0f)
+        val pixelDensity = mutableFloatStateOf(1.25f)
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(pixelDensity.floatValue)) {
+                GlasmioTheme(isDark = false) {
+                    val density = LocalDensity.current
+                    val colors = LocalGlassColors.current
+                    val fullWidthPx = with(density) { 160.dp.toPx() }
+                    val compactWidthPx = with(density) { 44.dp.toPx() }
+                    val insetPx = with(density) { 4.dp.toPx() }
+                    val contentWidthPx = fullWidthPx - insetPx * 2f
+                    val protectedRadius = with(density) { 28.dp.toPx() / 2f + 4.dp.toPx() }
+                    val maximumWidth = (2f * (contentWidthPx - 2 * protectedRadius) / 4)
+                        .coerceIn(1f, contentWidthPx)
+                    val expandedWidth = (contentWidthPx / 3)
+                        .coerceAtLeast(with(density) { 75.dp.toPx() })
+                        .coerceAtMost(maximumWidth)
+                    val tabScale = remember { { (1f - progress.floatValue).coerceAtLeast(0.82f) } }
+                    val labelAlpha = remember { { (1f - progress.floatValue * 1.35f).coerceIn(0f, 1f) } }
+                    val lateScale = remember {
+                        { lerp(1f, (22f / 28f) / 0.82f, compactIconLateProgress(progress.floatValue)) }
+                    }
+                    CompositionLocalProvider(LocalLiquidTabScale provides tabScale) {
+                        Column {
+                            listOf(false, true).forEach { measured ->
+                                Box(
+                                    Modifier.size(160.dp, 80.dp).background(Color.White)
+                                        .testTag(if (measured) "measuredCompactTab" else "originalCompactTab"),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (measured) {
+                                        MorphingSelectedNavigationItem(
+                                            item = library,
+                                            compactProgress = progress,
+                                            fullWidthPx = fullWidthPx,
+                                            compactWidthPx = compactWidthPx,
+                                            itemCount = 3,
+                                            selectedIndex = 1,
+                                            isLtr = true,
+                                            horizontalInsetPx = insetPx,
+                                            selectedContentLateScale = lateScale,
+                                            labelAlpha = labelAlpha,
+                                            selectedIconColorFilter = null,
+                                            contentColor = colors.content,
+                                        )
+                                    } else {
+                                        // The original composition-driven width, padding and label
+                                        // collapse are the pixel oracle for the deferred layout.
+                                        val compact = progress.floatValue.coerceIn(0f, 1f)
+                                        val visibility = labelAlpha()
+                                        val width = with(density) {
+                                            lerp(expandedWidth, (compactWidthPx - 2f * insetPx) / 3, compact)
+                                                .coerceAtLeast(28.dp.toPx()).toDp()
+                                        }
+                                        Box(
+                                            Modifier.fillMaxSize().graphicsLayer {
+                                                val expandedStep = (contentWidthPx - expandedWidth) / 2
+                                                val expandedCenter = expandedWidth / 2f + expandedStep
+                                                val compactContentWidth = compactWidthPx - 2f * insetPx
+                                                val currentContentWidth = lerp(fullWidthPx, compactWidthPx, compact) -
+                                                    2f * insetPx
+                                                translationX = lerp(expandedCenter, compactContentWidth / 2f, compact) -
+                                                    currentContentWidth / 2f
+                                                val scale = tabScale() * lateScale()
+                                                scaleX = scale
+                                                scaleY = scale
+                                            },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Column(
+                                                Modifier.width(width).fillMaxHeight(),
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center,
+                                            ) {
+                                                SfIcon(
+                                                    symbol = library.symbol,
+                                                    contentDescription = library.contentDescription,
+                                                    tint = colors.content,
+                                                    size = 28.dp,
+                                                    weight = FontWeight.SemiBold,
+                                                    modifier = Modifier.padding(top = 3.dp * visibility)
+                                                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
+                                                )
+                                                Text(
+                                                    text = library.label,
+                                                    color = colors.content,
+                                                    style = IosTypography.caption.copy(fontSize = 10.sp, lineHeight = 13.sp),
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.layout { measurable, constraints ->
+                                                        val placeable = measurable.measure(constraints)
+                                                        val height = (placeable.height * visibility).roundToInt()
+                                                            .coerceIn(constraints.minHeight, constraints.maxHeight)
+                                                        layout(placeable.width, height) { placeable.placeRelative(0, 0) }
+                                                    }.padding(top = 1.dp, bottom = 4.dp).graphicsLayer {
+                                                        alpha = visibility
+                                                        compositingStrategy = CompositingStrategy.Offscreen
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        listOf(1.25f, 2.75f, 3.25f).forEach { density ->
+            listOf(0f, 0.35f, 0.74f, 0.98f, 1f, 0.5f, 0f).forEach { compact ->
+                compose.runOnIdle {
+                    pixelDensity.floatValue = density
+                    progress.floatValue = compact
+                }
+                val expected = compose.onNodeWithTag("originalCompactTab").captureToImage().toPixelMap()
+                val actual = compose.onNodeWithTag("measuredCompactTab").captureToImage().toPixelMap()
+                assertEquals(expected.width, actual.width)
+                assertEquals(expected.height, actual.height)
+                var maximumError = 0f
+                repeat(expected.height) { y ->
+                    repeat(expected.width) { x ->
+                        val before = expected[x, y]
+                        val after = actual[x, y]
+                        maximumError = maxOf(maximumError, abs(before.red - after.red),
+                            abs(before.green - after.green), abs(before.blue - after.blue), abs(before.alpha - after.alpha))
+                    }
+                }
+                assertTrue("density=$density, compact=$compact, maximum RGBA error=$maximumError",
+                    maximumError <= 1f / 255f)
             }
         }
     }

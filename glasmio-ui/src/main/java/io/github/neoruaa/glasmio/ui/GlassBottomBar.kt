@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -68,6 +67,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastRoundToInt
@@ -1085,7 +1085,6 @@ private fun <T> NavigationTabContent(
     rasterizeBeforeScale: Boolean = false,
 ) {
     val colors = LocalGlassColors.current
-    val labelVisibility = labelAlpha?.invoke()?.coerceIn(0f, 1f) ?: 1f
     SfIcon(
         symbol = item.symbol,
         contentDescription = item.contentDescription,
@@ -1093,7 +1092,10 @@ private fun <T> NavigationTabContent(
         size = ExpandedNavigationIconSize,
         weight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
         modifier = Modifier
-            .padding(top = 3.dp * labelVisibility)
+            .then(
+                if (labelAlpha != null) Modifier.navigationTabIconPadding(labelAlpha)
+                else Modifier.padding(top = 3.dp),
+            )
             .then(
                 if (selected && (selectedColorFilter != null || rasterizeBeforeScale)) {
                     Modifier.graphicsLayer {
@@ -1115,7 +1117,7 @@ private fun <T> NavigationTabContent(
         modifier = Modifier
             .then(
                 if (labelAlpha != null) {
-                    Modifier.collapseVertically(labelVisibility)
+                    Modifier.collapseVertically(labelAlpha)
                 } else {
                     Modifier
                 },
@@ -1125,7 +1127,7 @@ private fun <T> NavigationTabContent(
                 if (labelAlpha != null || (selected && selectedColorFilter != null) || rasterizeBeforeScale) {
                     Modifier.graphicsLayer {
                         if (labelAlpha != null) {
-                            alpha = labelVisibility
+                            alpha = labelAlpha().coerceIn(0f, 1f)
                         }
                         if (selected) {
                             selectedColorFilter?.let { colorFilter = it.value }
@@ -1139,9 +1141,22 @@ private fun <T> NavigationTabContent(
     )
 }
 
-private fun Modifier.collapseVertically(fraction: Float): Modifier = layout { measurable, constraints ->
+private fun Modifier.navigationTabIconPadding(labelAlpha: () -> Float): Modifier = layout { measurable, constraints ->
+    // Keep PaddingModifier's Dp multiplication and pixel rounding, but observe the spring
+    // in measurement instead of recomposing the icon and label on every morph frame.
+    val topPadding = (3.dp * labelAlpha().coerceIn(0f, 1f)).roundToPx()
+    val placeable = measurable.measure(constraints.offset(vertical = -topPadding))
+    layout(
+        constraints.constrainWidth(placeable.width),
+        constraints.constrainHeight(placeable.height + topPadding),
+    ) {
+        placeable.placeRelative(0, topPadding)
+    }
+}
+
+private fun Modifier.collapseVertically(fraction: () -> Float): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints)
-    val height = (placeable.height * fraction.coerceIn(0f, 1f))
+    val height = (placeable.height * fraction().coerceIn(0f, 1f))
         .roundToInt()
         .coerceIn(constraints.minHeight, constraints.maxHeight)
     layout(placeable.width, height) {
@@ -1177,14 +1192,27 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
             },
         )
     }
-    val selectedTabWidth = with(density) {
-        lerp(
-            expandedTabs.widthPx,
-            (compactWidthPx - 2f * horizontalInsetPx) / itemCount,
-            compactProgress.value.coerceIn(0f, 1f),
-        )
-            .coerceAtLeast(ExpandedNavigationIconSize.toPx())
-            .toDp()
+    val selectedTabWidthModifier = remember(
+        density, expandedTabs, compactWidthPx, horizontalInsetPx, itemCount, compactProgress,
+    ) {
+        Modifier.layout { measurable, constraints ->
+            // Preserve width(Dp)'s px -> Dp -> rounded-px path at fractional densities.
+            val width = with(density) {
+                lerp(
+                    expandedTabs.widthPx,
+                    (compactWidthPx - 2f * horizontalInsetPx) / itemCount,
+                    compactProgress.value.coerceIn(0f, 1f),
+                )
+                    .coerceAtLeast(ExpandedNavigationIconSize.toPx())
+                    .toDp()
+                    .roundToPx()
+            }
+            val constrainedWidth = constraints.constrainWidth(width)
+            val placeable = measurable.measure(
+                constraints.copy(minWidth = constrainedWidth, maxWidth = constrainedWidth),
+            )
+            layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
+        }
     }
     Box(
         modifier = Modifier
@@ -1222,7 +1250,7 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
     ) {
         Column(
             modifier = Modifier
-                .width(selectedTabWidth)
+                .then(selectedTabWidthModifier)
                 .fillMaxHeight(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,

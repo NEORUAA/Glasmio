@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.structuralEqualityPolicy
@@ -320,13 +321,18 @@ class BottomControlContact(
     private val lensPressRenderer = PressHighlightRenderer()
     private val refractionField = NavigationContactField()
     internal var maximumRefractionHeight: Float = 0f
+    private var cachedFirst: LiquidContactCapsule? = null
+    private var cachedSecond: LiquidContactCapsule? = null
+    private var cachedRefractionBand = Float.NaN
+    private var cachedContactShape: LiquidContactShape? = null
+    private var cachedSurface: BottomContactSurface? = null
     val capturesLensSource = derivedStateOf(structuralEqualityPolicy()) { members.any { it.needsLensSource() } }
 
-    val surface = derivedStateOf { createSurface() }
+    val surface = derivedStateOf(referentialEqualityPolicy()) { createSurface() }
     val connected = derivedStateOf(structuralEqualityPolicy()) {
         (surface.value?.shape as? LiquidContactShape)?.isConnected == true
     }
-    val lensTransform = derivedStateOf { members.firstNotNullOfOrNull { it.lensTransform() } }
+    val lensTransform = derivedStateOf(structuralEqualityPolicy()) { members.firstNotNullOfOrNull { it.lensTransform() } }
     val lensSurface = derivedStateOf {
         val source = surface.value ?: return@derivedStateOf null
         val transform = lensTransform.value ?: return@derivedStateOf null
@@ -342,21 +348,40 @@ class BottomControlContact(
     }
 
     private fun createSurface(): BottomContactSurface? {
-        val capsules = members.mapNotNull { it.capsule() }
-        if (capsules.size != 2) return null
-        val bounds = Rect(
-            floor(capsules.minOf { it.bounds.left }), floor(capsules.minOf { it.bounds.top }),
-            ceil(capsules.maxOf { it.bounds.right }), ceil(capsules.maxOf { it.bounds.bottom }),
-        )
-        val local = capsules.map { it.copy(bounds = it.bounds.translate(-bounds.topLeft)) }
-        return liquidContactShape(local[0], local[1], contactDistance, includeDisconnected = true)?.let { shape ->
-            // Plan for both passes before either can populate the field. The sampled
-            // source shrinks vertically, so 24dp alone is not a sufficient base band.
-            val scale = lensTransform.value?.scale ?: Offset(1f, 1f)
-            val minimumScale = minOf(1f, scale.x, scale.y).coerceAtLeast(0.0001f)
-            (shape as LiquidContactShape).withRefractionField(refractionField, maximumRefractionHeight / minimumScale)
-            BottomContactSurface(bounds, shape)
+        var first: LiquidContactCapsule? = null
+        var second: LiquidContactCapsule? = null
+        for (member in members) {
+            val capsule = member.capsule() ?: continue
+            if (first == null) first = capsule
+            else if (second == null) second = capsule
+            else return null
         }
+        val firstCapsule = first ?: return null
+        val secondCapsule = second ?: return null
+        val bounds = Rect(
+            floor(minOf(firstCapsule.bounds.left, secondCapsule.bounds.left)),
+            floor(minOf(firstCapsule.bounds.top, secondCapsule.bounds.top)),
+            ceil(maxOf(firstCapsule.bounds.right, secondCapsule.bounds.right)),
+            ceil(maxOf(firstCapsule.bounds.bottom, secondCapsule.bounds.bottom)),
+        )
+        val localFirst = firstCapsule.copy(bounds = firstCapsule.bounds.translate(-bounds.topLeft))
+        val localSecond = secondCapsule.copy(bounds = secondCapsule.bounds.translate(-bounds.topLeft))
+        // Both material passes share the exact same native contour and refraction field.
+        // Callback rebinding or a common translation must not regenerate that contour.
+        val scale = lensTransform.value?.scale ?: Offset(1f, 1f)
+        val minimumScale = minOf(1f, scale.x, scale.y).coerceAtLeast(0.0001f)
+        val band = maximumRefractionHeight / minimumScale
+        val shape = cachedContactShape.takeIf {
+            localFirst == cachedFirst && localSecond == cachedSecond && band == cachedRefractionBand
+        } ?: (liquidContactShape(localFirst, localSecond, contactDistance, includeDisconnected = true)
+            as? LiquidContactShape)?.withRefractionField(refractionField, band)?.also {
+            cachedFirst = localFirst
+            cachedSecond = localSecond
+            cachedRefractionBand = band
+            cachedContactShape = it
+        } ?: return null
+        return cachedSurface?.takeIf { it.bounds == bounds && it.shape === shape }
+            ?: BottomContactSurface(bounds, shape).also { cachedSurface = it }
     }
 
     fun bindSources(material: LayerBackdrop, neighbor: LayerBackdrop, recordingModifier: Modifier) {
