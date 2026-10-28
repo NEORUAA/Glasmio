@@ -320,6 +320,7 @@ fun GlasmioBottomSheet(
                         largeBackground -> 0f
                         else -> 1f
                     },
+                    groupedListStyle = LocalGlasmioSheetGroupedListStyle.current,
                 )
                 CompositionLocalProvider(LocalIosSheetMaterialContext provides contentMaterial) {
                 GlasmioSheetSurface(

@@ -61,6 +61,8 @@ data class GlasmioHeaderSpec(
     val leading: List<GlasmioHeaderGroup> = emptyList(),
     val trailing: List<GlasmioHeaderGroup> = emptyList(),
     val scrollState: GlasmioHeaderScrollState? = null,
+    /** Page appearance for shared button surfaces; page content keeps its own theme. */
+    val colors: GlassColors? = null,
 )
 data class GlasmioHeaderGroup(
     val key: Any,
@@ -92,9 +94,10 @@ private data class PageTitleSpec(
     val scrollState: GlasmioHeaderScrollState?,
     val leading: List<HeaderEndpointKey>,
     val trailing: List<HeaderEndpointKey>,
+    val colors: GlassColors?,
 )
 private fun GlasmioHeaderSpec.pageTitleSpec() = PageTitleSpec(
-    title, subtitle, style, scrollState, endpointKeys(leading), endpointKeys(trailing),
+    title, subtitle, style, scrollState, endpointKeys(leading), endpointKeys(trailing), colors,
 )
 
 private data class HeaderEndpointWidth(
@@ -165,7 +168,8 @@ fun GlasmioPageTitle(entryKey: Any, modifier: Modifier = Modifier) {
         if ((if (startsAtLeading) leading else widest) > 0) 8.dp else 0.dp
     val end = with(density) { (if (startsAtLeading) trailing else widest).toDp() } +
         if ((if (startsAtLeading) trailing else widest) > 0) 8.dp else 0.dp
-    CompositionLocalProvider(LocalContentColor provides LocalGlassColors.current.content) {
+    val colors = spec.colors ?: LocalGlassColors.current
+    CompositionLocalProvider(LocalGlassColors provides colors, LocalContentColor provides colors.content) {
         Box(modifier.fillMaxWidth().statusBarsPadding().height(62.dp).padding(horizontal = IosPageHorizontalPadding)) {
             Column(
                 Modifier.align(if (startsAtLeading) Alignment.CenterStart else Alignment.Center)
@@ -202,7 +206,10 @@ fun GlasmioNavigationScaffold(
     Box(modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().glassBackdropSource(backdrop).trackBackdropPosition(backdrop)) { content(padding) }
         GlasmioBackdropProvider(backdrop) {
+            val owner = if (frame.phase == GlasmioNavigationPhase.Tracking || frame.phase == GlasmioNavigationPhase.Canceling) source else target
+            CompositionLocalProvider(LocalGlassColors provides (owner.colors ?: LocalGlassColors.current)) {
             GlasmioNavigationHeader(source, target, frame, titles, Modifier.fillMaxWidth().padding(top = status))
+            }
             bottomBar()
         }
     }
@@ -417,7 +424,14 @@ private fun HeaderGroup(
         val start = if (identity in fromKeys) 1f else 0f
         val end = if (identity in toKeys) 1f else 0f
         val targetVisibility = start + (end - start) * progress
-        if (layer.visibility.target == 0f && targetVisibility > 0f) layer.content = layer.action.content
+        if (targetVisibility > 0f) {
+            // Stable visual identities still need the current owner's label, theme and state.
+            // Only an exiting layer freezes its foreground while its recorded pixels fade.
+            val liveAction = owner?.actions?.firstOrNull {
+                LayerKey(it.key, it.visualKey) == identity
+            } ?: layer.action
+            layer.content = liveAction.content
+        }
         layer.visibility.target = targetVisibility
         layer.visibility.spring = if (tracking) HeaderSprings.interactive else HeaderSprings.geometry
     }

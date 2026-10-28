@@ -410,6 +410,80 @@ class NavigationHeaderTest {
         assertEquals(1, clicks)
     }
 
+    @Test fun stableVisualUsesLatestOwnerContentAndClickWithoutRemounting() {
+        var version by mutableIntStateOf(0)
+        var renderedLabel = ""
+        var foregroundMounts = 0
+        var clickedVersion = -1
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavigationScaffold(motion, header = { entry ->
+                    // Capture values here: reading mutable state inside content would hide a stale lambda.
+                    val target = entry == "B"
+                    val label = if (!target) "Source" else if (version == 0) "Next" else "Latest"
+                    val color = if (!target) Color.Red else if (version == 0) Color.Blue else Color.Green
+                    val callbackVersion = if (target) 100 + version else version
+                    GlasmioHeaderSpec(entry.toString(), trailing = listOf(GlasmioHeaderGroup("live", listOf(
+                        GlasmioHeaderAction("shared", "unchanged-visual", "Action $entry", {
+                            clickedVersion = callbackVersion
+                        }) {
+                            DisposableEffect(Unit) { foregroundMounts++; onDispose {} }
+                            Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                                Text(label, color = color, onTextLayout = { renderedLabel = it.layoutInput.text.text })
+                                Box(Modifier.size(width = 12.dp, height = 6.dp).background(color))
+                            }
+                        },
+                    ))))
+                }) { Box(Modifier.fillMaxSize().background(Color.White)) }
+            }
+        }
+        rule.waitForIdle()
+        assertEquals("Source", renderedLabel)
+        rule.mainClock.autoAdvance = false
+        fun assertForeground(label: String, expected: Color) {
+            assertEquals(label, renderedLabel)
+            val pixels = rule.onNodeWithTag("GlasmioHeaderGroup:live").captureToImage().toPixelMap()
+            var matching = 0
+            for (y in 0 until pixels.height) for (x in 0 until pixels.width) {
+                val pixel = pixels[x, y]
+                if (kotlin.math.abs(pixel.red - expected.red) < 0.08f &&
+                    kotlin.math.abs(pixel.green - expected.green) < 0.08f &&
+                    kotlin.math.abs(pixel.blue - expected.blue) < 0.08f
+                ) matching++
+            }
+            assertTrue("The latest foreground color must actually render", matching > 12)
+            assertEquals("A stable visual must reuse its one foreground", 1, foregroundMounts)
+        }
+        try {
+            rule.runOnUiThread {
+                motion.state.value = GlasmioNavigationFrame(1, "A", "B", phase = GlasmioNavigationPhase.Settling)
+            }
+            rule.mainClock.advanceTimeBy(1200)
+            assertForeground("Next", Color.Blue)
+            rule.onNodeWithContentDescription("Action B").performClick()
+            assertEquals(100, clickedVersion)
+
+            rule.runOnUiThread { version = 1 }
+            rule.mainClock.advanceTimeBy(64)
+            assertForeground("Latest", Color.Green)
+            rule.onNodeWithContentDescription("Action B").performClick()
+            assertEquals(101, clickedVersion)
+
+            rule.runOnUiThread {
+                motion.state.value = GlasmioNavigationFrame(2, "B", "A", operation = GlasmioNavigationOperation.Pop,
+                    phase = GlasmioNavigationPhase.Tracking, gestureProgress = 0.5f)
+            }
+            rule.mainClock.advanceTimeBy(64)
+            assertForeground("Latest", Color.Green)
+            rule.onNodeWithContentDescription("Action B").performClick()
+            assertEquals(101, clickedVersion)
+            rule.onAllNodesWithContentDescription("Action A").assertCountEquals(0)
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
     @Test fun groupWidthRetargetsThroughOneTwoThreeTextAndDisappearance() {
         content()
         val right = rule.onNodeWithTag("GlasmioHeaderGroup:primary").fetchSemanticsNode().boundsInRoot.right

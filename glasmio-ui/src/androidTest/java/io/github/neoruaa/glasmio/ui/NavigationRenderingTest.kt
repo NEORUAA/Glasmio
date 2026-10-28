@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuData
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuItem
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
@@ -42,6 +43,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -426,6 +428,41 @@ class NavigationRenderingTest {
         val unframed = compose.onNodeWithTag("separator-group").captureToImage().toPixelMap()
         assertTrue("Unframed groups retain the standalone TextField separator",
             colorError(unframed[unframed.width / 2, 0], Color.White) > .02f)
+    }
+
+    @Test
+    fun sheetVirtualRowsKeepSeparatorsInsideTheirOwnClippedSurface() {
+        var density = 1f
+        compose.setContent {
+            density = LocalDensity.current.density
+            GlasmioTheme(isDark = false) {
+                CompositionLocalProvider(
+                    LocalGlassColors provides LocalGlassColors.current.copy(separator = Color.Red),
+                    LocalIosSheetMaterialContext provides IosSheetMaterialContext(false, 0f),
+                ) {
+                    LazyColumn(Modifier.width(300.dp).height(104.dp)) {
+                        item {
+                            Box(Modifier.glasmioGroupedListBackground(RectangleShape)) {
+                                GlasmioListRow("First", showTopSeparator = false)
+                            }
+                        }
+                        item {
+                            Box(Modifier.testTag("sheet-virtual-row").glasmioGroupedListBackground(RectangleShape)) {
+                                GlasmioListRow("Second", showTopSeparator = true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val pixels = compose.onNodeWithTag("sheet-virtual-row").captureToImage().toPixelMap()
+        val x = pixels.width / 2
+        val boundary = pixels[x, (0.5f * density).toInt()]
+        assertTrue("The separator must remain visible inside the virtual row's clip",
+            boundary.red > 0.98f && boundary.green < 0.4f && boundary.blue < 0.4f)
+        val carrier = pixels[x, (4f * density).roundToInt()]
+        assertTrue("The separator must not replace the native opaque cell carrier",
+            carrier.red > 0.98f && carrier.green > 0.98f && carrier.blue > 0.98f)
     }
 
     @Test

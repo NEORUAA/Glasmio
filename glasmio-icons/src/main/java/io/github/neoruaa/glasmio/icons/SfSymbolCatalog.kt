@@ -251,6 +251,7 @@ object SfSymbolCatalog {
         "speaker.wave.3.fill" to 0x1002A9,
         "square" to 0x100092,
         "square.3.layers.3d" to 0x100BF0,
+        "square.and.arrow.down" to 0x100204,
         "square.and.arrow.up" to 0x100202,
         "square.and.arrow.up.fill" to 0x100203,
         "square.and.pencil" to 0x10020E,

@@ -13,12 +13,20 @@ import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.drawPlainBackdrop
 import com.kyant.backdrop.effects.colorFilter
 import com.kyant.backdrop.effects.opacity
+import io.github.neoruaa.glasmio.core.SheetGroupedListBackgroundAlpha
+
+/** Native cells by default; ToolbarTint matches sheet controls while the sheet is translucent. */
+enum class GlasmioSheetGroupedListStyle { Native, ToolbarTint }
+
+/** Scope an explicit sheet treatment without changing other presentations or their large palette. */
+val LocalGlasmioSheetGroupedListStyle = staticCompositionLocalOf { GlasmioSheetGroupedListStyle.Native }
 
 /** Portable equivalent of the sheet's rendering-mode/vibrancy trait environment. */
 @Immutable
 internal data class IosSheetMaterialContext(
     val isDark: Boolean,
     val vibrancy: Float,
+    val groupedListStyle: GlasmioSheetGroupedListStyle = GlasmioSheetGroupedListStyle.Native,
 ) {
     val cellColor: Color get() = if (isDark) Color(0xFF2C2C2E) else Color.White
     val separatorColor: Color get() = if (isDark) Color(0xFF545458).copy(alpha = 0.5f)
@@ -54,6 +62,12 @@ internal fun Modifier.sheetCellBackground(
     shape: Shape,
 ): Modifier {
     val vibrant = context.vibrancy.coerceIn(0f, 1f)
+    if (context.groupedListStyle == GlasmioSheetGroupedListStyle.ToolbarTint) {
+        // Paint once over the existing backplate, exactly like GlasmioSheetToolbarButton.
+        // The opaque large carrier and its native dismissal transition remain unchanged.
+        val tint = context.cellColor.copy(alpha = 1f - vibrant * (1f - SheetGroupedListBackgroundAlpha))
+        return drawBehind { drawRect(tint) }
+    }
     if (vibrant > 0f && backdrop != null) {
         return drawPlainBackdrop(
             backdrop = backdrop,

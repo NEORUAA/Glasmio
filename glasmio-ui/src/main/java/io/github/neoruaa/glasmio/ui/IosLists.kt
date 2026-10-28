@@ -16,6 +16,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
@@ -78,27 +79,39 @@ fun Modifier.glasmioGroupedListSeparator(
                 kotlin.math.abs(owner.localPositionOf(row, Offset.Zero).y) < 0.5f
             if (!atTopEdge) {
                 val inset = horizontalInset.toPx()
-                val y = if (inSheet) (-0.5).dp.toPx() else 0f
+                // Framed groups own the shared row boundary. A virtual row clips its own
+                // surface, so its entire separator must stay inside that row's bounds.
+                val y = if (inSheet) (if (group == null) 0.5 else -0.5).dp.toPx() else 0f
                 drawLine(color, Offset(inset, y), Offset(size.width - inset, y), 1.dp.toPx())
             }
         }
+}
+
+/** The same grouped-cell material for virtualized rows that own their first/last corner shape. */
+@Composable
+fun Modifier.glasmioGroupedListBackground(
+    shape: Shape = ContinuousRoundedRectangle(26.dp),
+): Modifier {
+    val colors = LocalGlassColors.current
+    val sheetMaterial = LocalIosSheetMaterialContext.current
+    val sheetBackdrop = LocalIosSheetBackdrop.current
+    return clip(shape).then(
+        if (sheetMaterial != null) Modifier.sheetCellBackground(sheetMaterial, sheetBackdrop, shape)
+        else Modifier.background(colors.elevatedBackground.copy(
+            alpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f),
+        ), shape),
+    )
 }
 
 /** Figma node 781:15374 grouped-list container. Use ordinary rows inside for GPU efficiency. */
 @Composable
 fun GlasmioGroupedList(
     modifier: Modifier = Modifier,
-    // Sheets and alert surfaces already provide the glass; their lists must render
-    // unframed, otherwise the opaque card reads as a second corner radius inside the sheet.
+    // Disable the frame only when the parent already owns the grouped-cell material.
     framed: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
-    val sheetMaterial = LocalIosSheetMaterialContext.current
-    val sheetBackdrop = LocalIosSheetBackdrop.current
-    val background = colors.elevatedBackground.copy(
-        alpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f),
-    )
     val shape = ContinuousRoundedRectangle(26.dp)
     val groupCoordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
     Column(
@@ -107,9 +120,7 @@ fun GlasmioGroupedList(
             .then(
                 if (framed) {
                     Modifier
-                        .clip(shape)
-                        .then(if (sheetMaterial != null) Modifier.sheetCellBackground(sheetMaterial, sheetBackdrop, shape)
-                            else Modifier.background(background, shape))
+                        .glasmioGroupedListBackground(shape)
                         .onGloballyPositioned { groupCoordinates.value = it }
                 } else {
                     Modifier

@@ -70,7 +70,10 @@ fun GlasmioSheetSurface(
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
     val inheritedMaterial = LocalIosSheetMaterialContext.current
-        ?: IosSheetMaterialContext(colors.isDark, if (glassFraction >= 0.5f) 1f else 0f)
+        ?: IosSheetMaterialContext(
+            colors.isDark, if (glassFraction >= 0.5f) 1f else 0f,
+            LocalGlasmioSheetGroupedListStyle.current,
+        )
     val contentMaterial = if (appearance.usesBackdrop) inheritedMaterial else inheritedMaterial.opaque()
     val materialBackdrop = rememberLayerBackdrop()
     val glass = glassFraction.coerceIn(0f, 1f)

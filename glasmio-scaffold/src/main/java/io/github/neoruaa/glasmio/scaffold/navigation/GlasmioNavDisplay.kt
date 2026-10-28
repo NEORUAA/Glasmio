@@ -269,7 +269,7 @@ private fun <T : Any> GlasmioNavDisplay(
  * @see [rememberSceneState]
  */
 @Composable
-private fun <T : Any> GlasmioNavDisplay(
+fun <T : Any> GlasmioNavDisplay(
     sceneState: SceneState<T>,
     motion: GlasmioNavHeaderMotion,
     navigationEventState: NavigationEventState<SceneInfo<T>>,

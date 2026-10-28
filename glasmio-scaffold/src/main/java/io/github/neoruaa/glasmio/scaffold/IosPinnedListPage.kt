@@ -337,6 +337,7 @@ fun GlasmioPinnedPage(
     backgroundColor: Color? = null,
     topBarBlurProgress: Float = 0f,
     backgroundBrush: Brush? = null,
+    background: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable BoxScope.(PaddingValues) -> Unit,
 ) {
     val pageBackdrop = rememberLayerBackdrop()
@@ -358,6 +359,7 @@ fun GlasmioPinnedPage(
                 modifier = Modifier.fillMaxSize(),
                 backgroundColor = pageBackground,
                 backgroundBrush = backgroundBrush,
+                background = background,
                 topBarBlurProgress = topBarBlurProgress,
                 backdrop = pageBackdrop,
                 content = content,

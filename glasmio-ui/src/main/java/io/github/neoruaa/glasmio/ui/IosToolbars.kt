@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -326,7 +327,7 @@ fun GlasmioSearchToolbar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         GlassSurface(
-            modifier = Modifier.weight(1f).height(48.dp),
+            modifier = Modifier.weight(1f).height(48.dp).testTag("GlasmioSearchFieldSurface"),
             backdrop = backdrop,
             shape = Capsule(),
             style = style,
@@ -381,7 +382,7 @@ fun GlasmioSearchToolbar(
                 onClick = onCancel,
                 backdrop = backdrop,
                 style = style,
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.size(48.dp).testTag("GlasmioSearchCancelSurface"),
                 enabled = cancelReveal > 0.5f,
             ) {
                 SfIcon("xmark", cancelLabel, size = 20.dp, tint = colors.content)
