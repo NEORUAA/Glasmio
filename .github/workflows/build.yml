@@ -71,3 +71,5 @@ jobs:
           path: |
             sample/build/reports/androidTests/
             glasmio-ui/build/reports/androidTests/
+            sample/build/outputs/androidTest-results/
+            glasmio-ui/build/outputs/androidTest-results/

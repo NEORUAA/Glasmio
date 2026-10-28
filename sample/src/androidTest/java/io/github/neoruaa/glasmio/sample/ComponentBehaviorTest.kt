@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.view.KeyEvent
+import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
@@ -116,6 +117,24 @@ class ComponentBehaviorTest {
             }
         }
         rule.waitUntil(10_000) { rule.activity.hasWindowFocus() }
+    }
+
+    /** Android must lay out the dialog before the Compose clock can settle its detent. */
+    private fun awaitSheetDetent(sheet: GlasmioSheetState, expected: GlasmioSheetValue) {
+        rule.waitForIdle()
+        try {
+            rule.mainClock.advanceTimeUntil(5_000) {
+                sheet.currentValue == expected && !sheet.isAnimationRunning
+            }
+        } catch (error: ComposeTimeoutException) {
+            throw AssertionError(
+                "Sheet did not settle at $expected: current=${sheet.currentValue}, " +
+                    "target=${sheet.targetValue}, animating=${sheet.isAnimationRunning}, " +
+                    "dragging=${sheet.isDragging}, medium=${sheet.hasMediumDetent}",
+                error,
+            )
+        }
+        rule.waitForIdle()
     }
 
     private fun editingAction(english: String, resource: Int): SemanticsMatcher =
@@ -929,12 +948,12 @@ class ComponentBehaviorTest {
                 Text("Sheet footer", Modifier.fillMaxWidth().height(44.dp))
             }
         }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Medium)
         val mediumTop = rule.onNodeWithText("Sheet header").fetchSemanticsNode().boundsInRoot.top
         rule.onNodeWithTag("sheet-list").performTouchInput {
             swipe(Offset(centerX, height * 0.85f), Offset(centerX, height * 0.15f), 700)
         }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Large)
         assertTrue(rule.onNodeWithText("Sheet header").fetchSemanticsNode().boundsInRoot.top < mediumTop)
         val headerPixels = rule.onNodeWithText("Sheet header").captureToImage().toPixelMap()
         assertTrue((0 until headerPixels.height).any { y ->
@@ -956,7 +975,7 @@ class ComponentBehaviorTest {
         rule.runOnIdle { scope.launch { list.scrollToItem(0) } }
         rule.waitUntil(10_000) { list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0 }
         rule.onNodeWithTag("sheet").performSemanticsAction(SemanticsActions.Collapse) { it() }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Medium)
         rule.onNodeWithText("Sheet footer").assertIsDisplayed()
         rule.runOnIdle { scrollingExpands = false }
         rule.onNodeWithTag("sheet-list").performTouchInput {
@@ -989,9 +1008,9 @@ class ComponentBehaviorTest {
                 onDismissRequest = { dismissals++; visible = false },
             ) { Text("Retained sheet", Modifier.height(100.dp)) }
         }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Medium)
         rule.runOnIdle { scope.launch { sheet.expand() } }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Large)
         val restingBounds = rule.onNodeWithText("Retained sheet").fetchSemanticsNode().boundsInRoot
         rule.mainClock.autoAdvance = false
         rule.runOnIdle { visible = false }
@@ -1004,10 +1023,11 @@ class ComponentBehaviorTest {
         rule.runOnIdle { assertTrue(sheet.isVisible); visible = true }
         rule.mainClock.advanceTimeBy(1_500)
         rule.mainClock.autoAdvance = true
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Large)
         rule.onNodeWithText("Retained sheet").assertIsDisplayed()
         rule.runOnIdle { assertEquals(0, dismissals); scope.launch { sheet.hide() } }
-        rule.waitUntil(10_000) { dismissals == 1 }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Hidden)
+        rule.runOnIdle { assertEquals(1, dismissals); assertFalse(sheet.isVisible) }
         rule.onNodeWithText("Retained sheet").assertDoesNotExist()
     }
 
@@ -1071,7 +1091,7 @@ class ComponentBehaviorTest {
                 )
             }
         }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Large)
         val restingHeader = rule.onNodeWithTag("sheet-chrome-header").fetchSemanticsNode().boundsInRoot
         val bounds = rule.onNodeWithTag("sheet-chrome").fetchSemanticsNode().boundsInRoot
         fun pixel(image: androidx.compose.ui.graphics.PixelMap, xDp: Float, y: Float): Color =
@@ -1220,16 +1240,16 @@ class ComponentBehaviorTest {
         rule.waitForIdle()
         save("sheet-reference-baseline.png", modal = false)
         rule.runOnIdle { visible = true }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Medium)
         val lightBare = rule.onNode(isDialog()).captureToImage().toPixelMap()
         save("sheet-reference-medium.png")
         rule.runOnIdle { scope.launch { sheet.expand() } }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Large)
         rule.waitForIdle()
         rule.onNodeWithText("Native material reference").assertIsDisplayed()
         save("sheet-reference-large.png")
         rule.runOnIdle { scope.launch { sheet.partialExpand() } }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Medium)
         rule.runOnIdle { table = true }
         rule.waitForIdle()
         save("sheet-reference-table-medium.png")
@@ -1247,14 +1267,14 @@ class ComponentBehaviorTest {
         } finally {
             rule.mainClock.autoAdvance = true
         }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Large)
         save("sheet-reference-table-large.png")
         assertOpaqueTable(Color.White, Color(0xFFF2F2F7))
         rule.runOnIdle { visible = false }
-        rule.waitUntil(10_000) { !sheet.isVisible && !sheet.isAnimationRunning }
-        rule.waitForIdle()
+        awaitSheetDetent(sheet, GlasmioSheetValue.Hidden)
+        rule.runOnIdle { assertFalse(sheet.isVisible) }
         rule.runOnIdle { dark = true; table = false; visible = true }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Medium)
         save("sheet-reference-dark-medium.png")
         val darkBare = rule.onNode(isDialog()).captureToImage().toPixelMap()
         rule.runOnIdle { table = true }
@@ -1262,7 +1282,7 @@ class ComponentBehaviorTest {
         save("sheet-reference-dark-table-medium.png")
         assertBias(darkBare, 15)
         rule.runOnIdle { scope.launch { sheet.expand() } }
-        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        awaitSheetDetent(sheet, GlasmioSheetValue.Large)
         save("sheet-reference-dark-table-large.png")
         assertOpaqueTable(Color(0xFF2C2C2E), Color(0xFF1C1C1E))
     }
@@ -1321,19 +1341,47 @@ class SampleNavigationBehaviorTest {
             rule.activityRule.scenario.onActivity { focused = it.hasWindowFocus() }
             focused
         }
-        pressSystemBack(rule)
-        rule.waitUntil(10_000) { !imeVisible() }
-        if (rule.onAllNodesWithContentDescription("搜索").fetchSemanticsNodes().isEmpty()) {
-            rule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)).assertIsDisplayed()
-            pressSystemBack(rule)
+        // Navigation owns this assertion; make platform keyboard startup independent of Back.
+        rule.waitForIdle()
+        rule.activityRule.scenario.onActivity { activity ->
+            val input = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            input.hideSoftInputFromWindow(activity.window.decorView.windowToken, 0)
         }
+        rule.waitUntil(10_000) { !imeVisible() }
+        rule.waitForIdle()
+        val beforeBack = searchNavigationDiagnostics("before Back")
+        // The IME can still consume legacy Back keys after its inset disappears.
+        // Exercise the Activity's navigation callback, as the predictive Back fixture does.
+        rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         val selectedAboutTab = tab and hasContentDescription("关于") and isSelected()
-        rule.waitUntil(10_000) {
-            rule.onAllNodes(selectedAboutTab).fetchSemanticsNodes().size == 1 &&
-                rule.onAllNodesWithText("Search Components").fetchSemanticsNodes().isEmpty()
+        try {
+            rule.waitUntil(10_000) {
+                rule.onAllNodes(selectedAboutTab).fetchSemanticsNodes().size == 1 &&
+                    rule.onAllNodesWithText("Search Components").fetchSemanticsNodes().isEmpty()
+            }
+        } catch (error: ComposeTimeoutException) {
+            val afterBack = searchNavigationDiagnostics("after Back")
+            android.util.Log.e("GlasmioDeviceTest", afterBack)
+            throw AssertionError("Back did not restore the About page.\n$beforeBack\n$afterBack", error)
         }
         rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
         rule.onNodeWithText("Search Components").assertDoesNotExist()
+        rule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)).assertDoesNotExist()
+    }
+
+    private fun searchNavigationDiagnostics(stage: String): String {
+        var window = ""
+        rule.activityRule.scenario.onActivity { activity ->
+            val input = activity.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            val view = activity.window.decorView
+            window = "lifecycle=${activity.lifecycle.currentState}, windowFocus=${activity.hasWindowFocus()}, " +
+                "currentFocus=${activity.currentFocus}, ime=" +
+                "${view.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime())}, " +
+                "inputActive=${input.isActive}, acceptingText=${input.isAcceptingText}"
+        }
+        val semantics = runCatching { rule.onRoot(useUnmergedTree = true).printToString(maxDepth = 8) }
+            .getOrElse { "Semantics unavailable: $it" }
+        return "$stage at Compose time ${rule.mainClock.currentTime}: $window\n$semantics"
     }
 
     private fun imeVisible(): Boolean {

@@ -319,8 +319,8 @@ class LiquidMenuMorphMotion {
         val center = through.center * 0.75f + destination.center * 0.25f
         val inset = source.size.minDimension / 8f
         return alignedCenter(Offset(
-            center.x.coerceIn(destination.left + inset, destination.right - inset),
-            center.y.coerceIn(destination.top + inset, destination.bottom - inset),
+            boundedCenter(center.x, destination.left, destination.right, inset),
+            boundedCenter(center.y, destination.top, destination.bottom, inset),
         ), source.size.minDimension)
     }
 
@@ -329,9 +329,17 @@ class LiquidMenuMorphMotion {
             .coerceAtLeast(1f)
 
     private fun initialIncomingCenter(): Offset = alignedCenter(Offset(
-        through.center.x.coerceIn(source.left + through.width / 2f, source.right - through.width / 2f),
-        through.center.y.coerceIn(source.top + through.height / 2f, source.bottom - through.height / 2f),
+        boundedCenter(through.center.x, source.left, source.right, through.width / 2f),
+        boundedCenter(through.center.y, source.top, source.bottom, through.height / 2f),
     ), destination.width)
+
+    private fun boundedCenter(value: Float, start: Float, end: Float, inset: Float): Float {
+        val minimum = start + inset
+        val maximum = end - inset
+        // Independently rounded anchors can exceed their host by a fraction of a pixel.
+        // An item that cannot fit is centered, minimizing overflow equally on both sides.
+        return if (minimum <= maximum) value.coerceIn(minimum, maximum) else start + (end - start) / 2f
+    }
 
     private fun alignedCenter(center: Offset, side: Float): Offset {
         // AnimationKit aligns the synthetic base rect's origin in point coordinates,

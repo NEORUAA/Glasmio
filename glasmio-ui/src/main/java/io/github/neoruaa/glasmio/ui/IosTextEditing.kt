@@ -247,7 +247,7 @@ fun GlasmioEditableText(
     val fieldModifier = modifier.onFocusChanged {
         editor.focused = it.isFocused
         if (it.isFocused) host.activate(editor) else if (!host.menuOwnsFocus) editor.dismiss()
-    }.onGloballyPositioned { editor.decoration = it; editor.positionVersion++ }
+    }.onGloballyPositioned { editor.decoration = it }
     .pointerInput(editor) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -338,11 +338,8 @@ fun GlasmioEditableText(
                         val minimumWidth = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
                         val minimumHeight = constraints.minHeight
                         val scrolling = if (singleLine) Modifier.horizontalScroll(scroll) else Modifier.verticalScroll(scroll)
-                        Box(Modifier.onGloballyPositioned {
-                            editor.viewport = it
-                            editor.viewportSize = it.size
-                            editor.positionVersion++
-                        }.then(scrolling), propagateMinConstraints = true) {
+                        Box(Modifier.onGloballyPositioned(editor::updateViewportCoordinates)
+                            .then(scrolling), propagateMinConstraints = true) {
                             Box(
                                 Modifier.layout { measurable, incoming ->
                                     val contentConstraints = if (singleLine) {
@@ -353,7 +350,7 @@ fun GlasmioEditableText(
                                     val placeable = measurable.measure(contentConstraints)
                                     layout(placeable.width, placeable.height) { placeable.placeRelative(0, 0) }
                                 }
-                                    .onGloballyPositioned { editor.coordinates = it; editor.positionVersion++ }
+                                    .onGloballyPositioned(editor::updateContentCoordinates)
                                     .bringIntoViewRequester(bringIntoView)
                                     .drawWithContent {
                                         drawContent()
@@ -435,6 +432,8 @@ internal class GlasmioTextEditor(
     var viewport: LayoutCoordinates? = null
     var viewportSize by mutableStateOf(androidx.compose.ui.unit.IntSize.Zero)
     var positionVersion by mutableIntStateOf(0)
+    private var contentScreenBounds: Rect? = null
+    private var viewportScreenBounds: Rect? = null
     var focused by mutableStateOf(false)
     var realWindowFocused by mutableStateOf(true)
     var enabled = true
@@ -464,6 +463,28 @@ internal class GlasmioTextEditor(
     private var interactionGeneration = 0L
     val chromeVisible: Boolean get() = enabled &&
         ((focused && realWindowFocused) || (host.menuOwnsFocus && host.active === this))
+
+    fun updateContentCoordinates(node: LayoutCoordinates) {
+        coordinates = node
+        val bounds = Rect(node.localToScreen(Offset.Zero),
+            node.localToScreen(Offset(node.size.width.toFloat(), node.size.height.toFloat())))
+        if (contentScreenBounds != bounds) {
+            contentScreenBounds = bounds
+            positionVersion++
+        }
+    }
+
+    fun updateViewportCoordinates(node: LayoutCoordinates) {
+        viewport = node
+        viewportSize = node.size
+        val bounds = node.boundsInWindow().translate(node.localToScreen(Offset.Zero) - node.localToWindow(Offset.Zero))
+        // Layout callbacks also run when only the selection overlay changes. Invalidating
+        // that overlay again at the same geometry creates a composition/layout feedback loop.
+        if (viewportScreenBounds != bounds) {
+            viewportScreenBounds = bounds
+            positionVersion++
+        }
+    }
 
     val legacyAdapter = object : TextToolbar {
         override val status: TextToolbarStatus get() = toolbar.status

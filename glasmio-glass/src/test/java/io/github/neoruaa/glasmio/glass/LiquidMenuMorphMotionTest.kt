@@ -153,6 +153,52 @@ class LiquidMenuMorphMotionTest {
     }
 
     @Test
+    fun morphCentersTolerateIndependentRoundingAndOversizedAnchors() {
+        val source = Rect(160f, 180f, 260f, 280f)
+        val destination = Rect(0f, 0f, 400f, 400f)
+        val anchors = listOf(
+            Rect(180f, 200f, 220f, 240f) to Offset(200f, 220f),
+            source to source.center,
+            Rect(160f, 180f, 260.5f, 280.5f) to source.center,
+            Rect(120f, 150f, 300f, 330f) to source.center,
+            Rect(120f, 200f, 300f, 240f) to Offset(210f, 220f),
+            Rect(180f, 150f, 220f, 330f) to Offset(200f, 230f),
+            Rect(260f, 280f, 300f, 320f) to Offset(240f, 260f),
+        )
+        listOf(1f, 1.25f, 2.625f, 3f).forEach { density ->
+            fun Rect.scaled() = Rect(left * density, top * density, right * density, bottom * density)
+            anchors.forEach { (through, expectedCenter) ->
+                val motion = LiquidMenuMorphMotion().apply {
+                    initialize(source.scaled(), destination.scaled(), 32f * density, density, through.scaled())
+                }
+                val label = "Through $through at density $density"
+                assertEquals("$label keeps the nearest contained X center",
+                    expectedCenter.x * density, motion.frame.bounds.center.x, 0.001f)
+                assertEquals("$label keeps the nearest contained Y center",
+                    expectedCenter.y * density, motion.frame.bounds.center.y, 0.001f)
+                motion.retarget(true)
+                motion.advanceBy(3f)
+                assertRectEquals(destination.scaled(), motion.frame.bounds)
+                motion.retarget(false)
+                motion.advanceBy(3f)
+                assertRectEquals(source.scaled(), requireNotNull(motion.frame.sourceLobe))
+            }
+
+            // A compact destination can also be smaller than the source's pivot inset.
+            val compact = Rect(204f, 224f, 216f, 236f).scaled()
+            val motion = LiquidMenuMorphMotion().apply {
+                initialize(source.scaled(), compact, 6f * density, density)
+            }
+            motion.retarget(true)
+            motion.advanceBy(3f)
+            assertRectEquals(compact, motion.frame.bounds)
+            val pivot = requireNotNull(motion.frame.sourceLobe).center
+            assertEquals(compact.center.x, pivot.x, 0.001f)
+            assertEquals(compact.center.y, pivot.y, 0.001f)
+        }
+    }
+
+    @Test
     fun nativeUIKitGeometryKeepsTheThroughPreviewAndLargestAxisScale() {
         val source = Rect(284.33334f, 62f, 386f, 106f)
         val through = Rect(344f, 66f, 382f, 102f)
