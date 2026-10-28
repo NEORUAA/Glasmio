@@ -1,5 +1,9 @@
 package io.github.neoruaa.glasmio.ui
 
+import io.github.neoruaa.glasmio.glass.GlassSurfaceStyle
+import io.github.neoruaa.glasmio.glass.BottomNavigationContact
+import io.github.neoruaa.glasmio.glass.BottomControlContact
+import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -120,6 +124,145 @@ import org.junit.runner.RunWith
 class NavigationRenderingTest {
     @get:Rule val compose = createComposeRule()
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
+
+    @Test
+    fun separatedAndJoinedNavigationKeepOneMaterialAndTheSameDividerAnchor() {
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val appearance = mutableStateOf(GlassAppearance())
+        val compact = mutableFloatStateOf(0f)
+        var contact: BottomControlContact? = null
+        var density = 1f
+        compose.setContent {
+            density = LocalDensity.current.density
+            GlasmioTheme(isDark = false, appearance = appearance.value) {
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    GlasmioBackdropHost(
+                        modifier = Modifier.size(360.dp, 220.dp).testTag("opticalScene"),
+                        sampledContent = {
+                            Canvas(Modifier.fillMaxSize()) {
+                                drawRect(Color.White)
+                                listOf(-24f, 0f, 24f).forEach { x ->
+                                    drawRect(Color.Black,
+                                        topLeft = Offset(size.width / 2f + x.dp.toPx() - 3.dp.toPx(), 0f),
+                                        size = Size(6.dp.toPx(), size.height))
+                                }
+                            }
+                        },
+                        overlayContent = { backdrop ->
+                            GlassSurface(
+                                modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp)
+                                    .width(340.dp).height(44.dp).testTag("opticalReference"),
+                                backdrop = backdrop,
+                                style = GlassSurfaceStyle.Navigation,
+                            ) { }
+                            BottomNavigationContact(
+                                backdrop = backdrop,
+                                modifier = Modifier.align(Alignment.TopCenter).padding(top = 96.dp)
+                                    .width(340.dp).testTag("opticalNavigation"),
+                            ) {
+                                val owner = requireNotNull(LocalBottomControlContact.current)
+                                SideEffect { contact = owner }
+                                GlasmioNavigationBar(
+                                    items = listOf(
+                                        GlasmioTabItem("home", "Home", SfSymbol.House), library,
+                                        GlasmioTabItem("favorites", "Favorites", SfSymbol.Heart),
+                                        GlasmioTabItem("settings", "Settings", SfSymbol.Gearshape),
+                                    ),
+                                    selectedKey = "home", onSelected = {}, onExpand = {},
+                                    compactProgress = compact, compactSize = 44.dp,
+                                    backdrop = backdrop, modifier = Modifier.weight(1f),
+                                )
+                                Spacer(Modifier.size(8.dp, 1.dp))
+                                Box(Modifier.size(NavigationBarSurfaceHeight)
+                                    .then(owner.neighborRecordingModifier)) {
+                                    GlasmioIconButton(
+                                        onClick = {}, backdrop = backdrop,
+                                        style = GlassSurfaceStyle.Navigation,
+                                        modifier = Modifier.size(NavigationBarSurfaceHeight),
+                                    ) { }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        try {
+            listOf(GlassAppearance(), GlassAppearance(reduceTransparency = true)).forEach { mode ->
+                listOf(LayoutDirection.Ltr, LayoutDirection.Rtl).forEach { layoutDirection ->
+                    compose.runOnIdle { appearance.value = mode; direction.value = layoutDirection }
+                    compose.waitForIdle()
+                    val owner = requireNotNull(contact)
+                    val source = owner.materialBackdrop
+                    val scene = compose.onNodeWithTag("opticalScene")
+                    val sceneBounds = scene.fetchSemanticsNode().boundsInRoot
+                    val navigation = compose.onNodeWithTag("opticalNavigation").fetchSemanticsNode().boundsInRoot
+                    val reference = compose.onNodeWithTag("opticalReference").fetchSemanticsNode().boundsInRoot
+                    fun dividerCenters(sampleY: Float = navigation.top - sceneBounds.top +
+                        requireNotNull(owner.surface.value).bounds.top + 2f * density): List<Float> {
+                        val pixels = scene.captureToImage().toPixelMap()
+                        val y = sampleY.roundToInt()
+                        return listOf(-24f, 0f, 24f).map { offset ->
+                            val center = pixels.width / 2f + offset * density
+                            var weight = 0.0
+                            var moment = 0.0
+                            for (x in (center - 10f * density).roundToInt()..(center + 10f * density).roundToInt()) {
+                                val color = pixels[x, y]
+                                val shade = (1f - (color.red + color.green + color.blue) / 3f).coerceAtLeast(0f)
+                                val w = shade * shade * shade
+                                weight += w
+                                moment += x * w
+                            }
+                            assertTrue("The ruler must remain visible through the material", weight > 0.1)
+                            (moment / weight).toFloat()
+                        }
+                    }
+                    compose.runOnIdle {
+                        assertTrue(owner.members.all { it.sharesSurface })
+                        assertTrue(!owner.connected.value)
+                    }
+                    val rest = dividerCenters()
+                    if (!mode.reduceTransparency) {
+                        val referenceCenters = dividerCenters(reference.top - sceneBounds.top + 2f * density)
+                        assertEquals("The central ruler must not shift toward the short bar's center",
+                            referenceCenters[1], rest[1], 2f)
+                        assertTrue("The left ruler bends left, matching a full-width reference",
+                            rest[0] <= sceneBounds.width / 2f - 24f * density + 1f)
+                    }
+                    val home = compose.onNodeWithContentDescription("Home")
+                    compose.mainClock.autoAdvance = false
+                    home.performTouchInput { down(center) }
+                    listOf(16L, 16L, 16L, 16L, 64L, 256L).forEach { elapsed ->
+                        compose.mainClock.advanceTimeBy(elapsed)
+                        compose.runOnIdle {
+                            assertTrue(owner.materialBackdrop === source)
+                            assertTrue(owner.members.all { it.sharesSurface })
+                        }
+                        if (!mode.reduceTransparency) {
+                            assertEquals("The central ruler stays anchored while contact changes",
+                                rest[1], dividerCenters()[1], 2f)
+                        }
+                    }
+                    compose.runOnIdle { assertTrue(owner.connected.value) }
+                    home.performTouchInput { up() }
+                    compose.mainClock.advanceTimeBy(1000)
+                    compose.mainClock.autoAdvance = true
+                    compose.waitForIdle()
+                    if (!mode.reduceTransparency) assertEquals(rest[1], dividerCenters()[1], 2f)
+                    listOf(0.5f, 1f, 0f).forEach { progress ->
+                        compose.runOnIdle { compact.floatValue = progress }
+                        compose.waitForIdle()
+                        compose.runOnIdle {
+                            assertTrue("Compact geometry retains the same material owner",
+                                owner.materialBackdrop === source && owner.members.all { it.sharesSurface })
+                        }
+                    }
+                }
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
 
     @Test
     fun adaptiveGroupKeepsAcknowledgementsAndRoutesDragOutToMainItems() {

@@ -5,6 +5,9 @@ import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.MutatorMutex
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -51,6 +54,9 @@ class DampedDragAnimation(
 
     private val valueAnimation =
         sharedValueAnimation ?: Animatable(initialValue, visibilityThreshold)
+    // Input must accumulate before the animation coroutine gets a chance to run.
+    private var requestedTarget by mutableFloatStateOf(valueAnimation.targetValue)
+    private var targetRequest = 0L
     private val velocityAnimation =
         Animatable(0f, 5f)
     private val pressProgressAnimation =
@@ -66,7 +72,7 @@ class DampedDragAnimation(
 
     val value: Float get() = valueAnimation.value
     val progress: Float get() = (value - valueRange.start) / (valueRange.endInclusive - valueRange.start)
-    val targetValue: Float get() = valueAnimation.targetValue
+    val targetValue: Float get() = requestedTarget
     val pressProgressState: State<Float> = pressProgressAnimation.asState()
     val pressProgress: Float get() = pressProgressState.value
     val scaleX: Float get() = scaleXAnimation.value
@@ -123,7 +129,7 @@ class DampedDragAnimation(
             if (value != targetValue) {
                 val threshold = (valueRange.endInclusive - valueRange.start) * 0.025f
                 snapshotFlow { valueAnimation.value }
-                    .filter { abs(it - valueAnimation.targetValue) < threshold }
+                    .filter { abs(it - targetValue) < threshold }
                     .first()
             }
             launch { pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec) }
@@ -134,17 +140,26 @@ class DampedDragAnimation(
 
     fun updateValue(value: Float) {
         val targetValue = value.coerceIn(valueRange)
+        requestedTarget = targetValue
+        val request = ++targetRequest
         animationScope.launch {
+            if (request != targetRequest) return@launch
             valueAnimation.animateTo(targetValue, valueAnimationSpec) { updateVelocity() }
         }
     }
 
     fun animateToValue(value: Float, animatePress: Boolean = true) {
+        val targetValue = value.coerceIn(valueRange)
+        requestedTarget = targetValue
+        val request = ++targetRequest
         animationScope.launch {
+            if (request != targetRequest) return@launch
             mutatorMutex.mutate {
+                if (request != targetRequest) return@mutate
                 if (animatePress) press()
-                val targetValue = value.coerceIn(valueRange)
-                launch { valueAnimation.animateTo(targetValue, valueAnimationSpec) }
+                launch {
+                    if (request == targetRequest) valueAnimation.animateTo(targetValue, valueAnimationSpec)
+                }
                 if (velocity != 0f) {
                     launch { velocityAnimation.animateTo(0f, velocityAnimationSpec) }
                 }
