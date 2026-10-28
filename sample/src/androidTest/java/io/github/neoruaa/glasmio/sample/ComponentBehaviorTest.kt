@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -48,6 +49,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.GlassAppearance
 import io.github.neoruaa.glasmio.core.LocalGlassColors
+import io.github.neoruaa.glasmio.glass.GlassEmphasis
+import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
 import io.github.neoruaa.glasmio.scaffold.rememberGlasmioHeaderScrollEdge
 import io.github.neoruaa.glasmio.ui.*
@@ -487,17 +490,79 @@ class ComponentBehaviorTest {
 
     @Test fun switchAndDisabledControlsExposeAndRespectTheirState() {
         var disabledCalls = 0
+        var dark by mutableStateOf(false)
+        val foregrounds = mutableMapOf<String, Color>()
         content {
-            var checked by remember { mutableStateOf(false) }
-            GlasmioSwitch(checked, { checked = it }, Modifier.testTag("switch"))
-            GlasmioSwitch(false, { disabledCalls++ }, Modifier.testTag("disabled-switch"), enabled = false)
-            GlasmioButton({ disabledCalls++ }, Modifier.testTag("disabled-button"), enabled = false) { Text("Disabled") }
+            val colors = defaultGlassColors(dark, accent = Color.Magenta)
+            CompositionLocalProvider(LocalGlassColors provides colors) {
+                Column(Modifier.background(colors.elevatedBackground), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    var checked by remember { mutableStateOf(false) }
+                    GlasmioSwitch(checked, { checked = it }, Modifier.testTag("switch"))
+                    GlasmioSwitch(true, { disabledCalls++ }, Modifier.testTag("disabled-switch"), enabled = false)
+                    GlasmioSwitch(true, {}, Modifier.testTag("tinted-switch"), onTintColor = Color.Cyan)
+                    GlasmioButton({}, Modifier.width(140.dp).testTag("enabled-button")) {
+                        val color = LocalContentColor.current
+                        SideEffect { foregrounds["enabled"] = color }
+                        Text("Enabled")
+                    }
+                    GlasmioButton({ disabledCalls++ }, Modifier.width(140.dp).testTag("disabled-button"), enabled = false) {
+                        val color = LocalContentColor.current
+                        SideEffect { foregrounds["regular"] = color }
+                        Text("Disabled")
+                    }
+                    GlasmioButton({ disabledCalls++ }, Modifier.width(140.dp).testTag("disabled-prominent"),
+                        enabled = false, emphasis = GlassEmphasis.Prominent, destructive = true,
+                        navigationSurfaceColor = Color.Red, detailAction = true) {
+                        val color = LocalContentColor.current
+                        SideEffect { foregrounds["prominent"] = color }
+                        Text("Disabled")
+                    }
+                    GlasmioIconButton({ disabledCalls++ }, Modifier.testTag("disabled-icon"),
+                        enabled = false, emphasis = GlassEmphasis.Prominent) {
+                        val color = LocalContentColor.current
+                        SideEffect { foregrounds["icon"] = color }
+                        Text("+")
+                    }
+                }
+            }
+        }
+        fun assertColor(expected: Color, actual: Color) {
+            assertEquals(expected.red, actual.red, .015f)
+            assertEquals(expected.green, actual.green, .015f)
+            assertEquals(expected.blue, actual.blue, .015f)
+        }
+        fun trackColor(tag: String): Color {
+            val pixels = rule.onNodeWithTag(tag).captureToImage().toPixelMap()
+            return pixels[(pixels.width * .1f).toInt(), pixels.height / 2]
         }
         rule.onNodeWithTag("switch").assertIsOff().performClick().assertIsOn()
+        listOf(false, true).forEach { isDark ->
+            rule.runOnIdle { dark = isDark }
+            rule.waitForIdle()
+            val green = if (isDark) Color(0xFF30D158) else Color(0xFF34C759)
+            val background = defaultGlassColors(isDark).elevatedBackground
+            assertColor(green, trackColor("switch"))
+            assertColor(Color.Cyan, trackColor("tinted-switch"))
+            val halfGreen = Color((green.red + background.red) / 2f,
+                (green.green + background.green) / 2f, (green.blue + background.blue) / 2f)
+            assertColor(halfGreen, trackColor("disabled-switch"))
+            val disabled = if (isDark) Color(0xFF404040) else Color(0xFFBFBFBF)
+            rule.runOnIdle {
+                assertEquals(defaultGlassColors(isDark).content, foregrounds["enabled"])
+                listOf("regular", "prominent", "icon").forEach { assertEquals(disabled, foregrounds[it]) }
+            }
+            // Explicit accent and destructive paths must not survive a disabled prominent control.
+            fun surfaceColor(tag: String): Color {
+                val pixels = rule.onNodeWithTag(tag).captureToImage().toPixelMap()
+                return pixels[(pixels.width * .1f).toInt(), pixels.height / 2]
+            }
+            assertColor(surfaceColor("disabled-button"), surfaceColor("disabled-prominent"))
+        }
         rule.onNodeWithTag("disabled-switch").assertIsNotEnabled()
             .performSemanticsAction(SemanticsActions.OnClick) { it() }
-        rule.onNodeWithTag("disabled-button").assertIsNotEnabled()
-            .performTouchInput { click() }
+        listOf("disabled-button", "disabled-prominent", "disabled-icon").forEach {
+            rule.onNodeWithTag(it).assertIsNotEnabled().performTouchInput { click() }
+        }
         rule.runOnIdle { assertEquals(0, disabledCalls) }
     }
 

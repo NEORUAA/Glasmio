@@ -108,6 +108,10 @@ object GlasmioButtonDefaults {
     }
 }
 
+private fun GlassColors.disabledButtonColors(): GlassColors = copy(
+    content = if (isDark) Color(0xFF404040) else Color(0xFFBFBFBF),
+)
+
 /** Liquid Glass / Glass Prominent text button, with caller-owned interaction state. */
 @Composable
 fun GlasmioButton(
@@ -126,10 +130,14 @@ fun GlasmioButton(
     content: @Composable RowScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
-    val buttonColors = if (destructive) colors.copy(
-        content = colors.destructive,
-        prominentContainer = colors.destructive,
-    ) else colors
+    val buttonColors = when {
+        !enabled -> colors.disabledButtonColors()
+        destructive -> colors.copy(
+            content = colors.destructive,
+            prominentContainer = colors.destructive,
+        )
+        else -> colors
+    }
     val height = GlasmioButtonDefaults.height(size, LocalGlassDimensions.current)
     val horizontalPadding = when (size) {
         GlasmioButtonSize.Small -> 10.dp
@@ -150,14 +158,14 @@ fun GlasmioButton(
             modifier = modifier.height(height),
             backdrop = backdrop,
             style = style,
-            navigationSurfaceColor = navigationSurfaceColor,
+            navigationSurfaceColor = navigationSurfaceColor.takeIf { enabled },
             navigationSurfaceAlphaMultiplier = navigationSurfaceAlphaMultiplier,
             shape = Capsule(),
-            emphasis = emphasis,
+            emphasis = if (enabled) emphasis else GlassEmphasis.Regular,
             enabled = enabled,
             sampleBackdrop = sampleBackdrop,
             onClick = onClick,
-            detailAction = detailAction,
+            detailAction = enabled && detailAction,
         ) {
             Row(
                 modifier = Modifier.padding(horizontal = horizontalPadding),
@@ -190,22 +198,26 @@ fun GlasmioIconButton(
     size: Dp? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    GlassSurface(
-        modifier = modifier.size(size ?: LocalGlassDimensions.current.iconButtonSize),
-        backdrop = backdrop,
-        style = style,
-        navigationSurfaceColor = navigationSurfaceColor,
-        navigationSurfaceAlphaMultiplier = navigationSurfaceAlphaMultiplier,
-        shape = CircleShape,
-        emphasis = emphasis,
-        enabled = enabled,
-        sampleBackdrop = sampleBackdrop,
-        morphProgress = morphProgress,
-        morphCaptureWidth = morphCaptureWidth,
-        groupSurfaceSeparation = groupSurfaceSeparation,
-        onClick = onClick,
-        onLongClick = onLongClick,
-        detailAction = detailAction,
-        content = content,
-    )
+    val colors = LocalGlassColors.current
+    val buttonColors = if (enabled) colors else colors.disabledButtonColors()
+    CompositionLocalProvider(LocalGlassColors provides buttonColors) {
+        GlassSurface(
+            modifier = modifier.size(size ?: LocalGlassDimensions.current.iconButtonSize),
+            backdrop = backdrop,
+            style = style,
+            navigationSurfaceColor = navigationSurfaceColor.takeIf { enabled },
+            navigationSurfaceAlphaMultiplier = navigationSurfaceAlphaMultiplier,
+            shape = CircleShape,
+            emphasis = if (enabled) emphasis else GlassEmphasis.Regular,
+            enabled = enabled,
+            sampleBackdrop = sampleBackdrop,
+            morphProgress = morphProgress,
+            morphCaptureWidth = morphCaptureWidth,
+            groupSurfaceSeparation = groupSurfaceSeparation,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            detailAction = enabled && detailAction,
+            content = content,
+        )
+    }
 }

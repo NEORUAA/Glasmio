@@ -98,7 +98,10 @@ import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 
 internal val LocalMergedGlassCards = staticCompositionLocalOf { false }
 
-/** iOS 27 switch: 64 x 28 dp track and 40 x 24 dp elastic liquid thumb. */
+/**
+ * iOS 27 switch: 64 x 28 dp track and 38 x 24 dp elastic liquid thumb.
+ * The checked track defaults to system green; [onTintColor] provides an explicit override.
+ */
 @Composable
 fun GlasmioSwitch(
     checked: Boolean,
@@ -106,11 +109,14 @@ fun GlasmioSwitch(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     backdrop: Backdrop = LocalGlassBackdrop.current,
+    onTintColor: Color = Color.Unspecified,
 ) {
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
     val light = !colors.isDark
-    val accent = colors.accent
+    val onColor = if (onTintColor == Color.Unspecified) {
+        if (colors.isDark) Color(0xFF30D158) else Color(0xFF34C759)
+    } else onTintColor
     val track = (if (light) {
         Color(0xFF787878).copy(alpha = 0.20f)
     } else {
@@ -120,7 +126,7 @@ fun GlasmioSwitch(
     }
     val density = LocalDensity.current
     val ltr = LocalLayoutDirection.current == LayoutDirection.Ltr
-    val travelPx = with(density) { 20.dp.toPx() }
+    val travelPx = with(density) { 22.dp.toPx() }
     val scope = rememberCoroutineScope()
     val currentEnabled by rememberUpdatedState(enabled)
     val currentChecked by rememberUpdatedState(checked)
@@ -182,7 +188,7 @@ fun GlasmioSwitch(
         },
     )
     val thumbBackdrop = rememberCombinedBackdrop(backdrop, transformedTrackBackdrop)
-    val thumbGlassModifier = remember(thumbBackdrop, animation, enabled, appearance) {
+    val thumbGlassModifier = remember(thumbBackdrop, animation, appearance) {
         Modifier.drawBackdrop(
             backdrop = if (appearance.usesBackdrop) thumbBackdrop else emptyBackdrop(),
             shape = { Capsule() },
@@ -215,7 +221,6 @@ fun GlasmioSwitch(
                 val velocity = animation.velocity / 50f
                 scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
                 scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
-                alpha = if (enabled) 1f else 0.45f
             },
             onDrawSurface = {
                 val alpha = if (appearance.reduceTransparency) 1f else 1f - animation.pressProgress
@@ -226,6 +231,7 @@ fun GlasmioSwitch(
     Box(
         modifier = modifier
             .swipeBackExcluded(enabled)
+            .alpha(if (enabled) 1f else 0.5f)
             .size(width = 64.dp, height = 28.dp)
             .semantics(mergeDescendants = true) {
                 role = Role.Switch
@@ -243,7 +249,7 @@ fun GlasmioSwitch(
             Modifier
                 .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop) else Modifier)
                 .clip(Capsule())
-                .drawBehind { drawRect(colorLerp(track, accent, animation.value)) }
+                .drawBehind { drawRect(colorLerp(track, onColor, animation.value)) }
                 .size(width = 64.dp, height = 28.dp),
         )
         Box(
@@ -254,7 +260,7 @@ fun GlasmioSwitch(
                     else lerp(-padding, -(padding + travelPx), animation.value)
                 }
                 .then(thumbGlassModifier)
-                .size(width = 40.dp, height = 24.dp),
+                .size(width = 38.dp, height = 24.dp),
         )
     }
 }

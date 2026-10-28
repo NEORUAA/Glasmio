@@ -75,6 +75,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -1096,7 +1097,11 @@ private fun ListDemo() {
                                     },
                                     trailing = {
                                         Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
-                                            SfIcon("star", null, size = 17.dp, tint = colors.accent)
+                                            SfIcon(
+                                                "star", null, size = 22.dp, fontSize = 17.sp,
+                                                weight = FontWeight.Normal, tint = colors.accent,
+                                                fontFeatureSettings = "'ss16' 1", fitGlyphToBounds = false,
+                                            )
                                         }
                                     },
                                     showDisclosure = true,
@@ -1104,12 +1109,20 @@ private fun ListDemo() {
                                 GlasmioListRow("Value", detail = "Detail")
                                 GlasmioListRow("Selection", trailing = {
                                     Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
-                                        SfIcon("checkmark", null, size = 17.dp, tint = colors.accent)
+                                        SfIcon(
+                                            "checkmark", null, size = 22.dp, fontSize = 17.sp,
+                                            weight = FontWeight(590), tint = colors.accent,
+                                            fontFeatureSettings = "", fitGlyphToBounds = false,
+                                        )
                                     }
                                 })
                                 GlasmioListRow("Information", trailing = {
                                     Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
-                                        SfIcon("info.circle", "Information", size = 17.dp, tint = colors.accent)
+                                        SfIcon(
+                                            "info.circle", "Information", size = 22.dp, fontSize = 17.sp,
+                                            weight = FontWeight.Normal, tint = colors.accent,
+                                            fontFeatureSettings = "'ss16' 1", fitGlyphToBounds = false,
+                                        )
                                     }
                                 })
                                 GlasmioListRow("Date and Time", trailing = {
@@ -1123,7 +1136,7 @@ private fun ListDemo() {
                             GlasmioGroupedTableFooter("Footer")
                         }
                         item(key = "flat-actions") {
-                            GlasmioGroupedList(framed = false) {
+                            GlasmioGroupedList {
                                 GlasmioListRow("Action", onClick = {}, showTopSeparator = false, showDisclosure = false,
                                     titleColor = colors.accent, titleAlignment = TextAlign.Center)
                                 GlasmioListRow("Delete", onClick = {}, showDisclosure = false,

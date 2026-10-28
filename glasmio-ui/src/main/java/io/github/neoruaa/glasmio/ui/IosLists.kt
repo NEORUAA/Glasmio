@@ -218,7 +218,18 @@ fun GlasmioListRow(
                 }
                 if (showDisclosure) {
                     Box(Modifier.size(width = 8.dp, height = 22.dp), contentAlignment = Alignment.Center) {
-                        SfIcon("chevron.forward", null, size = 17.dp, tint = colors.tertiaryContent)
+                        SfIcon(
+                            "chevron.forward",
+                            null,
+                            modifier = Modifier.requiredSize(22.dp),
+                            size = 22.dp,
+                            fontSize = 17.sp,
+                            weight = FontWeight(590),
+                            mirrored = true,
+                            tint = colors.tertiaryContent,
+                            fontFeatureSettings = "'ss15' 1",
+                            fitGlyphToBounds = false,
+                        )
                     }
                 }
             }

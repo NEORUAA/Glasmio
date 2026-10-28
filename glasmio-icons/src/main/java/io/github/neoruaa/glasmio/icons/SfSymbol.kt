@@ -79,6 +79,11 @@ private data class SfGlyphDrawCache(
 
 val LocalSfToolbarSymbols = staticCompositionLocalOf { false }
 
+/**
+ * Renders an SF symbol with [size] as its layout slot and [fontSize] as its typographic size.
+ * Disable [fitGlyphToBounds] to preserve native glyph metrics, including ink outside the slot.
+ * Toolbar symbols always preserve their native metrics; vector fallbacks use the layout slot.
+ */
 @Composable
 fun SfIcon(
     symbol: SfSymbol,
@@ -90,6 +95,7 @@ fun SfIcon(
     weight: FontWeight? = null,
     mirrored: Boolean = false,
     fontFeatureSettings: String = "'ss16' 1",
+    fitGlyphToBounds: Boolean = true,
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val toolbar = LocalSfToolbarSymbols.current
@@ -106,12 +112,13 @@ fun SfIcon(
         size = size,
         fontSize = resolveSymbolFontSize(size, fontSize, toolbar),
         weight = weight ?: if (toolbar) FontWeight.Medium else FontWeight.Normal,
-        fitToSlot = !toolbar,
+        fitToSlot = fitGlyphToBounds && !toolbar,
         mirrored = mirrored && symbol.autoMirrored && layoutDirection == LayoutDirection.Rtl,
         features = fontFeatureSettings,
     )
 }
 
+/** String-name overload of [SfIcon], with the same layout and glyph-fitting behavior. */
 @Composable
 fun SfIcon(
     systemName: String,
@@ -123,6 +130,7 @@ fun SfIcon(
     weight: FontWeight? = null,
     mirrored: Boolean = false,
     fontFeatureSettings: String = "'ss16' 1",
+    fitGlyphToBounds: Boolean = true,
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val toolbar = LocalSfToolbarSymbols.current
@@ -140,7 +148,7 @@ fun SfIcon(
         size = size,
         fontSize = resolveSymbolFontSize(size, fontSize, toolbar),
         weight = weight ?: if (toolbar) FontWeight.Medium else FontWeight.Normal,
-        fitToSlot = !toolbar,
+        fitToSlot = fitGlyphToBounds && !toolbar,
         mirrored = mirrored && layoutDirection == LayoutDirection.Rtl,
         features = fontFeatureSettings,
     )

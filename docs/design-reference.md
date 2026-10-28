@@ -15,10 +15,15 @@ The [Apple iOS and iPadOS 27 design library](https://www.figma.com/design/AmwPTD
 | Text Selection | `GlasmioEditableText` | `I12740:24161;5711:35407`, `I12740:24161;5711:35410` | 16 dp lollipop, 2 dp stem, 8 dp center offset outside the selected line |
 | Alert | `GlasmioAlertDialog` | `65:57149`, `12616:942` | 300 dp panel, 34 dp continuous corners, 14 dp outer inset, 19 dp field-to-action gap |
 | List row | `GlasmioListRow` | `550:50627`, `550:50515` | 52 dp single-line or 68 dp subtitle row, inset separators, 17 sp detail |
+| List trailing symbols | `SfIcon` | `212:119974`, `212:122278`, `212:124674`, `212:127130` | Star/info: 17 sp Regular, SS16, 22 dp slot; drill-in: 17 sp weight 590, SS15, 8 × 22 dp slot; checkmark: 17 sp weight 590, 22 dp slot |
 | Section Title | `GlasmioSectionTitle` | `50:56535` | 39 dp minimum height, 16 dp horizontal inset, 9 dp bottom inset |
 | Grouped Table Footer | `GlasmioGroupedTableFooter` | `35:55757` | 13 sp text, 18 sp line height, 16 dp horizontal inset |
 
 Buttons retain the host's theme height when `size` is omitted, so the initial migration preserves MeiloX's existing control geometry. Explicit `GlasmioButtonSize` values use the official size terminology. `GlassEmphasis.Regular` and `Prominent` express Glass and Glass Prominent. Destructive and disabled states are caller-controlled.
+
+List accessories set `SfIcon.fontSize` separately from the layout slot and opt out of glyph fitting with `fitGlyphToBounds = false`, preserving the design's native symbol metrics. Other icon callers retain their existing fitting behavior. Grouped action rows share the enclosing card background; explanatory `GlasmioGroupedTableFooter` text stays outside that card.
+
+`GlasmioSwitch` defaults to iOS system green (`#34C759` light / `#30D158` dark), independently of the host accent; use `onTintColor` for an explicit override. Disabled switches apply 0.5 opacity to the whole control. Disabled text and icon buttons retain regular glass with tertiary vibrant content, including when their enabled style is Prominent or destructive.
 
 All rounded component surfaces and Material theme shape roles use continuous curvature through `ContinuousRoundedRectangle` or Capsule. Circles remain circles. The host can override shape tokens and provide typography and symbol typefaces.
 
