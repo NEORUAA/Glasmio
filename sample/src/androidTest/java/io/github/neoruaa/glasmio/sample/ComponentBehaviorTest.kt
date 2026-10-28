@@ -5,8 +5,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -16,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
@@ -33,16 +38,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.GlassAppearance
+import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
+import io.github.neoruaa.glasmio.scaffold.rememberGlasmioHeaderScrollEdge
 import io.github.neoruaa.glasmio.ui.*
 import io.github.neoruaa.glasmio.preference.GlasmioEditTextPreference
 import io.github.neoruaa.glasmio.preference.GlasmioListPreference
 import io.github.neoruaa.glasmio.preference.GlasmioPreferenceEntry
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -899,7 +909,340 @@ class ComponentBehaviorTest {
         rule.runOnIdle { assertEquals(0, disabledActivations) }
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
+    @Test fun sheetDetentsResizeTheViewportAndHandOffScrolling() {
+        lateinit var sheet: GlasmioSheetState
+        lateinit var list: androidx.compose.foundation.lazy.LazyListState
+        lateinit var scope: CoroutineScope
+        var scrollingExpands by mutableStateOf(true)
+        content {
+            sheet = rememberGlasmioSheetState(skipPartiallyExpanded = false)
+            list = rememberLazyListState()
+            scope = rememberCoroutineScope()
+            GlasmioBottomSheet(onDismissRequest = {}, sheetState = sheet, modifier = Modifier.testTag("sheet"),
+                prefersScrollingExpandsWhenScrolledToEdge = scrollingExpands) {
+                Text("Sheet header", Modifier.fillMaxWidth().height(44.dp))
+                LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("sheet-list"), state = list) {
+                    items(40) { Text("Row $it", Modifier.fillMaxWidth().height(52.dp)) }
+                }
+                Text("Sheet footer", Modifier.fillMaxWidth().height(44.dp))
+            }
+        }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        val mediumTop = rule.onNodeWithText("Sheet header").fetchSemanticsNode().boundsInRoot.top
+        rule.onNodeWithTag("sheet-list").performTouchInput {
+            swipe(Offset(centerX, height * 0.85f), Offset(centerX, height * 0.15f), 700)
+        }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        assertTrue(rule.onNodeWithText("Sheet header").fetchSemanticsNode().boundsInRoot.top < mediumTop)
+        val headerPixels = rule.onNodeWithText("Sheet header").captureToImage().toPixelMap()
+        assertTrue((0 until headerPixels.height).any { y ->
+            (0 until headerPixels.width).any { x ->
+                val pixel = headerPixels[x, y]
+                pixel.alpha > 0.9f && maxOf(pixel.red, pixel.green, pixel.blue) < 0.3f
+            }
+        })
+        rule.runOnIdle { scope.launch { list.scrollToItem(12) } }
+        rule.waitUntil(10_000) { list.firstVisibleItemIndex == 12 }
+        rule.onNodeWithTag("sheet-list").performTouchInput {
+            swipe(Offset(centerX, height * 0.3f), Offset(centerX, height * 0.6f), 800)
+        }
+        rule.runOnIdle {
+            assertEquals(GlasmioSheetValue.Large, sheet.currentValue)
+            assertTrue(list.firstVisibleItemIndex < 12)
+            assertTrue(list.firstVisibleItemIndex > 0)
+        }
+        rule.runOnIdle { scope.launch { list.scrollToItem(0) } }
+        rule.waitUntil(10_000) { list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0 }
+        rule.onNodeWithTag("sheet").performSemanticsAction(SemanticsActions.Collapse) { it() }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        rule.onNodeWithText("Sheet footer").assertIsDisplayed()
+        rule.runOnIdle { scrollingExpands = false }
+        rule.onNodeWithTag("sheet-list").performTouchInput {
+            swipe(Offset(centerX, height * 0.8f), Offset(centerX, height * 0.2f), 700)
+        }
+        rule.runOnIdle {
+            assertEquals(GlasmioSheetValue.Medium, sheet.currentValue)
+            assertTrue(list.firstVisibleItemIndex > 0)
+        }
+        rule.onNodeWithText("Sheet header").performTouchInput {
+            down(center)
+            moveBy(Offset(0f, -600f), 300)
+            cancel()
+        }
+        rule.waitUntil(10_000) { !sheet.isAnimationRunning && !sheet.isDragging }
+        rule.runOnIdle { assertEquals(GlasmioSheetValue.Medium, sheet.currentValue) }
+    }
+
+    @Test fun sheetClosingRetainsItsWindowAndCanReverseBeforeRemoval() {
+        lateinit var sheet: GlasmioSheetState
+        lateinit var scope: CoroutineScope
+        var visible by mutableStateOf(true)
+        var dismissals = 0
+        content {
+            sheet = rememberGlasmioSheetState(skipPartiallyExpanded = false)
+            scope = rememberCoroutineScope()
+            GlasmioBottomSheet(
+                visible = visible,
+                sheetState = sheet,
+                onDismissRequest = { dismissals++; visible = false },
+            ) { Text("Retained sheet", Modifier.height(100.dp)) }
+        }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        rule.runOnIdle { scope.launch { sheet.expand() } }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        val restingBounds = rule.onNodeWithText("Retained sheet").fetchSemanticsNode().boundsInRoot
+        rule.mainClock.autoAdvance = false
+        rule.runOnIdle { visible = false }
+        rule.mainClock.advanceTimeBy(80)
+        rule.onNodeWithText("Retained sheet").assertExists()
+        val closingBounds = rule.onNodeWithText("Retained sheet").fetchSemanticsNode().boundsInRoot
+        assertEquals(restingBounds.width, closingBounds.width, 1f)
+        assertEquals(restingBounds.height, closingBounds.height, 1f)
+        assertTrue(closingBounds.top > restingBounds.top)
+        rule.runOnIdle { assertTrue(sheet.isVisible); visible = true }
+        rule.mainClock.advanceTimeBy(1_500)
+        rule.mainClock.autoAdvance = true
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        rule.onNodeWithText("Retained sheet").assertIsDisplayed()
+        rule.runOnIdle { assertEquals(0, dismissals); scope.launch { sheet.hide() } }
+        rule.waitUntil(10_000) { dismissals == 1 }
+        rule.onNodeWithText("Retained sheet").assertDoesNotExist()
+    }
+
+    @Test fun sheetHeaderBlursUnderlappingContentAndKeepsNavigationAreaImmersive() {
+        lateinit var sheet: GlasmioSheetState
+        lateinit var list: androidx.compose.foundation.lazy.LazyListState
+        lateinit var scope: CoroutineScope
+        var reduceTransparency by mutableStateOf(false)
+        var density = 1f
+        var canvas = Color.Unspecified
+        val bodyColor = Color(0xFF004488)
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.runOnUiThread { rule.activity.enableEdgeToEdge() }
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = reduceTransparency)) {
+                density = LocalDensity.current.density
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color.White)) },
+                    overlayContent = {
+                        sheet = rememberGlasmioSheetState()
+                        list = rememberLazyListState()
+                        scope = rememberCoroutineScope()
+                        GlasmioBottomSheet(
+                            onDismissRequest = {},
+                            sheetState = sheet,
+                            modifier = Modifier.testTag("sheet-chrome"),
+                            contentWindowInsets = { WindowInsets(top = 50.dp) },
+                            contentNavigationBarInsets = { WindowInsets(bottom = 34.dp) },
+                            topBarBlurProgress = rememberGlasmioHeaderScrollEdge(list),
+                            topBar = {
+                                GlasmioSheetTopToolbar("Pinned", Modifier.testTag("sheet-chrome-header"))
+                            },
+                        ) {
+                            canvas = LocalGlassColors.current.groupedBackground
+                            val padding = LocalGlasmioSheetContentPadding.current
+                            Column(Modifier.fillMaxSize().background(bodyColor)) {
+                                LazyColumn(
+                                    Modifier.fillMaxWidth().weight(1f).testTag("sheet-chrome-list"),
+                                    state = list,
+                                    contentPadding = PaddingValues(top = padding.calculateTopPadding()),
+                                ) {
+                                    items(40) { index ->
+                                        Text("Row $index", color = Color.White,
+                                            modifier = Modifier.fillMaxWidth().height(52.dp)
+                                                .testTag("sheet-chrome-row-$index").padding(start = 200.dp))
+                                    }
+                                }
+                                Box(Modifier.fillMaxWidth().padding(bottom = padding.calculateBottomPadding())) {
+                                    Text("Footer", color = Color.White, modifier = Modifier.height(44.dp).padding(start = 200.dp))
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        val restingHeader = rule.onNodeWithTag("sheet-chrome-header").fetchSemanticsNode().boundsInRoot
+        val bounds = rule.onNodeWithTag("sheet-chrome").fetchSemanticsNode().boundsInRoot
+        fun pixel(image: androidx.compose.ui.graphics.PixelMap, y: Float): Color =
+            image[(bounds.left + bounds.width * 0.25f).toInt(), y.toInt()]
+        fun assertColor(expected: Color, actual: Color) {
+            assertEquals(expected.red, actual.red, 2f / 255f)
+            assertEquals(expected.green, actual.green, 2f / 255f)
+            assertEquals(expected.blue, actual.blue, 2f / 255f)
+        }
+        val upperY = bounds.top + 24f * density
+        val middleY = restingHeader.bottom + 10f * density
+        val lowerY = restingHeader.bottom + 36f * density
+        val restingPixels = rule.onNode(isDialog()).captureToImage().toPixelMap()
+        assertColor(bodyColor, pixel(restingPixels, upperY))
+        assertColor(bodyColor, pixel(restingPixels, middleY))
+        rule.runOnIdle { scope.launch { list.scrollToItem(0, (28f * density).toInt()) } }
+        rule.waitUntil(10_000) { list.firstVisibleItemScrollOffset >= (27f * density).toInt() }
+        val partialUpper = pixel(rule.onNode(isDialog()).captureToImage().toPixelMap(), upperY)
+        assertTrue("The header must begin revealing as content scrolls", partialUpper.red > bodyColor.red + 0.1f)
+
+        rule.runOnIdle { scope.launch { list.scrollToItem(12) } }
+        rule.waitUntil(10_000) { list.firstVisibleItemIndex == 12 }
+        val header = rule.onNodeWithTag("sheet-chrome-header").fetchSemanticsNode().boundsInRoot
+        val underlappingRow = rule.onNodeWithTag("sheet-chrome-row-11").fetchSemanticsNode().boundsInRoot
+        assertEquals(restingHeader.top, header.top, 1f)
+        assertTrue("Scrolled rows must pass behind the pinned header", underlappingRow.top < header.bottom)
+        assertTrue("The list must extend into the header's viewport", underlappingRow.bottom > header.top)
+        val pixels = rule.onNode(isDialog()).captureToImage().toPixelMap()
+        val upper = pixel(pixels, upperY)
+        val middle = pixel(pixels, middleY)
+        val lower = pixel(pixels, lowerY)
+        assertTrue("The scroll reveal must remain gradual", upper.red > partialUpper.red + 0.1f)
+        assertTrue("The header must retain the backdrop rather than draw a solid block", upper.red < canvas.red - 0.05f)
+        assertTrue("Header tint must fade through the content", upper.red > middle.red + 0.08f)
+        assertTrue("The lower blur edge must approach the unmodified content", middle.red > lower.red + 0.03f)
+        assertColor(bodyColor, lower)
+        assertColor(bodyColor, pixel(pixels, bounds.bottom - 8f * density))
+
+        rule.runOnIdle { reduceTransparency = true }
+        rule.waitForIdle()
+        val reduced = rule.onNode(isDialog()).captureToImage().toPixelMap()
+        assertColor(canvas, pixel(reduced, upperY))
+        assertColor(canvas, pixel(reduced, header.bottom - 4f * density))
+        assertColor(bodyColor, pixel(reduced, lowerY))
+        assertColor(bodyColor, pixel(reduced, bounds.bottom - 8f * density))
+        rule.runOnIdle { scope.launch { list.scrollToItem(0) } }
+        rule.waitUntil(10_000) { list.firstVisibleItemIndex == 0 && list.firstVisibleItemScrollOffset == 0 }
+        val returned = rule.onNode(isDialog()).captureToImage().toPixelMap()
+        assertColor(bodyColor, pixel(returned, upperY))
+        assertColor(bodyColor, pixel(returned, middleY))
+    }
+
+    @Test fun sheetMaterialRendersOverTheNativeReferenceGradient() {
+        lateinit var sheet: GlasmioSheetState
+        lateinit var scope: CoroutineScope
+        var visible by mutableStateOf(false)
+        var dark by mutableStateOf(false)
+        var table by mutableStateOf(false)
+        var density = 1f
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.runOnUiThread { rule.activity.enableEdgeToEdge() }
+        rule.setContent {
+            GlasmioTheme(isDark = dark) {
+                density = LocalDensity.current.density
+                val gradient = remember {
+                    Brush.verticalGradient(0f to Color(0xFF0088FF), 0.55f to Color(0xFF32ADE6), 1f to Color(0xFFFF8D28))
+                }
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(gradient)) },
+                    overlayContent = {
+                        sheet = rememberGlasmioSheetState(skipPartiallyExpanded = false)
+                        scope = rememberCoroutineScope()
+                        GlasmioBottomSheet(
+                            onDismissRequest = {},
+                            visible = visible,
+                            sheetState = sheet,
+                            contentWindowInsets = { WindowInsets(top = 50.dp) },
+                            contentNavigationBarInsets = { WindowInsets(bottom = 34.dp) },
+                        ) {
+                            Column(Modifier.fillMaxSize().then(
+                                if (table) Modifier.background(LocalGlassColors.current.groupedBackground) else Modifier,
+                            )) {
+                                Text("Native material reference", Modifier.fillMaxWidth().height(80.dp).padding(24.dp))
+                                if (table) {
+                                    GlasmioGroupedList(Modifier.padding(horizontal = 16.dp).testTag("material-reference-rows")) {
+                                        repeat(6) { index -> GlasmioListRow("Item ${index + 1}",
+                                            subtitle = "UIKit native sheet", showTopSeparator = index > 0) }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        fun save(name: String, modal: Boolean = true) {
+            val bitmap = (if (modal) rule.onNode(isDialog()) else rule.onRoot()).captureToImage().asAndroidBitmap()
+            java.io.File(rule.activity.getExternalFilesDir(null), name).outputStream().use {
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }
+        }
+        fun rowSample(): Offset {
+            val row = rule.onNodeWithTag("material-reference-rows").fetchSemanticsNode().boundsInRoot
+            return Offset(row.right - 12f * density, row.top + 40f * density)
+        }
+        fun sample(pixels: androidx.compose.ui.graphics.PixelMap, point: Offset): Color =
+            pixels[point.x.toInt().coerceIn(0, pixels.width - 1), point.y.toInt().coerceIn(0, pixels.height - 1)]
+        fun assertBias(bare: androidx.compose.ui.graphics.PixelMap, bias: Int) {
+            val point = rowSample()
+            val original = sample(bare, point)
+            val transformed = sample(rule.onNode(isDialog()).captureToImage().toPixelMap(), point)
+            listOf(transformed.red - original.red, transformed.green - original.green, transformed.blue - original.blue).forEach {
+                // Golden CAColorMatrix bias observed on the physical iPhone, in 8-bit sRGB.
+                assertEquals(bias.toFloat(), it * 255f, 3f)
+            }
+        }
+        fun assertOpaqueTable(cell: Color, canvas: Color) {
+            val pixels = rule.onNode(isDialog()).captureToImage().toPixelMap()
+            val point = rowSample()
+            val actualCell = sample(pixels, point)
+            val row = rule.onNodeWithTag("material-reference-rows").fetchSemanticsNode().boundsInRoot
+            val actualCanvas = sample(pixels, Offset(point.x, row.bottom + 20f * density))
+            listOf(actualCell to cell, actualCanvas to canvas).forEach { (actual, expected) ->
+                assertEquals(expected.red * 255f, actual.red * 255f, 1f)
+                assertEquals(expected.green * 255f, actual.green * 255f, 1f)
+                assertEquals(expected.blue * 255f, actual.blue * 255f, 1f)
+            }
+        }
+        rule.waitForIdle()
+        save("sheet-reference-baseline.png", modal = false)
+        rule.runOnIdle { visible = true }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        val lightBare = rule.onNode(isDialog()).captureToImage().toPixelMap()
+        save("sheet-reference-medium.png")
+        rule.runOnIdle { scope.launch { sheet.expand() } }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        rule.waitForIdle()
+        rule.onNodeWithText("Native material reference").assertIsDisplayed()
+        save("sheet-reference-large.png")
+        rule.runOnIdle { scope.launch { sheet.partialExpand() } }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        rule.runOnIdle { table = true }
+        rule.waitForIdle()
+        save("sheet-reference-table-medium.png")
+        assertBias(lightBare, -15)
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.runOnIdle { scope.launch { sheet.expand() } }
+            rule.mainClock.advanceTimeUntil(1_000) { sheet.expansionProgress > 0.5f }
+            rule.mainClock.advanceTimeByFrame()
+            val carrier = sample(rule.onNode(isDialog()).captureToImage().toPixelMap(), rowSample())
+            // UIKit replaces the vibrant carrier at the role edge, before detent settling.
+            assertEquals(255f, carrier.red * 255f, 1f)
+            assertEquals(255f, carrier.green * 255f, 1f)
+            assertEquals(255f, carrier.blue * 255f, 1f)
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        save("sheet-reference-table-large.png")
+        assertOpaqueTable(Color.White, Color(0xFFF2F2F7))
+        rule.runOnIdle { visible = false }
+        rule.waitUntil(10_000) { !sheet.isVisible && !sheet.isAnimationRunning }
+        rule.waitForIdle()
+        rule.runOnIdle { dark = true; table = false; visible = true }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Medium && !sheet.isAnimationRunning }
+        save("sheet-reference-dark-medium.png")
+        val darkBare = rule.onNode(isDialog()).captureToImage().toPixelMap()
+        rule.runOnIdle { table = true }
+        rule.waitForIdle()
+        save("sheet-reference-dark-table-medium.png")
+        assertBias(darkBare, 15)
+        rule.runOnIdle { scope.launch { sheet.expand() } }
+        rule.waitUntil(10_000) { sheet.currentValue == GlasmioSheetValue.Large && !sheet.isAnimationRunning }
+        save("sheet-reference-dark-table-large.png")
+        assertOpaqueTable(Color(0xFF2C2C2E), Color(0xFF1C1C1E))
+    }
+
     @Test fun systemBackDismissesAlertAndSheet() {
         content {
             var stage by remember { mutableIntStateOf(0) }

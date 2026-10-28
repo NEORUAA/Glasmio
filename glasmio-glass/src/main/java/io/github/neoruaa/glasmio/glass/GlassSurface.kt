@@ -582,6 +582,8 @@ fun Modifier.navigationGlassBackground(
     material: NavigationGlassMaterial? = null,
     materialTint: Color? = null,
     preserveBackdropColors: Boolean = false,
+    innerShadowAlpha: Float = 1f,
+    materialPaintAlpha: Float = 1f,
 ): Modifier {
     return this.then(
         if (dropShadow == null) {
@@ -647,7 +649,7 @@ fun Modifier.navigationGlassBackground(
                 surfaceOverlay()
             } else {
                 if (navigationMaterial && sampleBackdrop && appearance.usesBackdrop) {
-                    drawNavigationGlassMaterial(containerColor, isDark, containerAlphaMultiplier, material, materialTint)
+                    drawNavigationGlassMaterial(containerColor, isDark, containerAlphaMultiplier, material, materialTint, alpha = materialPaintAlpha)
                 } else {
                     drawRect(
                         containerColor.copy(
@@ -657,7 +659,7 @@ fun Modifier.navigationGlassBackground(
                 }
                 surfaceOverlay?.invoke(this)
                 if (navigationMaterial && sampleBackdrop && appearance.usesBackdrop) {
-                    innerShadows?.draw(this, shape(), isDark = isDark)
+                    innerShadows?.draw(this, shape(), isDark = isDark, alpha = innerShadowAlpha)
                 }
             }
         },

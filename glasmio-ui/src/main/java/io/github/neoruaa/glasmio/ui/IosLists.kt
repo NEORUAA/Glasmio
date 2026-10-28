@@ -61,6 +61,7 @@ fun Modifier.glasmioGroupedListSeparator(
 ): Modifier {
     if (!visible) return this
     val group = LocalGroupedListCoordinates.current
+    val inSheet = LocalIosSheetMaterialContext.current != null
     var coordinates by remember(group) { mutableStateOf<LayoutCoordinates?>(null) }
     var position by remember(group) { mutableStateOf(Offset.Unspecified) }
     return this
@@ -77,7 +78,8 @@ fun Modifier.glasmioGroupedListSeparator(
                 kotlin.math.abs(owner.localPositionOf(row, Offset.Zero).y) < 0.5f
             if (!atTopEdge) {
                 val inset = horizontalInset.toPx()
-                drawLine(color, Offset(inset, 0f), Offset(size.width - inset, 0f), 1.dp.toPx())
+                val y = if (inSheet) (-0.5).dp.toPx() else 0f
+                drawLine(color, Offset(inset, y), Offset(size.width - inset, y), 1.dp.toPx())
             }
         }
 }
@@ -92,6 +94,8 @@ fun GlasmioGroupedList(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
+    val sheetMaterial = LocalIosSheetMaterialContext.current
+    val sheetBackdrop = LocalIosSheetBackdrop.current
     val background = colors.elevatedBackground.copy(
         alpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f),
     )
@@ -104,7 +108,8 @@ fun GlasmioGroupedList(
                 if (framed) {
                     Modifier
                         .clip(shape)
-                        .background(background, shape)
+                        .then(if (sheetMaterial != null) Modifier.sheetCellBackground(sheetMaterial, sheetBackdrop, shape)
+                            else Modifier.background(background, shape))
                         .onGloballyPositioned { groupCoordinates.value = it }
                 } else {
                     Modifier
@@ -141,12 +146,13 @@ fun GlasmioListRow(
     titleAlignment: TextAlign = TextAlign.Start,
 ) {
     val colors = LocalGlassColors.current
+    val inSheet = LocalIosSheetMaterialContext.current != null
     Row(
         modifier
             .fillMaxWidth()
             .height(if (subtitle == null) 52.dp else 68.dp)
             .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = if (inSheet) 20.dp else 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         leading?.let {
@@ -164,20 +170,22 @@ fun GlasmioListRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text(
+                IosSheetText(
                     title,
                     modifier = Modifier.fillMaxWidth(),
                     style = IosTypography.body,
                     color = if (titleColor == Color.Unspecified) colors.content else titleColor,
+                    useMaterial = titleColor == Color.Unspecified,
                     textAlign = titleAlignment,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 subtitle?.let {
-                    Text(
+                    IosSheetText(
                         it,
                         style = IosTypography.subheadline,
                         color = colors.secondaryContent,
+                        role = IosSheetTextRole.Secondary,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -188,7 +196,8 @@ fun GlasmioListRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 detail?.let {
-                    Text(it, style = IosTypography.body, color = colors.secondaryContent, maxLines = 1)
+                    IosSheetText(it, style = IosTypography.body, color = colors.secondaryContent,
+                        role = IosSheetTextRole.Secondary, maxLines = 1)
                 }
                 trailing?.let { trailingContent ->
                     CompositionLocalProvider(
@@ -213,10 +222,11 @@ fun GlasmioSectionTitle(title: String, modifier: Modifier = Modifier) {
         modifier.fillMaxWidth().height(39.dp).padding(horizontal = 16.dp).padding(bottom = 9.dp),
         contentAlignment = Alignment.BottomStart,
     ) {
-        Text(
+        IosSheetText(
             title,
             style = IosTypography.body.copy(fontWeight = FontWeight(590)),
             color = LocalGlassColors.current.secondaryContent,
+            role = IosSheetTextRole.Secondary,
         )
     }
 }
@@ -224,11 +234,12 @@ fun GlasmioSectionTitle(title: String, modifier: Modifier = Modifier) {
 /** Figma 35:55757. The footer expands naturally when its explanatory text wraps. */
 @Composable
 fun GlasmioGroupedTableFooter(text: String, modifier: Modifier = Modifier) {
-    Text(
+    IosSheetText(
         text,
         modifier = modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 6.dp),
         style = IosTypography.body.copy(fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = GlasmioTheme.letterSpacing((-0.08).sp)),
         color = LocalGlassColors.current.secondaryContent,
+        role = IosSheetTextRole.Secondary,
     )
 }
 

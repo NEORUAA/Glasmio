@@ -142,7 +142,7 @@ val LocalGlassContentColor = staticCompositionLocalOf<Color?> { null }
 val LocalGroupedListIconColor = staticCompositionLocalOf<Color?> { null }
 val LocalGroupedListBackgroundAlpha = staticCompositionLocalOf { 1f }
 
-/** Shared grouped-list opacity used by every iOS sheet, including the player queue. */
+/** Legacy sheet-control tint. Native modal grouped cells use their rendering/vibrancy context. */
 const val SheetGroupedListBackgroundAlpha = 0.55f
 
 val LocalGlassDimensions = staticCompositionLocalOf { GlassDimensions() }

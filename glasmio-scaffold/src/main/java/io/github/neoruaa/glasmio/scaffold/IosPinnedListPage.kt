@@ -339,7 +339,7 @@ fun GlasmioPinnedPage(
     actionsSeparationProgress: Float? = null,
     collapseProgress: Float = 1f,
     backgroundColor: Color? = null,
-    topBarBlurProgress: Float = collapseProgress,
+    topBarBlurProgress: Float = 0f,
     backgroundBrush: Brush? = null,
     content: @Composable BoxScope.(PaddingValues) -> Unit,
 ) {

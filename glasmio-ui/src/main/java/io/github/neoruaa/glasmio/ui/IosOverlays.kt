@@ -10,45 +10,28 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.GraphicsLayerScope
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogWindowProvider
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.shadow.Shadow
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -72,77 +55,6 @@ fun GlasmioModalOverlay(
     Box(modifier.fillMaxSize().background(Color(0x3B29293A)), contentAlignment = Alignment.Center, content = content)
 }
 
-/** Figma node 10525:1632. The glass shell reaches behind system navigation. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Suppress("DEPRECATION")
-@Composable
-fun GlasmioBottomSheet(
-    onDismissRequest: () -> Unit,
-    modifier: Modifier = Modifier,
-    skipPartiallyExpanded: Boolean = true,
-    backdrop: Backdrop = LocalBlurBackdrop.current,
-    contentWindowInsets: @Composable () -> WindowInsets = { WindowInsets.statusBars },
-    sheetState: SheetState = rememberModalBottomSheetState(skipPartiallyExpanded = skipPartiallyExpanded),
-    contentNavigationBarInsets: @Composable () -> WindowInsets = { WindowInsets.navigationBars },
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    val animationScope = rememberCoroutineScope()
-    val interactiveHighlight = remember(animationScope) {
-        InteractiveHighlight(animationScope = animationScope)
-    }
-    ModalBottomSheet(
-        onDismissRequest = onDismissRequest,
-        sheetState = sheetState,
-        modifier = modifier.graphicsLayer {
-            clip = false
-            applyGlassDragScale(
-                pressProgress = interactiveHighlight.pressProgress,
-                offset = interactiveHighlight.offset,
-            )
-        },
-        containerColor = Color.Transparent,
-        contentColor = LocalGlassColors.current.content,
-        // Keep the host unclipped so drag-scale overshoot reaches the outer outline;
-        // GlasmioSheetSurface owns the visible rounded shape.
-        shape = RectangleShape,
-        dragHandle = null,
-        contentWindowInsets = contentWindowInsets,
-    ) {
-        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
-        SideEffect {
-            dialogWindow?.apply {
-                navigationBarColor = android.graphics.Color.TRANSPARENT
-                navigationBarDividerColor = android.graphics.Color.TRANSPARENT
-                isNavigationBarContrastEnforced = false
-            }
-        }
-        GlasmioSheetSurface(
-            modifier = Modifier.fillMaxWidth(),
-            backdrop = backdrop,
-            shape = GlasmioModalSheetShape,
-            interactiveHighlight = interactiveHighlight,
-            applyDragScale = false,
-        ) {
-            Column(
-                Modifier.fillMaxWidth().windowInsetsPadding(contentNavigationBarInsets()),
-            ) {
-                Box(
-                    Modifier.fillMaxWidth().height(16.dp),
-                    contentAlignment = Alignment.TopCenter,
-                ) {
-                    Box(
-                        Modifier
-                            .padding(top = 5.dp)
-                            .size(width = 58.dp, height = 4.dp)
-                            .background(LocalGlassColors.current.tertiaryContent.copy(alpha = 0.55f), Capsule()),
-                    )
-                }
-                content()
-            }
-        }
-    }
-}
-
 /** Figma large-sheet surface 10525:1640 in 10525:1632; inner rows remain ordinary content. */
 @Composable
 fun GlasmioSheetSurface(
@@ -151,11 +63,17 @@ fun GlasmioSheetSurface(
     shape: Shape = ContinuousRoundedRectangle(38.dp),
     interactiveHighlight: InteractiveHighlight? = null,
     applyDragScale: Boolean = true,
+    interactive: Boolean = true,
+    glassFraction: Float = 1f,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
-    val isLight = !colors.isDark
+    val inheritedMaterial = LocalIosSheetMaterialContext.current
+        ?: IosSheetMaterialContext(colors.isDark, if (glassFraction >= 0.5f) 1f else 0f)
+    val contentMaterial = if (appearance.usesBackdrop) inheritedMaterial else inheritedMaterial.opaque()
+    val materialBackdrop = rememberLayerBackdrop()
+    val glass = glassFraction.coerceIn(0f, 1f)
     val innerShadows = rememberNavigationInnerShadows(true)
     val animationScope = rememberCoroutineScope()
     val activeInteractiveHighlight = interactiveHighlight ?: remember(animationScope) {
@@ -174,7 +92,7 @@ fun GlasmioSheetSurface(
     } else {
         null
     }
-    // Sheet surfaces render inside dialog windows (ModalBottomSheet); the shared backdrop
+    // Modal sheet surfaces render in a separate dialog window; the shared backdrop
     // lives in the app window, so sample it with window-space coordinates. The library's
     // localPositionOf mapping cannot cross compose owners and silently sampled nothing.
     val backdropRenderer = if (appearance.usesBackdrop) {
@@ -197,18 +115,45 @@ fun GlasmioSheetSurface(
                     blurRadius = 0.dp,
                     appearance = appearance,
                     material = NavigationGlassMaterial.RegularLarge,
+                    exportedBackdrop = materialBackdrop,
                     pressProgressState = pressProgress,
-
+                    highlightAlphaMultiplier = glass,
+                    innerShadowAlpha = glass,
+                    preserveBackdropColors = true,
+                    // Android mapping calibrated against the physical regular/sheet backdrop.
+                    // This attenuates only the paint passes, preserving the native-sized optics.
+                    materialPaintAlpha = 0f,
+                    surfaceOverlay = {
+                        val systemBackground = if (colors.isDark) Color(0xFF1C1C1E) else Color.White
+                        if (!appearance.usesBackdrop) {
+                            drawRect(systemBackground)
+                        } else {
+                            if (colors.isDark) {
+                                drawRect(Color(0xFF111111).copy(alpha = 0.43f))
+                            } else {
+                                drawRect(Color.White.copy(alpha = 0.232f))
+                                drawRect(Color.White.copy(alpha = 0.065f), blendMode = BlendMode.Plus)
+                            }
+                            if (glass < 1f) drawRect(systemBackground.copy(alpha = 1f - glass))
+                        }
+                    },
                     layerBlock = sheetLayerBlock,
                 )
-                .then(activeInteractiveHighlight.modifier)
-                .then(activeInteractiveHighlight.gestureModifier),
+                .then(if (interactive) activeInteractiveHighlight.modifier else Modifier)
+                .then(if (interactive) activeInteractiveHighlight.gestureModifier else Modifier),
             content = {
                 CompositionLocalProvider(
                     LocalContentColor provides colors.content,
                     LocalGlassContentColor provides colors.content,
-                    LocalGroupedListBackgroundAlpha provides
-                        if (appearance.usesBackdrop) SheetGroupedListBackgroundAlpha else 1f,
+                    LocalGroupedListBackgroundAlpha provides SheetGroupedListBackgroundAlpha,
+                    LocalIosSheetMaterialContext provides contentMaterial,
+                    LocalIosSheetBackdrop provides materialBackdrop,
+                    LocalGlassColors provides colors.copy(
+                        groupedBackground = contentMaterial.tableColor,
+                        elevatedBackground = contentMaterial.cellColor,
+                        separator = contentMaterial.separatorColor,
+                        secondaryContent = contentMaterial.secondaryLabelColor,
+                    ),
                 ) {
                     content()
                 }

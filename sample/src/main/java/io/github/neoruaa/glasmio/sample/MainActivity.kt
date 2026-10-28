@@ -583,7 +583,7 @@ private fun SamplePinnedPage(
     val animatedCollapse = rememberGlasmioHeaderCollapse(state)
     val animatedEdge = rememberGlasmioHeaderScrollEdge(state)
     val collapseProgress = if (alwaysCompact) 1f else animatedCollapse
-    val edgeProgress = if (alwaysCompact) 1f else animatedEdge
+    val edgeProgress = animatedEdge
     val entry = LocalSampleHeaderEntry.current
     val currentCollapse = rememberUpdatedState(collapseProgress)
     val currentEdge = rememberUpdatedState(edgeProgress)
@@ -1356,12 +1356,13 @@ private fun MenusDemo(bottomPadding: Dp, dark: Boolean, onDark: (Boolean) -> Uni
     }
 }
 
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun SheetsDemo(layout: SamplePageLayout) {
     var sheet by rememberSaveable { mutableStateOf(false) }
     var actionSheet by rememberSaveable { mutableStateOf(false) }
     var checked by rememberSaveable { mutableStateOf(true) }
+    val sheetListState = rememberLazyListState()
+    val sheetEdgeProgress = rememberGlasmioHeaderScrollEdge(sheetListState)
     DemoList(layout) {
         item {
             GlasmioGroupedList {
@@ -1370,27 +1371,49 @@ private fun SheetsDemo(layout: SamplePageLayout) {
             }
         }
     }
-    if (sheet) {
-        GlasmioBottomSheet(onDismissRequest = { sheet = false }) {
+    GlasmioBottomSheet(
+        visible = sheet,
+        skipPartiallyExpanded = false,
+        onDismissRequest = { sheet = false },
+        topBarBlurProgress = sheetEdgeProgress,
+        topBar = {
             GlasmioSheetTopToolbar("Sheet", actions = {
                 GlasmioSheetToolbarButton(onClick = { sheet = false }) { SfIcon("xmark", "Close") }
             })
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                GlasmioGroupedList(framed = false) {
+        },
+    ) {
+        val sheetPadding = LocalGlasmioSheetContentPadding.current
+        Column(Modifier.fillMaxWidth().weight(1f).background(LocalGlassColors.current.groupedBackground)) {
+        LazyColumn(Modifier.fillMaxWidth().weight(1f), state = sheetListState, contentPadding = PaddingValues(
+            start = 16.dp, top = sheetPadding.calculateTopPadding() + 8.dp, end = 16.dp, bottom = 8.dp,
+        )) {
+            item {
+                GlasmioGroupedList {
                     GlasmioListRow("Notifications", showTopSeparator = false, trailing = { GlasmioSwitch(checked, { checked = it }) })
                     GlasmioListRow("Privacy", systemName = "lock", onClick = {})
+                    GlasmioListRow("Appearance", systemName = "circle.lefthalf.filled", onClick = {})
                 }
-                GlasmioButton(onClick = { sheet = false }, modifier = Modifier.fillMaxWidth(), emphasis = GlassEmphasis.Prominent, size = GlasmioButtonSize.Large) { Text("Done") }
+            }
+            item { Spacer(Modifier.height(24.dp)) }
+            item {
+                GlasmioGroupedList {
+                    repeat(20) { index ->
+                        GlasmioListRow("Item ${index + 1}", subtitle = if (index % 5 == 0) "Subtitle" else null,
+                            showTopSeparator = index > 0, onClick = {})
+                    }
+                }
             }
         }
+        Box(Modifier.fillMaxWidth().padding(bottom = sheetPadding.calculateBottomPadding()).padding(16.dp)) {
+            GlasmioButton(onClick = { sheet = false }, modifier = Modifier.fillMaxWidth(), emphasis = GlassEmphasis.Prominent, size = GlasmioButtonSize.Large) { Text("Done") }
+        }
+        }
     }
-    if (actionSheet) {
-        GlasmioBottomSheet(onDismissRequest = { actionSheet = false }) {
-            GlasmioActionSheetContent("Actions", message = "Choose an action") {
-                GlasmioListRow("Share", systemName = "square.and.arrow.up", showTopSeparator = false, onClick = { actionSheet = false })
-                GlasmioListRow("Duplicate", systemName = "plus.square.on.square", onClick = { actionSheet = false })
-                GlasmioListRow("Cancel", onClick = { actionSheet = false })
-            }
+    GlasmioBottomSheet(visible = actionSheet, fitContent = true, onDismissRequest = { actionSheet = false }) {
+        GlasmioActionSheetContent("Actions", message = "Choose an action") {
+            GlasmioListRow("Share", systemName = "square.and.arrow.up", showTopSeparator = false, onClick = { actionSheet = false })
+            GlasmioListRow("Duplicate", systemName = "plus.square.on.square", onClick = { actionSheet = false })
+            GlasmioListRow("Cancel", onClick = { actionSheet = false })
         }
     }
 }

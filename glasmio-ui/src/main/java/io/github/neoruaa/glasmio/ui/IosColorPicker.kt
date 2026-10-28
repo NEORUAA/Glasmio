@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -79,15 +80,23 @@ fun GlasmioColorPicker(
     title: String,
     labels: GlasmioColorPickerLabels = GlasmioColorPickerLabels(),
 ) {
-    if (!visible) return
     var mode by remember { mutableIntStateOf(0) }
     var opacity by remember { mutableFloatStateOf(selectedColor.alpha) }
     var color by remember { mutableStateOf(selectedColor) }
+    LaunchedEffect(visible) {
+        if (visible) {
+            mode = 0
+            color = selectedColor
+            opacity = selectedColor.alpha
+        }
+    }
     val previewColor = color.copy(alpha = 1f)
     val quickColors = listOf(0xFF34C759, 0xFFFFCC00, 0xFFFF8D28, 0xFFFF383C, 0xFFCB30E0, 0xFF0088FF, 0xFF6155F5, 0xFFFF2D55, 0xFFAC7F5E).map(::Color)
 
     GlasmioBottomSheet(
         onDismissRequest = onDismiss,
+        fitContent = true,
+        visible = visible,
     ) {
         Column(
             Modifier

@@ -54,7 +54,7 @@ data class GlasmioNavigationFrame(
 /** The getter reads the entry's own list/grid state, including when it is off screen. */
 class GlasmioHeaderScrollState(
     val collapseProgress: () -> Float,
-    val scrollEdgeProgress: () -> Float = collapseProgress,
+    val scrollEdgeProgress: () -> Float = { 0f },
 )
 data class GlasmioHeaderSpec(
     val title: String,
@@ -102,7 +102,7 @@ fun GlasmioNavigationScaffold(
         GlasmioBackdropProvider(backdrop) {
             val colors = LocalGlassColors.current
             val appearance = LocalGlassAppearance.current
-            val edge = owner.scrollState?.scrollEdgeProgress?.invoke() ?: 1f
+            val edge = owner.scrollState?.scrollEdgeProgress?.invoke() ?: 0f
             Box(Modifier.fillMaxWidth().height(status + 96.dp).graphicsLayer { alpha = edge.coerceIn(0f, 1f) }
                 .then(if (appearance.usesBackdrop) Modifier.drawPlainBackdrop(
                     backdrop, { RectangleShape }, effects = {

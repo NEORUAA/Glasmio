@@ -215,7 +215,8 @@ fun GlasmioTopBar(
     }
 }
 
-/** Compact toolbar used inside modal sheets. Sheet actions intentionally do not sample the
+/** Compact toolbar for the [GlasmioBottomSheet] topBar slot, which owns the progressive blur.
+ * Sheet actions intentionally do not sample the
  * content behind the sheet; they use the same grouped-list tint/alpha with the shared highlight
  * and drag physics instead. */
 @Composable

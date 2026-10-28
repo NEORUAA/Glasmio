@@ -21,7 +21,7 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Sheets and overlays | `GlasmioBottomSheet`, `GlasmioSheetSurface`, `GlasmioActionSheet`, `GlasmioActionSheetContent`, `GlasmioModalOverlay` |
 | Pages | `GlasmioScaffold`, `GlasmioListPage`, `GlasmioPinnedListPage`, `GlasmioPinnedPage`, `rememberGlasmioGridCollapseProgress`, `GlasmioOverscrollHost`, `Modifier.pullToRefreshRebound`, `rememberGlasmioAppBarScrollBehavior` |
 | Floating search | `GlasmioFloatingSearch`, `GlasmioFloatingSearchButton` |
-| Sheet motion | `GlasmioBottomSheetState`, `rememberGlasmioBottomSheetState`, `GlasmioSheetDefaults` |
+| Sheet motion | `GlasmioSheetState`, `rememberGlasmioSheetState`, `GlasmioSheetValue`; custom player containers retain `GlasmioBottomSheetState` and `GlasmioSheetDefaults` |
 | Preferences | `GlasmioPreferenceEntry`, `GlasmioSwitchPreference`, `GlasmioEditTextPreference`, `GlasmioListPreference`, `GlasmioEnumListPreference`, `GlasmioPreferenceGroupTitle` |
 | Icons | `SfIcon`, `SfSymbol`, `SfSymbolCatalog`, `GlasmioIcon`, `GlasmioIconProvider`, `GlasmioIconResolver` |
 
@@ -280,18 +280,39 @@ fun MenuScreen() = ExampleHost {
 
 ## Alerts and sheets
 
-`GlasmioAlertButtonSpec` carries the action, role, and enabled state. Keep `GlasmioAlertDialog` in composition and drive its `visible` state so the dialog remains mounted through its closing animation. `GlasmioBottomSheet` uses Material3's `SheetState`; the separate `GlasmioBottomSheetState` in Scaffold provides anchor-based motion for custom containers.
+`GlasmioAlertButtonSpec` carries the action, role, and enabled state. Keep alerts and sheets in composition and drive their `visible` state so the window and its backdrop remain mounted through dismissal.
+
+`GlasmioBottomSheet` owns its modal window, native-style detents, drag resistance, projected release and scroll handoff. Its `GlasmioSheetState` is independent of Material3. Enable medium and large with `skipPartiallyExpanded = false`; the default has only large. Medium is resolved from available height and safe areas, then the entire platter and its content are uniformly inset. Upward scrolling expands the sheet before scrolling its content. At large, content scrolling and its fling take over; dragging down at the content's top returns control to the sheet. Set `prefersScrollingExpandsWhenScrolledToEdge = false` to reserve expansion for direct dragging or state commands.
+
+The medium background is glass; the large background uses the system background color. Crossing the native full-height threshold retargets a separate background spring. `fitContent = true` presents a short action panel with floating insets. Insets include the IME by default and can be overridden through `contentWindowInsets` and `contentNavigationBarInsets`. See the [native sheet reference](ios-sheet-motion.md) for the recovered implementation and device measurements.
+
+Inside a sheet, grouped rows inherit UIKit's material context. Medium rows transform the sheet's exported backplate with the native vibrancy matrix; Large rows use opaque semantic colors. Labels and separators follow their own native color roles. Apply `GlasmioTheme.colors.groupedBackground` to the table's scroll container: it is transparent in the glass context and resolves to the elevated grouped-table canvas in Large. The sheet's own backing, the table canvas and its cells are separate layers.
+
+Put `GlasmioSheetTopToolbar` in the modal's `topBar` slot for a pinned progressive-blur header.
+Only the body is recorded into the header's backdrop, excluding the toolbar and grabber.
+The header uses the same 10dp progressive blur and tint as the page navigation header;
+Reduce Transparency replaces it with a solid canvas color. With this slot, content draws
+behind the handle, header and system navigation bar. Read `LocalGlasmioSheetContentPadding`:
+apply its top value to the list's **content padding**, and its bottom value inside the footer's
+background. Padding the whole list would prevent rows from scrolling beneath the header.
+Without `topBar`, the existing automatic handle/navigation insets remain unchanged.
+Header material starts clear by default. Supply the actual scroll edge through
+`topBarBlurProgress = rememberGlasmioHeaderScrollEdge(listState)`; compact titles
+do not imply an already visible blur. The same scroll-edge default applies to page
+and shared navigation headers.
+
+When migrating an explicit `sheetState`, replace `rememberModalBottomSheetState` with `rememberGlasmioSheetState` and Material3 `SheetValue` with `GlasmioSheetValue`. The new state's `show`, `hide`, `expand` and `partialExpand` are suspending commands. The separate `GlasmioBottomSheetState` in Scaffold retains its custom player/miniplayer contract.
 
 Alerts enter from 1.2× scale using UIKit's 404 ms critical spring and dismiss with a fade.
 The panel and dimming view share the timing; reopening during dismissal retains the current
 presentation. See the [native motion reference](alert-motion.md) for the recovered parameters.
 
 ```kotlin
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModalScreen() = ExampleHost {
     var alert by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(false) }
+    val detailsList = rememberLazyListState()
 
     Column(Modifier.safeDrawingPadding().padding(24.dp)) {
         GlasmioButton(onClick = { alert = true }) { Text("Show alert") }
@@ -307,10 +328,27 @@ fun ModalScreen() = ExampleHost {
             GlasmioAlertButtonSpec("Save", { alert = false }),
         ),
     )
-    if (sheet) {
-        GlasmioBottomSheet(onDismissRequest = { sheet = false }) {
-            GlasmioSheetTopToolbar(title = "Details")
-            Text("Sheet content", Modifier.padding(24.dp))
+    GlasmioBottomSheet(
+        visible = sheet,
+        skipPartiallyExpanded = false,
+        onDismissRequest = { sheet = false },
+        topBar = { GlasmioSheetTopToolbar(title = "Details") },
+        topBarBlurProgress = rememberGlasmioHeaderScrollEdge(detailsList),
+    ) {
+        val safePadding = LocalGlasmioSheetContentPadding.current
+        LazyColumn(
+            Modifier.fillMaxWidth().weight(1f).background(GlasmioTheme.colors.groupedBackground),
+            state = detailsList,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp,
+                top = safePadding.calculateTopPadding() + 8.dp,
+                bottom = safePadding.calculateBottomPadding() + 16.dp),
+        ) {
+            item {
+                GlasmioGroupedList {
+                    GlasmioListRow("Notifications", showTopSeparator = false)
+                    GlasmioListRow("Privacy", subtitle = "Details")
+                }
+            }
         }
     }
 }
