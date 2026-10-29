@@ -254,6 +254,20 @@ fun rememberBottomControlContactMember(
     lensSourceActive: (() -> Boolean)? = null,
     lensSourceScale: ((Size) -> Offset)? = null,
     lensSourcePressProgress: (() -> Float)? = null,
+): BottomControlContactMember? = rememberBottomControlContactMember(
+    visualBounds, materialPressProgress, highlight,
+    lensSourceActive, lensSourceScale, lensSourcePressProgress, sourceSize = null,
+)
+
+@Composable
+fun rememberBottomControlContactMember(
+    visualBounds: (Size) -> Rect,
+    materialPressProgress: () -> Float,
+    highlight: (Size) -> GlassPressHighlight,
+    lensSourceActive: (() -> Boolean)? = null,
+    lensSourceScale: ((Size) -> Offset)? = null,
+    lensSourcePressProgress: (() -> Float)? = null,
+    sourceSize: (() -> Size)?,
 ): BottomControlContactMember? {
     val contact = LocalBottomControlContact.current
     val currentActive = rememberUpdatedState(LocalBottomControlContactMemberActive.current)
@@ -263,11 +277,13 @@ fun rememberBottomControlContactMember(
     val currentLensSourceActive = rememberUpdatedState(lensSourceActive)
     val currentLensSourceScale = rememberUpdatedState(lensSourceScale)
     val currentLensSourcePress = rememberUpdatedState(lensSourcePressProgress)
+    val currentSourceSize = rememberUpdatedState(sourceSize)
     val member = remember(contact) {
         contact?.let {
             BottomControlContactMember(
                 it, currentActive, currentBounds, currentMaterialPress, currentHighlight,
                 currentLensSourceActive, currentLensSourceScale, currentLensSourcePress,
+                currentSourceSize,
             )
         }
     }
@@ -287,7 +303,20 @@ class BottomControlContactMember(
     private val lensSourceActive: State<(() -> Boolean)?>,
     private val lensSourceScale: State<((Size) -> Offset)?>,
     private val lensSourcePress: State<(() -> Float)?>,
+    private val sourceSize: State<(() -> Size)?>?,
 ) {
+    constructor(
+        contact: BottomControlContact,
+        active: State<() -> Boolean>,
+        visualBounds: State<(Size) -> Rect>,
+        materialPressProgress: State<() -> Float>,
+        highlight: State<(Size) -> GlassPressHighlight>,
+        lensSourceActive: State<(() -> Boolean)?>,
+        lensSourceScale: State<((Size) -> Offset)?>,
+        lensSourcePress: State<(() -> Float)?>,
+    ) : this(contact, active, visualBounds, materialPressProgress, highlight,
+        lensSourceActive, lensSourceScale, lensSourcePress, sourceSize = null)
+
     private var coordinates: LayoutCoordinates? = null
     private var bounds: Rect? by mutableStateOf(null)
 
@@ -295,7 +324,10 @@ class BottomControlContactMember(
     val sharesSurface: Boolean get() = contact.surface.value != null
 
     fun capsule(): LiquidContactCapsule? = if (!active.value()) null else bounds?.let {
-        LiquidContactCapsule(it.size, visualBounds.value(it.size).translate(it.topLeft))
+        // A resizing source can advance before its global layout registration. Keep
+        // that current source rectangle independent of the actual press transform.
+        LiquidContactCapsule(sourceSize?.value?.invoke() ?: it.size,
+            visualBounds.value(it.size).translate(it.topLeft))
     }
 
     fun needsLensSource(): Boolean = active.value() && lensSourceActive.value?.invoke() == true

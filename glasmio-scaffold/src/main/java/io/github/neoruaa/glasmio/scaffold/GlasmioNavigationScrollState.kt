@@ -18,6 +18,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.LocalDensity
@@ -269,8 +271,16 @@ private fun nativeNavigationSpring(response: Float) = spring<Float>(
  * Place this before the bar's bottom window-inset padding so the pivot uses its full allocation;
  * keep any application margin outside this modifier. It does not change layout or consume input.
  */
-fun Modifier.glasmioNavigationScrollHint(progress: State<Float>): Modifier = graphicsLayer {
+fun Modifier.glasmioNavigationScrollHint(progress: State<Float>): Modifier =
+    glasmioNavigationScrollHint(progress) { TransformOrigin.Center }
+
+/** Share UIKit's wrapper pivot when an accessory is hosted in a separate layout layer. */
+fun Modifier.glasmioNavigationScrollHint(
+    progress: State<Float>,
+    pivot: GraphicsLayerScope.() -> TransformOrigin,
+): Modifier = graphicsLayer {
     val scale = 1f - .05f * progress.value
     scaleX = scale
     scaleY = scale
+    transformOrigin = pivot()
 }

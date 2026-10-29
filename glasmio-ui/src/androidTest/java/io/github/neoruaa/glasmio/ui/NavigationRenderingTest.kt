@@ -3,6 +3,9 @@ package io.github.neoruaa.glasmio.ui
 import io.github.neoruaa.glasmio.glass.GlassSurfaceStyle
 import io.github.neoruaa.glasmio.glass.BottomNavigationContact
 import io.github.neoruaa.glasmio.glass.BottomControlContact
+import io.github.neoruaa.glasmio.glass.BottomControlContactMember
+import io.github.neoruaa.glasmio.glass.GlassPressHighlight
+import io.github.neoruaa.glasmio.glass.LiquidContactCapsule
 import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
@@ -52,6 +55,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -1769,6 +1774,189 @@ half4 main(half4 src, half4 dst) {
         } finally {
             compose.mainClock.autoAdvance = true
         }
+    }
+
+    @Test
+    fun compactNavigationMaterialRetainsCurrentCapsuleGeometry() {
+        val progress = mutableFloatStateOf(0f)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val background = Color(0xFF235578)
+        val failures = ArrayList<String>()
+        val drawReceipts = LinkedHashSet<String>()
+        var contact: BottomControlContact? = null
+        var retainedNavigationCoordinates: LayoutCoordinates? = null
+        var density = 1f
+        fun checkMaterial(image: ImageBitmap, capsule: LiquidContactCapsule, diagnostic: String) {
+            val pixels = image.toPixelMap()
+            fun difference(color: Color) = maxOf(abs(color.red - background.red),
+                abs(color.green - background.green), abs(color.blue - background.blue))
+            var error = 0f
+            var samples = 0
+            var maximumError = 0f
+            // At height ~50, (6, 4) is outside a true capsule and inside
+            // the narrow elliptical corner produced by an old wide source.
+            for (right in listOf(false, true)) for (bottom in listOf(false, true)) {
+                for (dy in -1..1) for (dx in -1..1) {
+                    val x = (if (right) capsule.bounds.right - 6f * density
+                        else capsule.bounds.left + 6f * density).roundToInt() + dx
+                    val y = (if (bottom) capsule.bounds.bottom - 4f * density
+                        else capsule.bounds.top + 4f * density).roundToInt() + dy
+                    val difference = difference(pixels[x, y])
+                    error += difference
+                    maximumError = maxOf(maximumError, difference)
+                    samples++
+                }
+            }
+            val meanError = error / samples
+            var bodyError = 0f
+            val center = capsule.bounds.center
+            for (dy in -1..1) for (dx in -1..1) {
+                bodyError += difference(pixels[center.x.roundToInt() + dx, center.y.roundToInt() + dy])
+            }
+            bodyError /= 9f
+            android.util.Log.i("GlasmioNavCapsule", "corners $diagnostic mean=$meanError max=$maximumError body=$bodyError")
+            if (meanError >= .08f || maximumError >= .15f) failures +=
+                "$diagnostic: native material fills capsule exterior, mean=$meanError max=$maximumError"
+            if (bodyError <= meanError + .03f) failures +=
+                "$diagnostic: native material body must remain visible, body=$bodyError exterior=$meanError"
+        }
+        compose.setContent {
+            density = LocalDensity.current.density
+            GlasmioTheme(isDark = false, appearance = GlassAppearance()) {
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    GlasmioBackdropHost(
+                        modifier = Modifier.requiredSize(300.dp, 192.dp).testTag("capsule-geometry-scene"),
+                        sampledContent = { Box(Modifier.fillMaxSize().background(background)) },
+                        overlayContent = { backdrop ->
+                            BottomNavigationContact(
+                                backdrop = backdrop,
+                                modifier = Modifier.align(Alignment.TopStart).padding(start = 12.dp, top = 16.dp)
+                                    .width(263.dp).testTag("capsule-geometry-navigation"),
+                            ) {
+                                val owner = requireNotNull(LocalBottomControlContact.current)
+                                SideEffect { contact = owner }
+                                GlasmioNavigationBar(
+                                    items = listOf(
+                                        GlasmioTabItem("home", "Home", SfSymbol.House), library,
+                                        GlasmioTabItem("favorites", "Favorites", SfSymbol.Heart),
+                                        GlasmioTabItem("settings", "Settings", SfSymbol.Gearshape),
+                                    ),
+                                    selectedKey = "home", onSelected = {}, onExpand = {},
+                                    compactProgress = progress, compactSize = 48.dp,
+                                    backdrop = backdrop, modifier = Modifier.weight(1f)
+                                        .onGloballyPositioned { retainedNavigationCoordinates = it },
+                                )
+                            }
+                            // Replay only the real shared material. The selection lens and
+                            // foreground glyphs must not masquerade as an outer contour error.
+                            Box(Modifier.align(Alignment.TopStart).offset(x = 12.dp, y = 112.dp)
+                                .size(263.dp, NavigationBarSurfaceHeight).testTag("capsule-geometry-material")
+                                .drawWithContent {
+                                    drawContent()
+                                    val phase = progress.floatValue
+                                    val layoutDirection = direction.value
+                                    contact?.let { owner ->
+                                        owner.members.firstOrNull()?.capsule()?.let { capsule ->
+                                            val radius = capsule.size.minDimension / 2f
+                                            val radii = Offset(radius * capsule.bounds.width / capsule.size.width,
+                                                radius * capsule.bounds.height / capsule.size.height)
+                                            val receipt = "draw direction=$layoutDirection p=$phase " +
+                                                "source=${capsule.size} bounds=${capsule.bounds} radii=$radii " +
+                                                "materialSize=${owner.materialBackdrop.graphicsLayer.size}"
+                                            if (drawReceipts.add(receipt)) android.util.Log.i("GlasmioNavCapsule", receipt)
+                                        }
+                                        drawLayer(owner.materialBackdrop.graphicsLayer)
+                                    }
+                                })
+                        },
+                    )
+                }
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        try {
+            val evidenceDirectory = java.io.File(
+                androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,
+                "navigation-capsule-geometry",
+            ).apply { mkdirs() }
+            listOf(LayoutDirection.Ltr, LayoutDirection.Rtl).forEach { layoutDirection ->
+                listOf(0f, .5f, .86f, .99f, 1f, .86f, .5f, 0f).forEachIndexed { index, phase ->
+                    compose.runOnIdle { direction.value = layoutDirection; progress.floatValue = phase }
+                    compose.mainClock.advanceTimeByFrame()
+                    compose.waitForIdle()
+                    val owner = requireNotNull(contact)
+                    val capsule = compose.runOnIdle { requireNotNull(owner.members.single().capsule()) }
+                    val radius = capsule.size.minDimension / 2f
+                    val radii = Offset(radius * capsule.bounds.width / capsule.size.width,
+                        radius * capsule.bounds.height / capsule.size.height)
+                    val diagnostic = "direction=$layoutDirection p=$phase source=${capsule.size} " +
+                        "bounds=${capsule.bounds} radii=$radii"
+                    android.util.Log.i("GlasmioNavCapsule", "fixed $diagnostic")
+                    if (abs(radii.x - radii.y) > density) failures += "$diagnostic: source ovalizes the capsule"
+                    val image = compose.onNodeWithTag("capsule-geometry-material").captureToImage()
+                    val evidence = java.io.File(evidenceDirectory, "${layoutDirection.name}-$index-$phase.png")
+                    evidence.outputStream().use {
+                        image.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                    }
+                    android.util.Log.i("GlasmioNavCapsule", "material=$evidence")
+                    if (phase >= .8f) {
+                        checkMaterial(image, capsule, diagnostic)
+                        // A shared material can measure before the surface's global callback.
+                        // Preserve the real expanded wrapper registration to exercise that
+                        // ordering without changing the native union's affine contract.
+                        val retained = compose.runOnIdle {
+                            owner.members.single().updateCoordinates(requireNotNull(retainedNavigationCoordinates))
+                            val retained = requireNotNull(owner.members.single().capsule())
+                            val retainedRadius = retained.size.minDimension / 2f
+                            val retainedRadii = Offset(
+                                retainedRadius * retained.bounds.width / retained.size.width,
+                                retainedRadius * retained.bounds.height / retained.size.height,
+                            )
+                            val retainedDiagnostic = "retained direction=$layoutDirection p=$phase " +
+                                "source=${retained.size} bounds=${retained.bounds} radii=$retainedRadii"
+                            android.util.Log.i("GlasmioNavCapsule", retainedDiagnostic)
+                            if (abs(retainedRadii.x - retainedRadii.y) > density) failures +=
+                                "$retainedDiagnostic: prior registration ovalizes the current capsule"
+                            retained
+                        }
+                        val retainedImage = compose.onNodeWithTag("capsule-geometry-material").captureToImage()
+                        val retainedEvidence = java.io.File(evidenceDirectory,
+                            "${layoutDirection.name}-$index-$phase-retained.png")
+                        retainedEvidence.outputStream().use {
+                            retainedImage.asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                        }
+                        android.util.Log.i("GlasmioNavCapsule", "retainedMaterial=$retainedEvidence")
+                        checkMaterial(retainedImage, retained, "retained $diagnostic")
+                    }
+                }
+            }
+            compose.runOnIdle {
+                val owner = requireNotNull(contact)
+                val coordinates = requireNotNull(retainedNavigationCoordinates)
+                val affine = BottomControlContactMember(
+                    contact = owner,
+                    active = mutableStateOf({ true }),
+                    visualBounds = mutableStateOf({ size: Size ->
+                        Rect(-.06f * size.width, .03f * size.height, 1.06f * size.width, .97f * size.height)
+                    }),
+                    materialPressProgress = mutableStateOf({ 0f }),
+                    highlight = mutableStateOf({ _: Size -> GlassPressHighlight() }),
+                    lensSourceActive = mutableStateOf(null), lensSourceScale = mutableStateOf(null),
+                    lensSourcePress = mutableStateOf(null),
+                )
+                affine.updateCoordinates(coordinates)
+                val capsule = requireNotNull(affine.capsule())
+                assertEquals(coordinates.size.width.toFloat(), capsule.size.width, 0f)
+                assertEquals(coordinates.size.height.toFloat(), capsule.size.height, 0f)
+                assertEquals("Default members retain horizontal press deformation",
+                    1.12f, capsule.bounds.width / capsule.size.width, .0001f)
+                assertEquals("Default members retain vertical press deformation",
+                    .94f, capsule.bounds.height / capsule.size.height, .0001f)
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        assertTrue("Current capsule geometry/material failures:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
 
     @Test

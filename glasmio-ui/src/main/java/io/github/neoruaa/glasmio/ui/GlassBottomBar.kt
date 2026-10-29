@@ -107,6 +107,12 @@ private data class StableGlassTabItems<T>(
     val values: List<GlasmioTabItem<T>>,
 )
 
+private data class NavigationSurfaceGeometry(
+    val layoutSize: Size,
+    val visualSize: Size,
+    val compactInset: Float,
+)
+
 internal val LocalLiquidTabScale = staticCompositionLocalOf { { 1f } }
 
 /** Shared compact icon endpoint for the bottom navigation and its adjacent search control. */
@@ -319,19 +325,41 @@ fun <T> GlasmioNavigationBar(
         val fullWidthPx = constraints.maxWidth.toFloat()
         val compactWidthPx = with(density) { compactSize.toPx() }
         val compactInsetPx = with(density) { (NavigationBarSurfaceHeight - compactSize).toPx() / 2f }
+        val expandedHeightPx = with(density) { NavigationBarSurfaceHeight.toPx() }
+        val surfaceGeometry = remember(
+            compactProgress, fullWidthPx, compactWidthPx, expandedHeightPx, compactInsetPx, density, compactSize,
+        ) {
+            derivedStateOf {
+                val progress = compactProgress.value
+                val layoutProgress = progress.coerceIn(0f, 1f)
+                NavigationSurfaceGeometry(
+                    layoutSize = Size(
+                        lerp(fullWidthPx, compactWidthPx, layoutProgress),
+                        with(density) {
+                            androidx.compose.ui.unit.lerp(NavigationBarSurfaceHeight, compactSize, layoutProgress).toPx()
+                        },
+                    ),
+                    visualSize = Size(
+                        lerp(fullWidthPx, compactWidthPx, progress).coerceAtLeast(1f),
+                        lerp(expandedHeightPx, compactWidthPx, progress).coerceAtLeast(1f),
+                    ),
+                    compactInset = compactInsetPx * progress,
+                )
+            }
+        }
         val indicatorSettled by remember(compactState) {
             derivedStateOf { compactState.value >= 1f }
         }
         // Geometry changes belong to measurement. Do not rebuild the tab/source/effect
         // compositions on every spring frame just to update their width and height.
-        val surfaceSizeModifier = remember(compactState, fullWidthPx, compactWidthPx, compactSize) {
+        val surfaceSizeModifier = remember(surfaceGeometry) {
             Modifier.layout { measurable, constraints ->
-                val progress = compactState.value
+                val size = surfaceGeometry.value.layoutSize
                 val width = constraints.constrainWidth(
-                    morphSurfaceWidthPx(fullWidthPx, compactWidthPx, progress).roundToInt(),
+                    size.width.roundToInt(),
                 )
                 val height = constraints.constrainHeight(
-                    androidx.compose.ui.unit.lerp(NavigationBarSurfaceHeight, compactSize, progress).roundToPx(),
+                    size.height.roundToInt(),
                 )
                 val placeable = measurable.measure(androidx.compose.ui.unit.Constraints.fixed(width, height))
                 layout(width, height) { placeable.placeRelative(0, 0) }
@@ -477,16 +505,14 @@ fun <T> GlasmioNavigationBar(
                 },
             )
         }
-        val commonTransform = remember(density, fullWidthPx, compactWidthPx, compactInsetPx, compactProgress, isLtr) {
+        val commonTransform = remember(surfaceGeometry, fullWidthPx, isLtr) {
             Modifier.graphicsLayer {
-                val progress = compactProgress.value
+                val geometry = surfaceGeometry.value
                 val fraction = (offsetAnimation.value / fullWidthPx).fastCoerceIn(-1f, 1f)
-                val physicalWidth = lerp(fullWidthPx, compactWidthPx, progress).coerceAtLeast(1f)
-                val physicalHeight = lerp(NavigationBarSurfaceHeight.toPx(), compactSize.toPx(), progress).coerceAtLeast(1f)
-                translationX = compactInsetPx * progress * if (isLtr) 1f else -1f
+                translationX = geometry.compactInset * if (isLtr) 1f else -1f
                 translationX += paddingPx * fraction.sign * EaseOut.transform(abs(fraction))
-                scaleX = physicalWidth / size.width.coerceAtLeast(1f)
-                scaleY = physicalHeight / size.height.coerceAtLeast(1f)
+                scaleX = geometry.visualSize.width / size.width.coerceAtLeast(1f)
+                scaleY = geometry.visualSize.height / size.height.coerceAtLeast(1f)
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
                     if (isLtr) 0f else 1f,
                     0.5f,
@@ -574,18 +600,15 @@ fun <T> GlasmioNavigationBar(
         }
         val navigationSurfaceSize = remember { mutableStateOf(Size.Zero) }
         val navigationVisualBounds: (Size) -> Rect = remember(
-            panelPressScale, compactProgress, fullWidthPx, compactWidthPx, density,
-            compactSize, compactInsetPx, isLtr, offsetAnimation, paddingPx,
+            panelPressScale, surfaceGeometry, fullWidthPx, isLtr, offsetAnimation, paddingPx,
         ) {
             { size ->
                 val scale = panelPressScale.value
-                val progress = compactProgress.value
-                val physicalWidth = lerp(fullWidthPx, compactWidthPx, progress).coerceAtLeast(1f)
-                val physicalHeight = with(density) {
-                    lerp(NavigationBarSurfaceHeight.toPx(), compactSize.toPx(), progress).coerceAtLeast(1f)
-                }
+                val geometry = surfaceGeometry.value
+                val physicalWidth = geometry.visualSize.width
+                val physicalHeight = geometry.visualSize.height
                 val fraction = (offsetAnimation.value / fullWidthPx).fastCoerceIn(-1f, 1f)
-                val inset = compactInsetPx * progress
+                val inset = geometry.compactInset
                 val left = if (isLtr) inset else size.width - physicalWidth - inset
                 val offset = paddingPx * fraction.sign * EaseOut.transform(abs(fraction))
                 val centerX = left + physicalWidth / 2f + offset
@@ -600,6 +623,7 @@ fun <T> GlasmioNavigationBar(
         val contactMember = rememberBottomControlContactMember(
             materialPressProgress = { pressProgressState.value },
             visualBounds = navigationVisualBounds,
+            sourceSize = { surfaceGeometry.value.visualSize },
             highlight = { size ->
                 val position = interactiveHighlight.highlightPosition(size)
                 GlassPressHighlight(
