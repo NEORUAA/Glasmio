@@ -22,7 +22,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -155,19 +154,27 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val initialPreferences = DemoPreferences.load(this,
+            (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)
+        appDarkAppearance = initialPreferences.dark
+        io.github.neoruaa.glasmio.glass.render.configureGlassDynamicRange(window, initialPreferences.hdrOutput)
         val systemBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { resources ->
             appDarkAppearance ?: ((resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES)
         }
         enableEdgeToEdge(statusBarStyle = systemBarStyle, navigationBarStyle = systemBarStyle)
         setContent {
-            val systemDark = isSystemInDarkTheme()
-            var dark by rememberSaveable { mutableStateOf(systemDark) }
-            var reduceTransparency by rememberSaveable { mutableStateOf(false) }
-            LaunchedEffect(reduceTransparency) {
-                withFrameNanos { }
-                io.github.neoruaa.glasmio.glass.render.configureGlassDynamicRange(window, !reduceTransparency)
+            // Persistent host settings take precedence over an old saved-instance snapshot.
+            var preferences by remember { mutableStateOf(initialPreferences) }
+            fun updatePreferences(next: DemoPreferences) {
+                if (next == preferences) return
+                val outputChanged = next.hdrOutput != preferences.hdrOutput
+                next.save(applicationContext)
+                preferences = next
+                if (outputChanged) recreate()
             }
-            var rtl by rememberSaveable { mutableStateOf(false) }
+            val dark = preferences.dark
+            val reduceTransparency = preferences.reduceTransparency
+            val rtl = preferences.rtl
             val context = LocalContext.current.applicationContext
             val fontResolver = LocalFontFamilyResolver.current
             val assets by produceState<SampleAssets?>(null, context, fontResolver) {
@@ -206,7 +213,20 @@ class MainActivity : ComponentActivity() {
                             LocalSampleAssets provides loadedAssets,
                             LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr,
                         ) {
-                            SampleNavigation(dark, { dark = it }, reduceTransparency, { reduceTransparency = it }, rtl, { rtl = it })
+                            Box(Modifier.fillMaxSize()) {
+                                SampleNavigation(
+                                    dark, { updatePreferences(preferences.copy(dark = it)) },
+                                    reduceTransparency, { updatePreferences(preferences.copy(reduceTransparency = it)) },
+                                    rtl, { updatePreferences(preferences.copy(rtl = it)) },
+                                    preferences.hdrEffects, { updatePreferences(preferences.copy(hdrEffects = it)) },
+                                    preferences.fpsCounter, { updatePreferences(preferences.copy(fpsCounter = it)) },
+                                    preferences.separateNavigationItem, { updatePreferences(preferences.copy(separateNavigationItem = it)) },
+                                )
+                                if (preferences.fpsCounter) DemoFpsCounter(
+                                    Modifier.align(Alignment.TopEnd).statusBarsPadding()
+                                        .padding(top = 70.dp, end = 12.dp).testTag("demo-fps-counter"),
+                                )
+                            }
                         }
                     }
                 }
@@ -299,6 +319,12 @@ private fun SampleNavigation(
     onReduceTransparency: (Boolean) -> Unit,
     rtl: Boolean,
     onRtl: (Boolean) -> Unit,
+    hdrEffects: Boolean,
+    onHdrEffects: (Boolean) -> Unit,
+    fpsCounter: Boolean,
+    onFpsCounter: (Boolean) -> Unit,
+    detachTrailingItem: Boolean,
+    onDetachTrailingItem: (Boolean) -> Unit,
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val navigationDensity = LocalDensity.current.density
@@ -312,9 +338,6 @@ private fun SampleNavigation(
     val rootListStates = remember(homeListState, materialsListState, settingsListState, aboutListState) {
         mapOf("Home" to homeListState, "MaterialTab" to materialsListState, "SettingsTab" to settingsListState, "About" to aboutListState)
     }
-    var preferenceName by rememberSaveable { mutableStateOf("Glasmio") }
-    var preferenceChoice by rememberSaveable { mutableStateOf("System") }
-    var detachTrailingItem by rememberSaveable { mutableStateOf(true) }
     var searchQuery by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     var searchSourceBounds by remember { mutableStateOf<Rect?>(null) }
     val currentRoute = rememberUpdatedState(backStack.lastOrNull()?.sampleRouteName())
@@ -330,9 +353,12 @@ private fun SampleNavigation(
     val currentOnReduceTransparency by rememberUpdatedState(onReduceTransparency)
     val currentRtl by rememberUpdatedState(rtl)
     val currentOnRtl by rememberUpdatedState(onRtl)
-    val currentPreferenceName by rememberUpdatedState(preferenceName)
-    val currentPreferenceChoice by rememberUpdatedState(preferenceChoice)
+    val currentHdrEffects by rememberUpdatedState(hdrEffects)
+    val currentOnHdrEffects by rememberUpdatedState(onHdrEffects)
+    val currentFpsCounter by rememberUpdatedState(fpsCounter)
+    val currentOnFpsCounter by rememberUpdatedState(onFpsCounter)
     val currentDetachTrailingItem by rememberUpdatedState(detachTrailingItem)
+    val currentOnDetachTrailingItem by rememberUpdatedState(onDetachTrailingItem)
     val navigate: (String) -> Unit = { route ->
         if (backStack.lastOrNull()?.sampleRouteName() != route) {
             backStack.add(sampleEntryKey(route))
@@ -478,12 +504,12 @@ private fun SampleNavigation(
                                                                 "MaterialTab", "Materials" -> MaterialsDemo(layout, navigate)
                                                                 "Controls" -> ControlsDemo(layout)
                                                                 "Navigation" -> NavigationDemo(layout)
-                                                                "Preferences", "SettingsTab" -> PreferencesDemo(
+                                                                "SettingsTab" -> DemoSettings(
                                                                     layout, currentDark, currentOnDark, currentReduceTransparency,
                                                                     currentOnReduceTransparency, currentRtl, currentOnRtl,
-                                                                    currentDetachTrailingItem, { detachTrailingItem = it },
-                                                                    currentPreferenceName, { preferenceName = it },
-                                                                    currentPreferenceChoice, { preferenceChoice = it },
+                                                                    currentDetachTrailingItem, currentOnDetachTrailingItem,
+                                                                    currentHdrEffects, currentOnHdrEffects,
+                                                                    currentFpsCounter, currentOnFpsCounter,
                                                                 )
                                                                 "Search" -> SearchLanding(layout, navigate)
                                                                 "Text Styles and Dynamic Type" -> TypographyDemo(layout.listState, layout.padding) {
@@ -911,6 +937,9 @@ private fun ControlsDemo(layout: SamplePageLayout) {
     var groupedAdaptivePosition by rememberSaveable { mutableFloatStateOf(.4f) }
     var color by remember { mutableStateOf(Color(0xFF0088FF)) }
     var colorPicker by rememberSaveable { mutableStateOf(false) }
+    var preferenceChecked by rememberSaveable { mutableStateOf(false) }
+    var preferenceName by rememberSaveable { mutableStateOf("Glasmio") }
+    var preferenceChoice by rememberSaveable { mutableStateOf("System") }
     DemoList(layout) {
         item {
             GlasmioGroupedList {
@@ -1039,6 +1068,21 @@ private fun ControlsDemo(layout: SamplePageLayout) {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GlasmioButton(onClick = {}, size = GlasmioButtonSize.Large, destructive = true, enabled = enabled) { Text("Delete") }
                     GlasmioButton(onClick = {}, size = GlasmioButtonSize.Large, emphasis = GlassEmphasis.Prominent, destructive = true, enabled = enabled) { Text("Delete") }
+                }
+            }
+        }
+        item {
+            Section("Preference Rows") {
+                GlasmioGroupedList {
+                    GlasmioSwitchPreference(title = { Text("Switch Preference") }, checked = preferenceChecked,
+                        onCheckedChange = { preferenceChecked = it }, isEnabled = enabled, showTopSeparator = false)
+                    GlasmioEditTextPreference(title = { Text("Name") }, value = preferenceName,
+                        onValueChange = { preferenceName = it }, isEnabled = enabled)
+                    GlasmioListPreference(title = { Text("Appearance Choice") }, selectedValue = preferenceChoice,
+                        values = listOf("System", "Light", "Dark"), valueText = { it },
+                        onValueSelected = { preferenceChoice = it }, isEnabled = enabled)
+                    GlasmioSwitchPreference(title = { Text("Disabled Preference") }, checked = true,
+                        onCheckedChange = {}, isEnabled = false)
                 }
             }
         }
@@ -1299,7 +1343,7 @@ private fun ListDemo() {
 }
 
 @Composable
-private fun PreferencesDemo(
+private fun DemoSettings(
     layout: SamplePageLayout,
     dark: Boolean,
     onDark: (Boolean) -> Unit,
@@ -1309,10 +1353,10 @@ private fun PreferencesDemo(
     onRtl: (Boolean) -> Unit,
     detachTrailingItem: Boolean,
     onDetachTrailingItem: (Boolean) -> Unit,
-    name: String,
-    onNameChange: (String) -> Unit,
-    choice: String,
-    onChoiceChange: (String) -> Unit,
+    hdrEffects: Boolean,
+    onHdrEffects: (Boolean) -> Unit,
+    fpsCounter: Boolean,
+    onFpsCounter: (Boolean) -> Unit,
 ) {
     DemoList(layout) {
         item {
@@ -1323,15 +1367,26 @@ private fun PreferencesDemo(
                     GlasmioGroupedList {
                         GlasmioSwitchPreference(title = { Text("Dark Appearance") }, checked = dark, onCheckedChange = onDark, showTopSeparator = false)
                         GlasmioSwitchPreference(title = { Text("Reduce Transparency") }, checked = reduceTransparency, onCheckedChange = onReduceTransparency, showTopSeparator = true)
-                        GlasmioSwitchPreference(title = { Text("Right to Left") }, checked = rtl, onCheckedChange = onRtl, showTopSeparator = true)
+                        GlasmioSwitchPreference(
+                            modifier = Modifier.testTag("settings-hdr-effects"),
+                            title = { Text("HDR Effects") }, checked = hdrEffects, onCheckedChange = onHdrEffects,
+                            isEnabled = !reduceTransparency, showTopSeparator = true,
+                        )
                     }
                 }
-                Section("Preferences") {
+                Section("Layout") {
                     GlasmioGroupedList {
-                        GlasmioSwitchPreference(title = { Text("Separate Navigation Item") }, checked = detachTrailingItem, onCheckedChange = onDetachTrailingItem, showTopSeparator = false)
-                        GlasmioEditTextPreference(title = { Text("Name") }, value = name, onValueChange = onNameChange, showTopSeparator = true)
-                        GlasmioListPreference(title = { Text("Appearance") }, selectedValue = choice, values = listOf("System", "Light", "Dark"), valueText = { it }, onValueSelected = onChoiceChange, showTopSeparator = true)
-                        GlasmioSwitchPreference(title = { Text("Disabled Preference") }, checked = true, onCheckedChange = {}, isEnabled = false, showTopSeparator = true)
+                        GlasmioSwitchPreference(title = { Text("Right to Left") }, checked = rtl, onCheckedChange = onRtl, showTopSeparator = false)
+                        GlasmioSwitchPreference(title = { Text("Separate Navigation Item") }, checked = detachTrailingItem, onCheckedChange = onDetachTrailingItem, showTopSeparator = true)
+                    }
+                }
+                Section("Diagnostics") {
+                    GlasmioGroupedList {
+                        GlasmioSwitchPreference(
+                            modifier = Modifier.testTag("settings-fps-counter"),
+                            title = { Text("FPS Counter") }, checked = fpsCounter, onCheckedChange = onFpsCounter,
+                            showTopSeparator = false,
+                        )
                     }
                 }
             }

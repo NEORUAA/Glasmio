@@ -1761,6 +1761,107 @@ class SampleNavigationBehaviorTest {
     }
 
 
+    @Test fun settingsControlDemoOptionsAndKeepPreferenceExamplesInControls() {
+        awaitSampleHome()
+        val context = rule.activity.applicationContext
+        val systemDark = (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val initial = DemoPreferences.load(context, systemDark)
+        val toggle = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch)
+        fun option(tag: String) = rule.onNode(toggle and hasAnyAncestor(hasTestTag(tag)), useUnmergedTree = true)
+        fun awaitSettings(previous: MainActivity? = null) {
+            rule.waitUntil(30_000) {
+                runCatching {
+                    (previous == null || rule.activity !== previous) &&
+                        rule.onAllNodesWithTag("settings-hdr-effects")
+                            .fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1 &&
+                        rule.onAllNodes(tab and hasContentDescription("Settings") and isSelected())
+                            .fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1
+                }.getOrDefault(false)
+            }
+        }
+        try {
+            DemoPreferences(dark = false).save(context)
+            rule.activityRule.scenario.recreate()
+            awaitSampleHome()
+            rule.activityRule.scenario.onActivity {
+                assertEquals(android.content.pm.ActivityInfo.COLOR_MODE_DEFAULT, it.window.colorMode)
+            }
+            rule.onNodeWithTag("demo-fps-counter").assertDoesNotExist()
+            rule.onNode(tab and hasContentDescription("Settings")).performClick().assertIsSelected()
+            awaitSettings()
+            option("settings-hdr-effects").assertIsOff()
+            option("settings-fps-counter").assertIsOff()
+            rule.onNodeWithText("Disabled Preference").assertDoesNotExist()
+            rule.onNodeWithText("Name").assertDoesNotExist()
+            rule.onNodeWithText("Dark Appearance").performClick()
+            rule.onNodeWithText("Right to Left").performScrollTo().performClick()
+            rule.onNodeWithText("Separate Navigation Item").performScrollTo().performClick()
+            val beforeHdr = rule.activity
+            rule.onNodeWithTag("settings-hdr-effects").performScrollTo().performClick()
+            awaitSettings(beforeHdr)
+            option("settings-hdr-effects").assertIsOn()
+
+            val beforeReduce = rule.activity
+            rule.onNodeWithText("Reduce Transparency").performScrollTo().performClick()
+            awaitSettings(beforeReduce)
+            option("settings-hdr-effects").assertIsOn().assertIsNotEnabled()
+            rule.activityRule.scenario.onActivity {
+                assertEquals(android.content.pm.ActivityInfo.COLOR_MODE_DEFAULT, it.window.colorMode)
+            }
+            assertEquals(DemoPreferences(dark = true, reduceTransparency = true, hdrEffects = true,
+                rtl = true, separateNavigationItem = false), DemoPreferences.load(context, systemDark = false))
+            val beforeRestore = rule.activity
+            rule.onNodeWithText("Reduce Transparency").performScrollTo().performClick()
+            awaitSettings(beforeRestore)
+            option("settings-hdr-effects").assertIsEnabled().assertIsOn()
+            rule.onNodeWithTag("settings-fps-counter").performScrollTo().performClick()
+            option("settings-fps-counter").assertIsOn()
+            rule.onNodeWithTag("demo-fps-counter").assertIsDisplayed()
+            assertEquals(DemoPreferences(dark = true, hdrEffects = true, fpsCounter = true,
+                rtl = true, separateNavigationItem = false), DemoPreferences.load(context, systemDark = false))
+
+            rule.activityRule.scenario.recreate()
+            awaitSettings()
+            option("settings-hdr-effects").assertIsOn()
+            option("settings-fps-counter").assertIsOn()
+            rule.onNodeWithTag("demo-fps-counter").assertIsDisplayed()
+            rule.onNodeWithTag("settings-fps-counter").performScrollTo().performClick()
+            rule.onNodeWithTag("demo-fps-counter").assertDoesNotExist()
+            val beforeSdr = rule.activity
+            rule.onNodeWithTag("settings-hdr-effects").performScrollTo().performClick()
+            awaitSettings(beforeSdr)
+            option("settings-hdr-effects").assertIsOff()
+            rule.activityRule.scenario.onActivity {
+                assertEquals(android.content.pm.ActivityInfo.COLOR_MODE_DEFAULT, it.window.colorMode)
+            }
+            if (rule.onAllNodes(tab).fetchSemanticsNodes().size < 5) {
+                rule.onNode(tab and hasContentDescription("Settings")).performClick()
+                rule.waitUntil(10_000) { rule.onAllNodes(tab).fetchSemanticsNodes().size == 5 }
+            }
+            rule.onNode(tab and hasContentDescription("Home")).performClick().assertIsSelected()
+            rule.onNodeWithText("Preferences").assertDoesNotExist()
+            rule.onNodeWithText("Controls").performScrollTo().performClick()
+            awaitDisplayed(hasText("Enabled"))
+            val scrollable = hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
+            rule.onNode(scrollable).performScrollToNode(hasText("Preference Rows"))
+            rule.onNodeWithText("Preference Rows").assertIsDisplayed()
+            rule.onNode(scrollable).performScrollToNode(hasText("Switch Preference"))
+            rule.onNodeWithText("Switch Preference").assertIsDisplayed()
+            rule.onNode(scrollable).performScrollToNode(hasText("Name"))
+            rule.onNodeWithText("Name").assertIsDisplayed()
+            rule.onNode(scrollable).performScrollToNode(hasText("Appearance Choice"))
+            rule.onNodeWithText("Appearance Choice").assertIsDisplayed()
+            rule.onNode(scrollable).performScrollToNode(hasText("Disabled Preference"))
+            rule.onNodeWithText("Disabled Preference").assertIsDisplayed().assertIsNotEnabled()
+            rule.onNodeWithText("HDR Effects").assertDoesNotExist()
+            rule.onNodeWithText("FPS Counter").assertDoesNotExist()
+        } finally {
+            initial.save(context)
+            rule.activityRule.scenario.recreate()
+        }
+    }
+
     @Test fun settingsScrollShowsTheCenteredTitleAndSurvivesRootTabSwitches() {
         awaitSampleHome()
         rule.onNode(tab and hasContentDescription("Settings")).performClick().assertIsSelected()
