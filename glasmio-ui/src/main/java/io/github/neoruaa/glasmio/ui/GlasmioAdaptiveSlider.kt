@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -220,14 +221,18 @@ private fun <T> AdaptiveSegmentedRenderer(
         }
         previousValue = actualValue
     }
-    LaunchedEffect(selectedIndex, enabled, hiddenItems) { if (!enabled) { childPreview = null; dragKind = 0; scale.target(1f) } }
+    LaunchedEffect(selectedIndex, enabled, hiddenItems) {
+        if (!enabled) { childPreview = null; dragKind = 0; scale.target(1f) }
+        if (selectedIndex >= 0 && selectedIndex != adaptiveIndex) {
+            if (ordinaryOpacity.value < .001f) position.snap(selectedIndex.toFloat())
+            else position.target(selectedIndex.toFloat())
+        }
+    }
     SideEffect {
         expansion.target(if (expanded) 1f else 0f)
         items.forEach { (key, _) -> visibility.getValue(key).target(if (key in hiddenItems) 0f else 1f) }
         if (selectedIndex >= 0 && selectedIndex != adaptiveIndex) {
-            if (ordinaryOpacity.target == 0f && ordinaryOpacity.value < .001f) position.snap(selectedIndex.toFloat())
             lastOrdinaryIndex = selectedIndex
-            position.target(selectedIndex.toFloat())
         }
         ordinaryOpacity.target(if (selectedIndex >= 0 && selectedIndex != adaptiveIndex) 1f else 0f)
         if (dragKind != 1) (childPreview ?: actualValue)?.let { child.target(it) }
@@ -337,6 +342,20 @@ private fun <T> AdaptiveSegmentedRenderer(
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val initialIndex = indexAt(logical(down.position.x))
                             val childGesture = initialIndex == currentAdaptiveIndex && currentExpanded
+                            val modeGesture = !standalone && !currentExpanded && initialIndex == currentSelectedIndex
+                            val modeStartCenter = currentGeometry.cells[initialIndex].center
+                            var modeTarget = initialIndex
+                            fun updateMode(x: Float) {
+                                val center = modeStartCenter + logical(x) - logical(down.position.x)
+                                val visible = currentItems.indices.filter { currentItems[it].first !in currentHidden }
+                                val before = visible.lastOrNull { currentGeometry.cells[it].center <= center } ?: visible.first()
+                                val after = visible.firstOrNull { currentGeometry.cells[it].center >= center } ?: visible.last()
+                                val startCenter = currentGeometry.cells[before].center
+                                val endCenter = currentGeometry.cells[after].center
+                                val progress = if (before == after) 0f else ((center - startCenter) / (endCenter - startCenter)).coerceIn(0f, 1f)
+                                position.snap(lerp(before.toFloat(), after.toFloat(), progress))
+                                modeTarget = indexAt(center)
+                            }
                             var lastX = down.position.x
                             var vertical = false
                             var exceededSlop = false
@@ -355,6 +374,11 @@ private fun <T> AdaptiveSegmentedRenderer(
                                             val target = neighborAt(logical(change.position.x))
                                             if (target == null) updateChild(change.position.x)
                                             else { routedMode = target; submitMode(target) }
+                                        } else if (currentEnabled && modeGesture) {
+                                            change.consume()
+                                            dragKind = 2
+                                            lastX = change.position.x
+                                            updateMode(lastX)
                                         }
                                     } else vertical = true
                                 }
@@ -362,7 +386,8 @@ private fun <T> AdaptiveSegmentedRenderer(
                                     val ended = drag(start.id) { change ->
                                         change.consume()
                                         lastX = change.position.x
-                                        if (routedMode == null && currentExpanded && currentAdaptiveEnabled) {
+                                        if (dragKind == 2) updateMode(lastX)
+                                        else if (routedMode == null && currentExpanded && currentAdaptiveEnabled) {
                                             val target = neighborAt(logical(change.position.x))
                                             if (target == null) updateChild(change.position.x)
                                             else if (routedMode != target) { routedMode = target; submitMode(target) }
@@ -371,7 +396,10 @@ private fun <T> AdaptiveSegmentedRenderer(
                                     if (ended) {
                                         lastX = currentEvent.changes.firstOrNull { !it.pressed }?.position?.x ?: lastX
                                         currentEvent.changes.forEach { if (!it.pressed) it.consume() }
-                                        if (routedMode == null && currentExpanded && currentAdaptiveEnabled) {
+                                        if (dragKind == 2) {
+                                            updateMode(lastX)
+                                            submitMode(modeTarget)
+                                        } else if (routedMode == null && currentExpanded && currentAdaptiveEnabled) {
                                             updateChild(lastX)
                                             submitChild(draft.coerceIn(0f, 1f))
                                         }
@@ -391,8 +419,13 @@ private fun <T> AdaptiveSegmentedRenderer(
                                     }
                                 }
                             } finally {
+                                val modeDrag = dragKind == 2
                                 dragKind = 0
                                 scale.target(1f)
+                                if (modeDrag) {
+                                    val resting = if (completed && !currentDefer) modeTarget else currentSelectedIndex
+                                    if (resting >= 0) position.target(resting.toFloat(), AdaptiveReleaseSpring)
+                                }
                                 if (!currentDefer && completed && childGesture && routedMode == null && currentAdaptiveEnabled)
                                     child.target(draft.coerceIn(0f, 1f), AdaptiveReleaseSpring)
                                 if (!completed && childGesture && routedMode == null && lastPreview != null && currentAdaptiveEnabled) currentValue?.let {
@@ -400,7 +433,8 @@ private fun <T> AdaptiveSegmentedRenderer(
                                 }
                                 if (currentDefer || !completed || !currentAdaptiveEnabled) {
                                     currentValue?.let { child.target(it, AdaptiveReleaseSpring) }
-                                    if (currentSelectedIndex >= 0 && currentSelectedIndex != currentAdaptiveIndex) position.target(currentSelectedIndex.toFloat())
+                                    if (!modeDrag && currentSelectedIndex >= 0 && currentSelectedIndex != currentAdaptiveIndex)
+                                        position.target(currentSelectedIndex.toFloat())
                                 }
                             }
                         }
@@ -416,7 +450,8 @@ private fun <T> AdaptiveSegmentedRenderer(
                 }
                 // Ordinary cells share a matched background pill. The adaptive glass thumb is separate.
                 if (lastOrdinaryIndex >= 0 && items.getOrNull(lastOrdinaryIndex)?.first !in hiddenItems && ordinaryOpacity.value > .0001f) {
-                    Box(Modifier.absoluteOffset { androidx.compose.ui.unit.IntOffset(ordinaryPhysicalLeft.roundToInt(), with(density) { 2.dp.roundToPx() }) }
+                    Box(Modifier.align(AbsoluteAlignment.TopLeft)
+                        .absoluteOffset { androidx.compose.ui.unit.IntOffset(ordinaryPhysicalLeft.roundToInt(), with(density) { 2.dp.roundToPx() }) }
                         .width(with(density) { thumbWidth.toDp() }).height(52.dp)
                         .alpha(ordinaryOpacity.value.coerceIn(0f, 1f)).clip(Capsule()).background(colors.elevatedBackground))
                 }
@@ -433,7 +468,8 @@ private fun <T> AdaptiveSegmentedRenderer(
                         contentAlignment = Alignment.Center) { AdaptiveThumbGlyph(thumbContent) }
                 }
                 if (showChildThumb) {
-                    val thumbModifier = Modifier.absoluteOffset { androidx.compose.ui.unit.IntOffset(physicalLeft.roundToInt(), with(density) { 2.dp.roundToPx() }) }
+                    val thumbModifier = Modifier.align(AbsoluteAlignment.TopLeft)
+                        .absoluteOffset { androidx.compose.ui.unit.IntOffset(physicalLeft.roundToInt(), with(density) { 2.dp.roundToPx() }) }
                         .width(with(density) { thumbWidth.toDp() }).height(52.dp)
                         .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
                         .clearAndSetSemantics { }

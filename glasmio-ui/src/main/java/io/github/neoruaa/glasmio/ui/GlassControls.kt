@@ -38,6 +38,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -688,6 +689,7 @@ fun <T> GlasmioSegmentedControl(
                 onSelected = onUserSelected,
                 enabled = false,
                 itemContent = itemContent,
+                interactive = false,
             )
         }
 
@@ -695,6 +697,7 @@ fun <T> GlasmioSegmentedControl(
         // becomes larger only while pressed; unselected cells remain tappable through layer 2.
         if (selectedIndex >= 0) Box(
             Modifier
+                .align(AbsoluteAlignment.TopLeft)
                 .graphicsLayer {
                     val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
                     translationX = 2.dp.toPx() + visualIndex * tabWidthPx
@@ -734,6 +737,7 @@ private fun <T> androidx.compose.foundation.layout.RowScope.SegmentedTabContent(
     onSelected: (T) -> Unit,
     enabled: Boolean,
     itemContent: (@Composable BoxScope.(value: T, selected: Boolean) -> Unit)?,
+    interactive: Boolean = true,
 ) {
     val colors = LocalGlassColors.current
     items.forEachIndexed { index, (key, label) ->
@@ -743,14 +747,14 @@ private fun <T> androidx.compose.foundation.layout.RowScope.SegmentedTabContent(
                 .weight(1f)
                 .fillMaxHeight()
                 .clip(Capsule())
-                .selectable(
+                .then(if (interactive) Modifier.selectable(
                     selected = isSelected,
                     enabled = enabled,
                     interactionSource = null,
                     indication = null,
                     role = Role.Tab,
                     onClick = { if (enabled) onSelected(key) },
-                )
+                ) else Modifier)
                 .then(if (itemContent != null) Modifier.semantics { contentDescription = label } else Modifier),
             contentAlignment = Alignment.Center,
         ) {

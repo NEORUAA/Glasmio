@@ -1898,7 +1898,32 @@ half4 main(half4 src, half4 dst) {
             swipe(Offset(width * 1.5f / 4f, 28.dp.toPx()), Offset(width * 3.5f / 4f, 28.dp.toPx()))
         }
         compose.runOnIdle {
-            assertEquals("Collapsed ordinary cells do not accept slider drags", listOf("open"), modeRequests)
+            assertEquals("An ordinary thumb drag submits a main mode only", listOf("open", "quiet"), modeRequests)
+            assertEquals(beforeExit, strengthRequests.size)
+            assertEquals(3, finishes)
+            assertEquals("open", mode.value)
+        }
+        group.performTouchInput { click(Offset(width * 3.5f / 4f, 28.dp.toPx())) }
+        compose.runOnIdle {
+            assertEquals(listOf("open", "quiet", "quiet"), modeRequests)
+            direction.value = LayoutDirection.Rtl
+        }
+        group.performTouchInput {
+            swipe(Offset(width * 2.5f / 4f, 28.dp.toPx()), Offset(width * 1.5f / 4f, 28.dp.toPx()))
+        }
+        val ordinaryModeRequests = listOf("open", "quiet", "quiet", "adaptive")
+        compose.runOnIdle {
+            assertEquals("An RTL ordinary drag can enter the adaptive mode", ordinaryModeRequests, modeRequests)
+            assertEquals(beforeExit, strengthRequests.size)
+            assertEquals(3, finishes)
+        }
+        group.performTouchInput {
+            down(Offset(width * 2.5f / 4f, 28.dp.toPx()))
+            moveTo(Offset(width * 2.5f / 4f, 50.dp.toPx()))
+            cancel()
+        }
+        compose.runOnIdle {
+            assertEquals("Vertical scrolling does not select a main mode", ordinaryModeRequests, modeRequests)
             mode.value = "adaptive"
             enabled.value = false
         }
@@ -1906,10 +1931,11 @@ half4 main(half4 src, half4 dst) {
         group.performTouchInput { click(Offset(width * 2.5f / 5f, 28.dp.toPx())) }
         compose.runOnIdle {
             assertEquals(beforeExit, strengthRequests.size)
-            assertEquals(listOf("open"), modeRequests)
+            assertEquals(ordinaryModeRequests, modeRequests)
             assertEquals(3, finishes)
         }
         compose.runOnIdle {
+            direction.value = LayoutDirection.Ltr
             enabled.value = true
             discrete.value = true
             actual.value = .4f
@@ -2244,29 +2270,34 @@ half4 main(half4 src, half4 dst) {
     fun segmentedControlKeepsDeferredSelectionAndUnknownDisabledSemantics() {
         val selected = mutableStateOf<Int?>(null)
         val enabled = mutableStateOf(true)
+        val icons = mutableStateOf(true)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
         val position = Animatable(0f)
         val requests = mutableListOf<Int>()
         val items = listOf(0 to "Quiet", 1 to "Balanced", 2 to "Open")
         compose.setContent {
-            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+            GlasmioTheme {
                 GlasmioBackdropProvider(emptyBackdrop()) {
-                    GlasmioSegmentedControl(
-                        items = items,
-                        selected = selected.value,
-                        onSelected = { requests += it },
-                        modifier = Modifier.width(300.dp).testTag("segmented"),
-                        positionAnimation = position,
-                        height = 50.dp,
-                        enabled = enabled.value,
-                        deferSelection = true,
-                        itemContent = { _, _ ->
-                            Canvas(Modifier.size(25.dp)) { drawCircle(Color.Black) }
-                        },
-                    )
+                    CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                        GlasmioSegmentedControl(
+                            items = items,
+                            selected = selected.value,
+                            onSelected = { requests += it },
+                            modifier = Modifier.width(300.dp).testTag("segmented"),
+                            positionAnimation = position,
+                            height = 50.dp,
+                            enabled = enabled.value,
+                            deferSelection = true,
+                            itemContent = if (icons.value) { { _, _ ->
+                                Canvas(Modifier.size(25.dp)) { drawCircle(Color.Black) }
+                            } } else null,
+                        )
+                    }
                 }
             }
         }
-        compose.onNodeWithTag("segmented").assertHeightIsEqualTo(50.dp)
+        val group = compose.onNodeWithTag("segmented")
+        group.assertHeightIsEqualTo(50.dp)
         items.forEach { compose.onNodeWithContentDescription(it.second).assertIsNotSelected() }
         compose.onNodeWithContentDescription("Balanced").performClick()
         compose.runOnIdle { assertEquals(listOf(1), requests) }
@@ -2274,24 +2305,43 @@ half4 main(half4 src, half4 dst) {
 
         compose.runOnIdle { selected.value = 0 }
         compose.onNodeWithContentDescription("Quiet").assertIsSelected()
-        compose.onNodeWithTag("segmented").performTouchInput {
+        // Exercise the real pointer route with its transparent optical label recording present.
+        group.performTouchInput { click(Offset(width / 2f, height / 2f)) }
+        compose.runOnIdle { assertEquals(listOf(1, 1), requests) }
+        compose.onNodeWithContentDescription("Quiet").assertIsSelected()
+        group.performTouchInput {
             swipe(Offset(width / 6f, height / 2f), Offset(width * 5f / 6f, height / 2f))
         }
         compose.runOnIdle {
-            assertEquals(listOf(1, 2), requests)
+            assertEquals(listOf(1, 1, 2), requests)
             assertEquals(0f, position.value, 0.001f)
+            icons.value = false
         }
-        compose.onNodeWithContentDescription("Quiet").assertIsSelected()
-        compose.onNodeWithContentDescription("Open").assertIsNotSelected()
-
-        compose.runOnIdle { selected.value = 2; enabled.value = false }
-        compose.onNodeWithContentDescription("Open").assertIsSelected().assertIsNotEnabled()
-        compose.onNodeWithContentDescription("Balanced")
-            .performSemanticsAction(SemanticsActions.OnClick) { it() }
-        compose.onNodeWithTag("segmented").performTouchInput {
+        compose.onNodeWithText("Quiet").assertIsSelected()
+        group.performTouchInput { click(Offset(width / 2f, height / 2f)) }
+        compose.runOnIdle {
+            assertEquals(listOf(1, 1, 2, 1), requests)
+            direction.value = LayoutDirection.Rtl
+        }
+        group.performTouchInput { click(Offset(width / 6f, height / 2f)) }
+        compose.runOnIdle { assertEquals(listOf(1, 1, 2, 1, 2), requests) }
+        group.performTouchInput {
             swipe(Offset(width * 5f / 6f, height / 2f), Offset(width / 6f, height / 2f))
         }
-        compose.runOnIdle { assertEquals(listOf(1, 2), requests) }
+        val expected = listOf(1, 1, 2, 1, 2, 2)
+        compose.runOnIdle {
+            assertEquals(expected, requests)
+            assertEquals(0f, position.value, 0.001f)
+            selected.value = 2
+            enabled.value = false
+        }
+        compose.onNodeWithText("Open").assertIsSelected().assertIsNotEnabled()
+        compose.onNodeWithText("Balanced").performSemanticsAction(SemanticsActions.OnClick) { it() }
+        group.performTouchInput {
+            click(Offset(width / 2f, height / 2f))
+            swipe(Offset(width / 6f, height / 2f), Offset(width * 5f / 6f, height / 2f))
+        }
+        compose.runOnIdle { assertEquals(expected, requests) }
     }
 
     @Test
