@@ -93,6 +93,14 @@ struct RoundedField {
             nx = -nx;
         if (ly < 0.0f)
             ny = -ny;
+        if (normalMix == 0.0f) {
+            // Navigation contour folding uses only the rounded-box normal.
+            // Avoid computing an oval normal whose mix weight is exactly zero.
+            const float length = std::sqrt(nx * nx + ny * ny);
+            if (length <= 0.000001f)
+                return {0.0f, 0.0f};
+            return {nx / length * inverseX, ny / length * inverseY};
+        }
         float ox = lx, oy = ly * halfWidth / std::max(halfHeight, 0.000001f);
         const float ovalLength = std::sqrt(ox * ox + oy * oy);
         if (ovalLength > 0.000001f) {
@@ -426,6 +434,11 @@ struct NavigationUnionPath {
         if (!hasSecond) return a.distance(x, y);
         const float ad = a.distance(x, y);
         const float bd = b.distance(x, y);
+        if (std::abs(ad - bd) >= smoothness) {
+            // The mixed weight is saturated even at the maximum possible radius.
+            // Preserve the original saturated arithmetic without evaluating normals.
+            return ad <= bd ? bd + (ad - bd) : bd;
+        }
         const Normal an = a.normal(x, y, 0.0f), bn = b.normal(x, y, 0.0f);
         const float radius = smoothness * saturate(0.5f - 0.5f * (an.x * bn.x + an.y * bn.y));
         const float h = radius <= 0.000001f ? (ad < bd ? 1.0f : 0.0f)
