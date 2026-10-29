@@ -61,6 +61,7 @@ val LocalBottomControlContact = staticCompositionLocalOf<BottomControlContact?> 
 fun BottomNavigationContact(
     backdrop: Backdrop,
     modifier: Modifier = Modifier,
+    mergedProgress: State<Float>? = null,
     content: @Composable RowScope.() -> Unit,
 ) {
     val density = LocalDensity.current
@@ -74,6 +75,7 @@ fun BottomNavigationContact(
             nativeSmoothness = with(density) { 6.dp.toPx() }
         }
     }
+    contact.mergedProgress = mergedProgress
     val materialBackdrop = rememberLayerBackdrop()
     val neighborContentLayer = rememberGraphicsLayer()
     val drawNeighborContent: ContentDrawScope.() -> Unit = remember(contact, neighborContentLayer, renderedLensTransform) {
@@ -355,6 +357,7 @@ class BottomControlContact(
     private val refractionField = NavigationContactField()
     internal var maximumRefractionHeight: Float = 0f
     internal var nativeSmoothness: Float? = null
+    internal var mergedProgress: State<Float>? by mutableStateOf(null)
     private var cachedFirst: LiquidContactCapsule? = null
     private var cachedSecond: LiquidContactCapsule? = null
     private var cachedRefractionBand = Float.NaN
@@ -385,7 +388,9 @@ class BottomControlContact(
     private fun createSurface(): BottomContactSurface? {
         var first: LiquidContactCapsule? = null
         var second: LiquidContactCapsule? = null
+        val progress = mergedProgress?.value?.coerceIn(0f, 1f)
         for (member in members) {
+            if (first != null && progress == 0f) break
             val capsule = member.capsule() ?: continue
             if (first == null) first = capsule
             else if (second == null) second = capsule
@@ -393,6 +398,9 @@ class BottomControlContact(
         }
         val firstCapsule = first ?: return null
         val secondCapsule = second
+        // The merged source has one contour. Its auxiliary gains contact curvature
+        // continuously in the same morph transaction, without a separate delay.
+        val nativeSmoothness = this.nativeSmoothness?.let { if (secondCapsule == null) it else it * (progress ?: 1f) }
         if (secondCapsule == null && nativeSmoothness == null) return null
         val bounds = Rect(
             floor(minOf(firstCapsule.bounds.left, secondCapsule?.bounds?.left ?: firstCapsule.bounds.left)),

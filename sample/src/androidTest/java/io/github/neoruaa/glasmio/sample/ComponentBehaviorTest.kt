@@ -187,6 +187,8 @@ class ComponentBehaviorTest {
             }
         }
         val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        val aboutTab = tab and hasContentDescription("About")
+        val homeTab = tab and hasContentDescription("Home")
         for (layoutDirection in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
             rule.runOnIdle {
                 direction = layoutDirection
@@ -196,46 +198,61 @@ class ComponentBehaviorTest {
                 selections = 0
             }
             rule.onAllNodesWithText("About").assertCountEquals(0)
-            rule.onNode(tab and hasContentDescription("About")).assertIsNotSelected().performClick()
+            rule.onNode(aboutTab).assertIsNotSelected().performTouchInput { click() }
+            var expectedSelections = 1
             rule.onNodeWithText("page:about").assertIsDisplayed()
-            rule.onNode(tab and hasContentDescription("About")).assertIsSelected()
-            rule.onNode(tab and hasContentDescription("Home")).assertIsNotSelected()
-            rule.runOnIdle { assertEquals(1, selections) }
+            rule.onNode(aboutTab).assertIsSelected()
+            rule.onNode(homeTab).assertIsNotSelected()
 
             for (separate in listOf(false, true)) {
                 rule.runOnIdle { detached = separate }
-                rule.onNode(tab and hasContentDescription("About")).assertIsSelected()
-                rule.onNode(tab and hasContentDescription("Home")).assertIsNotSelected()
-                rule.onNodeWithText("page:about").assertIsDisplayed()
+                rule.onAllNodes(aboutTab).assertCountEquals(1)
+                rule.onNode(aboutTab).assertIsSelected()
+                rule.onNode(homeTab).assertIsNotSelected()
                 if (separate) rule.onAllNodesWithText("About").assertCountEquals(0)
-                else {
-                    val labels = rule.onAllNodesWithText("About").fetchSemanticsNodes()
-                    assertEquals("Integrated navigation must expose one label:\n" +
-                        rule.onRoot(useUnmergedTree = true).printToString(maxDepth = 12), 1, labels.size)
-                    rule.onNodeWithText("About").assertIsDisplayed()
-                }
-                rule.runOnIdle { assertEquals("Changing style must not select another route", 1, selections) }
+                else rule.onNodeWithText("About").assertIsDisplayed()
+                rule.runOnIdle { assertEquals("Changing style must preserve the route", expectedSelections, selections) }
 
-                rule.runOnIdle { compact.floatValue = 1f }
-                val expansionAnchor = if (separate) "Home" else "About"
-                rule.onNode(tab and hasContentDescription(expansionAnchor)).performClick()
-                rule.runOnIdle {
-                    assertEquals(0f, compact.floatValue, 0f)
-                    assertEquals("about", selected)
-                    assertEquals("Expanding navigation must keep the current page", 1, selections)
+                // Hit-test the real target while it is emerging and at its final endpoint.
+                // A transparent source or dummy selectable must not intercept these taps.
+                for (progress in listOf(.12f, .6f, 1f)) {
+                    rule.runOnIdle { compact.floatValue = progress }
+                    rule.onAllNodes(aboutTab).assertCountEquals(1)
+                    rule.onNode(aboutTab).assertIsSelected()
+                    rule.onNode(homeTab).assertIsNotSelected()
+                    rule.onAllNodesWithText("About").assertCountEquals(0)
+                    val mainBounds = rule.onNode(homeTab).fetchSemanticsNode().boundsInRoot
+                    val auxiliaryBounds = rule.onNode(aboutTab).fetchSemanticsNode().boundsInRoot
+                    assertEquals("The auxiliary keeps its physical trailing side", layoutDirection == LayoutDirection.Ltr,
+                        auxiliaryBounds.center.x > mainBounds.center.x)
+                    rule.onNode(aboutTab).performTouchInput { click() }
+                    expectedSelections++
+                    rule.runOnIdle { assertEquals(expectedSelections, selections) }
+                    rule.onNode(homeTab).performTouchInput { click() }
+                    rule.runOnIdle {
+                        assertEquals(0f, compact.floatValue, 0f)
+                        assertEquals("about", selected)
+                        assertEquals("Expanding must not select another route", expectedSelections, selections)
+                    }
                 }
             }
-
-            // Main-item pointer input must remain reachable beneath the decorative lens source.
-            rule.onNode(tab and hasContentDescription("Home")).performClick()
+            rule.runOnIdle { compact.floatValue = .5f; detached = false }
+            rule.runOnIdle { detached = true }
+            rule.runOnIdle { detached = false }
+            rule.onAllNodes(aboutTab).assertCountEquals(1)
+            rule.onNode(aboutTab).assertIsSelected().performTouchInput { click() }
+            expectedSelections++
+            rule.onNode(homeTab).performTouchInput { click() }
+            rule.onNode(homeTab).performTouchInput { click() }
+            expectedSelections++
             rule.onNodeWithText("page:home").assertIsDisplayed()
-            rule.onNode(tab and hasContentDescription("Home")).assertIsSelected()
-            rule.runOnIdle { assertEquals(2, selections) }
-            rule.onNode(tab and hasContentDescription("Library")).performClick()
+            rule.onNode(homeTab).assertIsSelected()
+            rule.onNode(tab and hasContentDescription("Library")).performTouchInput { click() }
+            expectedSelections++
             rule.onNodeWithText("page:library").assertIsDisplayed()
             rule.onNode(tab and hasContentDescription("Library")).assertIsSelected()
-            rule.onNode(tab and hasContentDescription("Home")).assertIsNotSelected()
-            rule.runOnIdle { assertEquals(3, selections) }
+            rule.onNode(homeTab).assertIsNotSelected()
+            rule.runOnIdle { assertEquals(expectedSelections, selections) }
         }
     }
 

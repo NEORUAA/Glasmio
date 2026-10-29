@@ -62,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -339,41 +340,93 @@ fun <T> GlasmioNavigationBarWithTrailingItem(
     val mainItems = remember(items, trailingItem, detachTrailingItem) {
         if (detachTrailingItem) items else items + trailingItem
     }
-    BottomNavigationContact(backdrop = backdrop, modifier = modifier) {
-        GlasmioNavigationBar(
-            items = mainItems,
-            selectedKey = selectedKey,
-            onSelected = onSelected,
-            onExpand = onExpand,
-            compactProgress = compactProgress,
-            compactSize = compactSize,
-            backdrop = backdrop,
-            modifier = Modifier.weight(1f).zIndex(1f),
-            onItemBoundsChanged = onItemBoundsChanged,
-        )
-        if (detachTrailingItem) {
-            Spacer(Modifier.size(width = 8.dp, height = 1.dp))
-            FloatingNavigationControl(
-                compactProgress = compactProgress,
-                onClick = { onSelected(trailingItem.key) },
-                backdrop = backdrop,
-                compactSize = compactSize,
-                itemSelected = trailingItem.key == selectedKey,
-                itemContentDescription = trailingItem.contentDescription,
-                onBoundsChanged = onItemBoundsChanged?.let { callback ->
-                    { bounds -> callback(trailingItem.key, bounds) }
-                },
-            ) { _ ->
-                SfIcon(
-                    trailingItem.symbol,
-                    contentDescription = trailingItem.contentDescription,
-                    tint = LocalGlassColors.current.let { if (trailingItem.key == selectedKey) it.accent else it.content },
-                    size = CompactBottomControlIconSize,
-                    fontSize = 18.sp,
-                    weight = FontWeight.Medium,
-                    fontFeatureSettings = "'ss16' 1",
-                    fitGlyphToBounds = false,
+    val auxiliaryActive by remember(compactProgress, detachTrailingItem) {
+        derivedStateOf { detachTrailingItem || compactProgress.value > 0f }
+    }
+    val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
+    var hostOrigin by remember { mutableStateOf(Offset.Zero) }
+    var sourceIconBounds by remember { mutableStateOf<Rect?>(null) }
+    val sourceIconCenter = rememberUpdatedState(sourceIconBounds?.center?.minus(hostOrigin))
+    BottomNavigationContact(
+        backdrop = backdrop,
+        modifier = modifier,
+        mergedProgress = if (detachTrailingItem) null else compactProgress,
+    ) {
+        // UIKit retains the auxiliary identity in both targets. The expanded merged
+        // target contributes only its main-row item; its auxiliary is an unplaced dummy.
+        Layout(
+            modifier = Modifier.weight(1f).onGloballyPositioned { hostOrigin = it.positionInWindow() },
+            content = {
+                GlasmioNavigationBar(
+                    items = mainItems,
+                    selectedKey = selectedKey,
+                    onSelected = onSelected,
+                    onExpand = onExpand,
+                    compactProgress = compactProgress,
+                    compactSize = compactSize,
+                    backdrop = backdrop,
+                    modifier = Modifier.zIndex(1f),
+                    compactItem = if (!detachTrailingItem && selectedKey == trailingItem.key) items.first() else null,
+                    onItemBoundsChanged = { key, bounds ->
+                        if (key != trailingItem.key || detachTrailingItem || compactProgress.value <= 0f) {
+                            onItemBoundsChanged?.invoke(key, bounds)
+                        }
+                    },
+                    onItemIconBoundsChanged = { key, bounds ->
+                        if (key == trailingItem.key && compactProgress.value <= 0f) sourceIconBounds = bounds
+                    },
                 )
+                FloatingNavigationControl(
+                    compactProgress = compactProgress,
+                    onClick = { onSelected(trailingItem.key) },
+                    backdrop = backdrop,
+                    compactSize = compactSize,
+                    modifier = Modifier.zIndex(2f).graphicsLayer {
+                        alpha = if (detachTrailingItem) 1f else compactProgress.value.coerceIn(0f, 1f)
+                    },
+                    itemSelected = trailingItem.key == selectedKey,
+                    itemActive = auxiliaryActive,
+                    itemContentDescription = trailingItem.contentDescription,
+                    onBoundsChanged = { bounds -> onItemBoundsChanged?.invoke(trailingItem.key, bounds) },
+                ) { progress ->
+                    SfIcon(
+                        trailingItem.symbol,
+                        contentDescription = trailingItem.contentDescription,
+                        tint = LocalGlassColors.current.let { if (trailingItem.key == selectedKey) it.accent else it.content },
+                        size = CompactBottomControlIconSize,
+                        fontSize = 18.sp,
+                        weight = FontWeight.Medium,
+                        fontFeatureSettings = "'ss16' 1",
+                        fitGlyphToBounds = false,
+                        modifier = Modifier.graphicsLayer {
+                            if (!detachTrailingItem) {
+                                translationY = ((sourceIconCenter.value?.y ?: size.height / 2f) -
+                                    NavigationBarSurfaceHeight.toPx() / 2f) * (1f - progress)
+                            }
+                        },
+                    )
+                }
+            },
+        ) { measurables, constraints ->
+            val width = constraints.maxWidth
+            val height = NavigationBarSurfaceHeight.roundToPx()
+            val auxiliaryWidth = height
+            val gap = 8.dp.roundToPx()
+            val mainWidth = if (detachTrailingItem) (width - auxiliaryWidth - gap).coerceAtLeast(1) else width
+            val main = measurables[0].measure(Constraints.fixed(mainWidth, height))
+            val auxiliary = measurables[1].measure(Constraints.fixed(auxiliaryWidth, height))
+            val progress = compactProgress.value.coerceIn(0f, 1f)
+            val expandedCenter = sourceIconCenter.value?.x ?: if (isLtr) {
+                width * (mainItems.lastIndex + .5f) / mainItems.size
+            } else width * .5f / mainItems.size
+            val sourceX = expandedCenter - auxiliaryWidth / 2f
+            val targetX = if (isLtr) width - auxiliaryWidth.toFloat() else 0f
+            val auxiliaryX = if (detachTrailingItem) targetX else sourceX + (targetX - sourceX) * progress
+            layout(width, height) {
+                main.place(if (isLtr) 0 else width - mainWidth, 0)
+                // An alpha-zero selectable would still intercept input. Keep the node
+                // alive, but do not place the merged expanded dummy in the hit tree.
+                if (detachTrailingItem || progress > 0f) auxiliary.place(auxiliaryX.roundToInt(), 0)
             }
         }
     }
@@ -410,6 +463,7 @@ private fun FloatingNavigationControl(
     backdrop: Backdrop,
     compactSize: Dp = CompactBottomControlSize,
     itemSelected: Boolean? = null,
+    itemActive: Boolean = true,
     itemContentDescription: String? = null,
     onBoundsChanged: ((Rect) -> Unit)? = null,
     content: @Composable (Float) -> Unit,
@@ -418,7 +472,7 @@ private fun FloatingNavigationControl(
     Box(
         modifier.size(NavigationBarSurfaceHeight)
             .then(contact?.takeIf { it.capturesLensSource.value }?.neighborRecordingModifier ?: Modifier)
-            .then(if (itemSelected != null) Modifier.clearAndSetSemantics {
+            .then(if (!itemActive) Modifier.clearAndSetSemantics {} else if (itemSelected != null) Modifier.clearAndSetSemantics {
                 role = Role.Tab
                 selected = itemSelected
                 itemContentDescription?.let { contentDescription = it }
@@ -431,12 +485,13 @@ private fun FloatingNavigationControl(
             (NavigationBarSurfaceHeight - compactSize) * progress
         GlasmioIconButton(
             onClick = onClick,
+            enabled = itemActive,
             backdrop = backdrop,
             style = GlassSurfaceStyle.Navigation,
             nativeNavigationFlex = true,
             modifier = Modifier.size(controlSize)
                 .onGloballyPositioned { coordinates ->
-                    onBoundsChanged?.invoke(coordinates.boundsInWindow())
+                    if (itemActive) onBoundsChanged?.invoke(coordinates.boundsInWindow())
                 },
             morphProgress = compactProgress,
             morphCaptureWidth = NavigationBarSurfaceHeight,

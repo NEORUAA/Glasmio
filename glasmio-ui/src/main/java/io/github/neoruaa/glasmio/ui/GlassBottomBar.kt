@@ -254,6 +254,8 @@ fun <T> GlasmioNavigationBar(
     modifier: Modifier = Modifier,
     backdrop: Backdrop = LocalGlassBackdrop.current,
     onItemBoundsChanged: ((T, Rect) -> Unit)? = null,
+    compactItem: GlasmioTabItem<T>? = null,
+    onItemIconBoundsChanged: ((T, Rect) -> Unit)? = null,
 ) {
     require(items.isNotEmpty())
     val compactState = remember(compactProgress) {
@@ -856,6 +858,7 @@ fun <T> GlasmioNavigationBar(
                             compactTabWidthPx = compactInnerWidthPx / tabItems.size,
                             compactProgress = compactState,
                             onItemBoundsChanged = onItemBoundsChanged,
+                            onItemIconBoundsChanged = onItemIconBoundsChanged,
                         )
                     }
                     if (hasSelection || compactMode) MorphingSelectedNavigationItem(
@@ -871,6 +874,27 @@ fun <T> GlasmioNavigationBar(
                         selectedContentLateScale = selectedContentLateScaleProvider,
                         labelAlpha = tabContentAlpha,
                         selectedIconColorFilter = selectedIconColorFilterState,
+                        contentColor = colors.content,
+                        panelScale = selectedTabPanelScale,
+                        iconAlpha = if (compactItem != null) tabContentAlpha else null,
+                        onIconBoundsChanged = onItemIconBoundsChanged?.let { callback ->
+                            { bounds -> callback(selectedItem.key, bounds) }
+                        },
+                    )
+                    if (compactItem != null) MorphingSelectedNavigationItem(
+                        item = compactItem,
+                        compactProgress = compactState,
+                        fullWidthPx = fullWidthPx,
+                        compactWidthPx = compactWidthPx,
+                        itemCount = tabItems.size,
+                        selectedIndex = 0,
+                        isLtr = isLtr,
+                        horizontalInsetPx = paddingPx,
+                        expandedTabWidthPx = expandedTabWidthPx,
+                        selectedContentLateScale = selectedContentLateScaleProvider,
+                        labelAlpha = { 0f },
+                        iconAlpha = { compactState.value },
+                        selectedIconColorFilter = null,
                         contentColor = colors.content,
                         panelScale = selectedTabPanelScale,
                     )
@@ -956,28 +980,31 @@ fun <T> GlasmioNavigationBar(
                 Box(
                     Modifier.fillMaxSize()
                         .then(indicatorHitBoundsModifier)
-                        .then(interactiveHighlight.gestureModifier)
-                        .then(dragAnimation.modifier)
-                        .then(
-                            if (compactMode) {
-                                Modifier
-                                    .clickable(
-                                        interactionSource = null,
-                                        indication = null,
-                                        role = Role.Tab,
-                                        onClick = { onExpandState.value() },
-                                    )
-                                    .semantics(mergeDescendants = true) {
-                                        contentDescription = selectedItem.contentDescription
-                                        selected = hasSelection
-                                    }
-                            } else {
-                                Modifier
-                            },
-                        ),
+                        .then(if (!compactMode) interactiveHighlight.gestureModifier else Modifier)
+                        .then(if (!compactMode) dragAnimation.modifier else Modifier),
                 )
             }
         }
+        if (compactMode) CompositionLocalProvider(LocalViewConfiguration provides navigationViewConfiguration) {
+            // Once compacting, the entire main platter expands navigation. Keeping this
+            // target on the selected indicator would overlap the emerging auxiliary.
+            Box(
+                Modifier.then(surfaceSizeModifier)
+                    .then(commonTransform)
+                    .then(interactiveHighlight.gestureModifier)
+                    .clickable(
+                        interactionSource = null,
+                        indication = null,
+                        role = Role.Tab,
+                        onClick = { onExpandState.value() },
+                    )
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = (compactItem ?: selectedItem).contentDescription
+                        selected = hasSelection && compactItem == null
+                    },
+            )
+        }
+
     }
     }
 }
@@ -996,6 +1023,7 @@ private fun <T> FullTabContent(
     hideSelectedItem: Boolean = false,
     selectedContentSource: Boolean = false,
     onItemBoundsChanged: ((T, Rect) -> Unit)? = null,
+    onItemIconBoundsChanged: ((T, Rect) -> Unit)? = null,
 ) {
     val scale = LocalLiquidTabScale.current
     Layout(
@@ -1009,9 +1037,8 @@ private fun <T> FullTabContent(
                         .then(
                             // A disabled clickable still participates in pointer hit testing.
                             // The invisible source plane must never cover the real tab targets.
-                            if (selectedContentSource) Modifier else Modifier
+                            if (selectedContentSource || !enabled) Modifier else Modifier
                                 .clickable(
-                                    enabled = enabled,
                                     interactionSource = null,
                                     indication = null,
                                     role = Role.Tab,
@@ -1046,6 +1073,9 @@ private fun <T> FullTabContent(
                                 // without two unused tint layers observing every press frame.
                                 selectedColorFilter = if (selected && hideSelectedItem) null else selectedColorFilter,
                                 selectedContentSource = selectedContentSource,
+                                onIconBoundsChanged = if (!selectedContentSource && !(selected && hideSelectedItem)) {
+                                    onItemIconBoundsChanged?.let { callback -> { bounds -> callback(item.key, bounds) } }
+                                } else null,
                             )
                         }
                     },
@@ -1108,6 +1138,8 @@ private fun <T> NavigationTabContent(
     labelAlpha: (() -> Float)? = null,
     rasterizeBeforeScale: Boolean = false,
     selectedContentSource: Boolean = false,
+    iconAlpha: (() -> Float)? = null,
+    onIconBoundsChanged: ((Rect) -> Unit)? = null,
 ) {
     val colors = LocalGlassColors.current
     SfIcon(
@@ -1123,6 +1155,14 @@ private fun <T> NavigationTabContent(
             .then(
                 if (labelAlpha != null) Modifier.navigationTabIconPadding(labelAlpha)
                 else Modifier.padding(top = 3.dp),
+            )
+            .then(
+                if (onIconBoundsChanged != null) Modifier.onGloballyPositioned {
+                    onIconBoundsChanged(it.boundsInWindow())
+                } else Modifier,
+            )
+            .then(
+                if (iconAlpha != null) Modifier.graphicsLayer { alpha = iconAlpha() } else Modifier,
             )
             .then(
                 if (selected && (selectedColorFilter != null || rasterizeBeforeScale)) {
@@ -1209,6 +1249,8 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
     contentColor: Color,
     panelScale: () -> Float = { 1f },
     selectedContentSource: Boolean = false,
+    iconAlpha: (() -> Float)? = null,
+    onIconBoundsChanged: ((Rect) -> Unit)? = null,
 ) {
     val sharedTabScale = LocalLiquidTabScale.current
     val density = LocalDensity.current
@@ -1293,6 +1335,8 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
                 // scales, even when the opaque parent makes both inner tints redundant.
                 rasterizeBeforeScale = true,
                 selectedContentSource = selectedContentSource,
+                iconAlpha = iconAlpha,
+                onIconBoundsChanged = onIconBoundsChanged,
             )
         }
     }
