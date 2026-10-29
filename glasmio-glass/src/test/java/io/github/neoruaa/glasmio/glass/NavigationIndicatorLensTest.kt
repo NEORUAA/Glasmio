@@ -1,6 +1,13 @@
 package io.github.neoruaa.glasmio.glass
 
+import io.github.neoruaa.glasmio.glass.render.GlassLuminanceHysteresis
+import io.github.neoruaa.glasmio.glass.render.BackdropLuminance
+import io.github.neoruaa.glasmio.glass.render.GlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.resolveBackdropSamplingScale
+import io.github.neoruaa.glasmio.core.defaultGlassColors
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -8,11 +15,302 @@ import com.kyant.shapes.Capsule
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.sqrt
+import kotlin.time.Duration.Companion.nanoseconds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NavigationIndicatorLensTest {
+    @Test
+    fun opticalHeadroomRetainsEveryNativeChooserEndpointWithoutDisplayJitter() {
+        val ratios = listOf(Float.NaN, Float.NEGATIVE_INFINITY, 0f, 1f, 1.05f, 1.2f, 4.9f, 5f, 8f)
+        for (ratio in ratios) {
+            val effective = io.github.neoruaa.glasmio.glass.render.nativeGlassOpticalHeadroom(ratio)
+            assertTrue(effective in 1f..1.2f)
+            for (dark in listOf(false, true)) for (clear in listOf(0f, .5f, 1f)) {
+                assertEquals(navigationGlassKeyThreshold(dark, clear, ratio),
+                    navigationGlassKeyThreshold(dark, clear, effective), .000001f)
+            }
+        }
+        assertEquals(1.2f, io.github.neoruaa.glasmio.glass.render.nativeGlassOpticalHeadroom(4.9f), 0f)
+        assertEquals(1.2f, io.github.neoruaa.glasmio.glass.render.nativeGlassOpticalHeadroom(5.1f), 0f)
+    }
+
+    @Test
+    fun nativeNavigationUnionUsesTheRecoveredGapAndGradientTransfer() {
+        for (density in listOf(1f, 3f)) for (gap in listOf(8f, 3f, .931f, -2f)) {
+            val main = LiquidContactCapsule(Size(263f, 62f) * density,
+                Rect(0f, 0f, 263f * density, 62f * density))
+            val trailing = LiquidContactCapsule(Size(62f, 62f) * density,
+                Rect((263f + gap) * density, 0f, (325f + gap) * density, 62f * density))
+            val union = requireNotNull(NavigationNativeUnion.create(main, trailing, 6f * density))
+            val x = (263f + gap * .5f) * density
+            val field = union.field(x, 31f * density)
+            // Facing normals give k=6, h=.5, hence d=gap/2-1.5 in native points.
+            assertEquals((gap * .5f - 1.5f) * density, field[0], .0001f)
+            assertEquals(0f, field[1], .0001f)
+            assertEquals(0f, field[2], .0001f)
+            assertEquals(gap <= 3f, union.isConnected)
+            val reversed = requireNotNull(NavigationNativeUnion.create(trailing, main, 6f * density))
+                .field(x, 31f * density)
+            repeat(3) { assertEquals(field[it], reversed[it], 0f) }
+        }
+    }
+
+    @Test
+    fun nativeNavigationSingleElementPreservesItsAffineDistanceAndNormal() {
+        val size = Size(100f, 40f)
+        val center = Offset(60f, 40f)
+        val plain = requireNotNull(NavigationNativeUnion.create(
+            LiquidContactCapsule(size, Rect(10f, 20f, 110f, 60f)), null, 6f))
+        val scale = 1.2f
+        val grown = requireNotNull(NavigationNativeUnion.create(
+            LiquidContactCapsule(size, Rect(0f, 16f, 120f, 64f)), null, 6f))
+        for (offset in listOf(Offset(0f, -25f), Offset(45f, 0f), Offset(48f, -15f), Offset(60f, 15f))) {
+            val point = center + offset
+            val target = center + offset * scale
+            val sourceField = plain.field(point.x, point.y)
+            val grownField = grown.field(target.x, target.y)
+            assertEquals(sourceField[0] * scale, grownField[0], .0001f)
+            assertEquals(sourceField[1], grownField[1], .0001f)
+            assertEquals(sourceField[2], grownField[2], .0001f)
+        }
+        assertTrue(!plain.isConnected && !grown.isConnected)
+        val stretched = requireNotNull(NavigationNativeUnion.create(
+            LiquidContactCapsule(size, Rect(10f, 20f, 210f, 60f)), null, 6f))
+        val right = stretched.field(220f, 40f)
+        assertEquals(5f, right[0], .0001f)
+        assertEquals(.5f, right[1], .0001f)
+        assertEquals(0f, right[2], .0001f)
+        val top = stretched.field(110f, 10f)
+        assertEquals(10f, top[0], .0001f)
+        assertEquals(0f, top[1], .0001f)
+        assertEquals(-1f, top[2], .0001f)
+        assertTrue(NavigationNativeUnion.create(
+            LiquidContactCapsule(size, Rect(10f, 20f, 110f, 60f)),
+            LiquidContactCapsule(Size(40f, 40f), Rect(118f, 22f, 158f, 62f)), 6f) == null)
+    }
+
+    @Test
+    fun nativeToolbarUnionKeepsThreeNodeMergedAndDetachedZeroFields() {
+        for (density in listOf(1f, 3f)) {
+            val merged = LiquidContactCapsule(Size(132f, 44f) * density,
+                Rect(0f, 0f, 132f * density, 44f * density))
+            val mergedUnion = requireNotNull(NavigationNativeUnion.create(List(3) { merged }, 12f * density))
+            val singleUnion = requireNotNull(NavigationNativeUnion.create(merged, null, 12f * density))
+            assertTrue(mergedUnion.isConnected)
+            for (point in listOf(Offset(0f, 22f), Offset(66f, 0f), Offset(66f, 22f), Offset(132f, 44f))) {
+                val physical = point * density
+                val actual = mergedUnion.field(physical.x, physical.y)
+                val expected = singleUnion.field(physical.x, physical.y)
+                repeat(3) { assertEquals(expected[it], actual[it], .0001f) }
+            }
+            for (gap in listOf(0f, 4f, 5.99f, 6f, 6.01f, 8f, 16f)) {
+                val nodes = List(3) { i ->
+                    val left = i * (44f + gap) * density
+                    LiquidContactCapsule(Size(44f, 44f) * density,
+                        Rect(left, 0f, left + 44f * density, 44f * density))
+                }
+                val union = requireNotNull(NavigationNativeUnion.create(nodes, 12f * density))
+                val rtl = requireNotNull(NavigationNativeUnion.create(nodes.reversed(), 12f * density))
+                // Tangency has no stable topology after native Float/half quantization.
+                // Preserve the actual zero field instead of widening it to join a gap.
+                if (gap != 6f) assertEquals("density=$density gap=$gap", gap < 6f, union.isConnected)
+                assertEquals(union.isConnected, rtl.isConnected)
+                repeat(2) { i ->
+                    val neck = (nodes[i].bounds.right + nodes[i + 1].bounds.left) * .5f
+                    val field = union.field(neck, 22f * density)
+                    val reversed = rtl.field(neck, 22f * density)
+                    assertEquals((gap * .5f - 3f) * density, field[0], .0001f)
+                    assertEquals(0f, field[1], .0001f)
+                    assertEquals(0f, field[2], .0001f)
+                    repeat(3) { assertEquals(field[it], reversed[it], 0f) }
+                }
+                for (x in -8..(132f + gap * 2f + 8f).toInt() step 4) for (y in -8..52 step 4) {
+                    assertTrue(union.field(x * density, y * density).all { it.isFinite() })
+                }
+            }
+        }
+    }
+
+    @Test
+    fun nativeToolbarUnionUsesPhysicalOrderAndPreservesIndependentClusters() {
+        val nodes = listOf(Rect(0f, 0f, 44f, 44f), Rect(48f, 0f, 92f, 44f), Rect(112f, 0f, 156f, 44f))
+            .map { LiquidContactCapsule(it.size, it) }
+        val union = requireNotNull(NavigationNativeUnion.create(nodes, 12f))
+        val rtl = requireNotNull(NavigationNativeUnion.create(nodes.reversed(), 12f))
+        assertEquals(nodes.first(), rtl.first)
+        assertEquals(nodes[1], rtl.second)
+        assertTrue(!union.isConnected && !rtl.isConnected)
+        assertTrue(union.field(46f, 22f)[0] < 0f)
+        assertTrue(union.field(102f, 22f)[0] > 0f)
+        for (x in -8..164 step 2) for (y in -8..52 step 4) {
+            val expected = union.field(x.toFloat(), y.toFloat())
+            val actual = rtl.field(x.toFloat(), y.toFloat())
+            repeat(3) { assertEquals(expected[it], actual[it], 0f) }
+        }
+        val legacy = requireNotNull(NavigationNativeUnion.create(nodes[1], nodes[0], 12f))
+        val pair = requireNotNull(NavigationNativeUnion.create(nodes.take(2).reversed(), 12f))
+        repeat(3) { assertEquals(legacy.field(46f, 12f)[it], pair.field(46f, 12f)[it], 0f) }
+        assertEquals(legacy.isConnected, pair.isConnected)
+        assertTrue(NavigationNativeUnion.create(emptyList(), 12f) == null)
+        assertTrue(requireNotNull(NavigationNativeUnion.create(List(16) { nodes.first() }, 12f)).isConnected)
+        assertTrue(NavigationNativeUnion.create(List(17) { nodes.first() }, 12f) == null)
+        assertTrue(NavigationNativeUnion.create(nodes.dropLast(1) + LiquidContactCapsule(Size(44f, 44f),
+            Rect(112f, 2f, 156f, 46f)), 12f) == null)
+        assertTrue(NavigationNativeUnion.create(nodes, 0f) == null)
+    }
+
+    @Test
+    fun nativeTintMatricesMatchThePhysicalUIKitCoefficients() {
+        val weights = floatArrayOf(.2126f, .7152f, .0722f)
+        data class TintCase(val color: Color, val dark: Boolean, val slopes: FloatArray, val biases: FloatArray)
+        val cases = listOf(
+            TintCase(Color(0xFF0088FF), false,
+                floatArrayOf(0f, .24627456f, .4f), floatArrayOf(0f, .28705877f, .6f)),
+            TintCase(Color(0xFFFF383C), false,
+                floatArrayOf(.229481f, .258362f, .276817f), floatArrayOf(.770519f, -.038754f, -.041522f)),
+            TintCase(Color(0xFF0088FF), true,
+                floatArrayOf(.20416664f, .07527768f, -.03749996f),
+                floatArrayOf(-.030625f, .52204168f, 1.005625f)),
+            TintCase(Color(0xFFFF4245), true,
+                floatArrayOf(-.02563725f, .23544118f, .23129707f),
+                floatArrayOf(1.00384559f, .22350735f, .23589367f)),
+        )
+        cases.forEach { case ->
+            val matrix = navigationTintMatrix(case.color, case.dark)
+            repeat(3) { row ->
+                repeat(3) { column -> assertEquals(case.slopes[row] * weights[column], matrix[row * 4 + column], .000002f) }
+                assertEquals(case.biases[row], matrix[row * 4 + 3], .000002f)
+            }
+        }
+        listOf(Color.Black, Color.White, Color.Gray, Color.Yellow).forEach { tint ->
+            listOf(false, true).forEach { dark -> assertTrue(navigationTintMatrix(tint, dark).all { it.isFinite() }) }
+        }
+    }
+
+    @Test
+    fun adaptiveMaterialKeepsCompleteEndpointRecipesAndTheirMeasuredSizeClass() {
+        fun uniforms(recipe: NavigationMaterialRecipe): Map<String, FloatArray> = buildMap {
+            updateNavigationMaterialUniforms(recipe, 1f) { name, value -> put(name, value) }
+        }
+        for (material in listOf(null, NavigationGlassMaterial.Clear, NavigationGlassMaterial.RegularMedium)) {
+            val light = NavigationMaterialRecipe.resolve(false, material, Color(0xFF0088FF), Color(0x33665544))
+            val dark = NavigationMaterialRecipe.resolve(true, material, Color(0xFF0088FF), Color(0x33665544))
+            assertTrue(light.matches(NavigationMaterialRecipe.resolve(0f, material, Color(0xFF0088FF), Color(0x33665544))))
+            assertTrue(dark.matches(NavigationMaterialRecipe.resolve(1f, material, Color(0xFF0088FF), Color(0x33665544))))
+            val mixed = NavigationMaterialRecipe.resolve(.37f, material, Color(0xFF0088FF), Color(0x33665544))
+            assertTrue(dark.matches(mixed.appearanceAlternate))
+            val actual = uniforms(mixed)
+            val lightUniforms = uniforms(light)
+            val darkUniforms = uniforms(dark)
+            assertEquals(.37f, actual.getValue("materialAppearanceMix")[0], 0f)
+            assertEquals(1f, actual.getValue("materialOpacity")[0], 0f)
+            assertEquals(1f, actual.getValue("appearance_materialOpacity")[0], 0f)
+            lightUniforms.filterKeys { !it.startsWith("appearance_") && it != "materialAppearanceMix" }.forEach { (name, expected) ->
+                expected.indices.forEach { i ->
+                    assertEquals(expected[i], actual.getValue(name)[i], 0f)
+                    assertEquals(darkUniforms.getValue(name)[i], actual.getValue("appearance_$name")[i], 0f)
+                }
+            }
+        }
+        val automatic = NavigationMaterialRecipe.resolve(.37f, null)
+        for ((dimension, rolloff) in listOf(44f to .4f, 160f to .65f)) {
+            val measured = automatic.forMinimumDimension(dimension)
+            assertEquals(.37f, measured.darkFraction, 0f)
+            assertEquals(0f, measured.luminanceRollOff, 0f)
+            assertEquals(rolloff, requireNotNull(measured.appearanceAlternate).luminanceRollOff, 0f)
+            assertTrue(!requireNotNull(measured.appearanceAlternate).automaticSize)
+        }
+        for (clear in listOf(0f, .4f, 1f)) for (headroom in listOf(1f, 1.1f, 1.2f)) {
+            val light = navigationGlassKeyThreshold(false, clear, headroom)
+            val dark = navigationGlassKeyThreshold(true, clear, headroom)
+            assertEquals(light, navigationGlassKeyThreshold(0f, clear, headroom), 0f)
+            assertEquals(dark, navigationGlassKeyThreshold(1f, clear, headroom), 0f)
+            val midpoint = navigationGlassKeyThreshold(.5f, clear, headroom)
+            assertTrue(midpoint >= minOf(light, dark) - .000001f && midpoint <= maxOf(light, dark) + .000001f)
+        }
+    }
+
+    @Test
+    fun adaptiveGlassUsesEnvironmentRangesAndRetainsItsPreviousAppearance() {
+        assertEquals(1f, resolveBackdropSamplingScale(Float.NaN), 0f)
+        assertEquals(1f, resolveBackdropSamplingScale(Float.POSITIVE_INFINITY), 0f)
+        assertEquals(.25f, resolveBackdropSamplingScale(.1f), 0f)
+        assertEquals(.5f, resolveBackdropSamplingScale(.5f), 0f)
+        assertEquals(1f, resolveBackdropSamplingScale(2f), 0f)
+        val light = GlassLuminanceHysteresis(false)
+        assertTrue(!light.resolve(null, false))
+        assertTrue(light.resolve(.1f, false))
+        assertTrue(light.resolve(.35f, false))
+        assertTrue(light.resolve(Float.NaN, false))
+        assertTrue(!light.resolve(.7f, false))
+        assertTrue(!light.resolve(.35f, false))
+        val dark = GlassLuminanceHysteresis(true)
+        assertTrue(dark.resolve(.7f, true))
+        assertTrue(!dark.resolve(.95f, true))
+        assertTrue(!dark.resolve(.7f, true))
+        assertTrue(dark.resolve(.5f, true))
+        // The host environment picks the range even after the resolved appearance changed.
+        assertTrue(!dark.resolve(.55f, false))
+        assertTrue(!dark.resolve(null, false))
+        assertTrue(dark.resolve(.5f, true, enabled = false))
+    }
+
+    @Test
+    fun adaptiveLuminancePublishesSmallThresholdCrossingsAndRejectsInvalidSamples() {
+        val luminance = BackdropLuminance()
+        val invalid = listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, -.01f)
+        invalid.forEach { luminance.publish(it) }
+        assertTrue(luminance.value == null)
+        val chooser = GlassLuminanceHysteresis(false)
+
+        luminance.publish(.205f)
+        assertTrue(!chooser.resolve(luminance.value, false))
+        luminance.publish(.199f)
+        assertEquals(.199f, requireNotNull(luminance.value), 0f)
+        assertTrue(chooser.resolve(luminance.value, false))
+        luminance.publish(.495f)
+        assertTrue(chooser.resolve(luminance.value, false))
+        luminance.publish(.501f)
+        assertEquals(.501f, requireNotNull(luminance.value), 0f)
+        assertTrue(!chooser.resolve(luminance.value, false))
+
+        invalid.forEach { luminance.publish(it) }
+        assertEquals(.501f, requireNotNull(luminance.value), 0f)
+        luminance.publish(.50101f)
+        assertEquals(.50101f, requireNotNull(luminance.value), 0f)
+    }
+
+    @Test
+    fun adaptiveForegroundInterpolatesRolesWithoutChangingTheEnvironmentOrExplicitInk() {
+        val light = defaultGlassColors(false, Color.Blue)
+        val dark = defaultGlassColors(true, light.accent)
+        val halfway = adaptiveGlassContentColors(light, true, true, .5f)
+        assertTrue(!halfway.isDark)
+        assertTrue(halfway.content != light.content && halfway.content != dark.content)
+        assertTrue(halfway.secondaryContent != light.secondaryContent && halfway.secondaryContent != dark.secondaryContent)
+        assertEquals(light.accent, halfway.accent)
+        assertEquals(light.container, halfway.container)
+        assertEquals(light.content, adaptiveGlassContentColors(light, true, true, 0f).content)
+        assertEquals(dark.content, adaptiveGlassContentColors(light, false, true, 1f).content)
+        assertEquals(light, adaptiveGlassContentColors(light, true, false, .5f))
+        assertEquals(dark.content, adaptiveGlassContentColors(light, true, true, Float.NaN).content)
+        val custom = light.copy(content = Color.Magenta, secondaryContent = Color.Cyan, tertiaryContent = Color.Yellow)
+        assertEquals(custom, adaptiveGlassContentColors(custom, true, true, .5f))
+
+        val probe = BackdropLuminance()
+        val parent = GlassMaterialContext(false, true, halfway, light, probe, true, true, .5f)
+        val childColors = adaptiveGlassContentColors(light, false, true, .25f)
+        val child = GlassMaterialContext(false, false, childColors, light, probe, true, false, .25f)
+        assertEquals(childColors.content, child.foreground(halfway.content, parent))
+        assertEquals(childColors.secondaryContent, child.foreground(halfway.secondaryContent, parent))
+        assertEquals(Color.Magenta, child.foreground(Color.Magenta, parent))
+        val unsampled = GlassMaterialContext(false, false, light, light, probe, false, false)
+        assertEquals(light.content, unsampled.foreground(halfway.content, parent))
+        assertTrue(child.luminanceState == null && unsampled.luminanceState == null)
+    }
+
     @Test
     fun queuedDragDeltasKeepTheirFullTargetAndSettledDistance() {
         listOf(false, true).forEach { batched ->
@@ -71,36 +369,95 @@ class NavigationIndicatorLensTest {
         }
     }
 
+    @Test
+    fun nativeLensLiftKeepsItsSpringFamilyAndReleasesWhileTheValueSettles() {
+        NativeControlLensStyle.entries.forEach { style ->
+            withQueuedDrag(lensStyle = style) { drag, dispatcher, clock ->
+                drag.press()
+                dispatcher.drain()
+                clock.advance(dispatcher, 12)
+                if (style == NativeControlLensStyle.SwitchThumb || style == NativeControlLensStyle.SliderThumb)
+                    assertTrue("The measured small lens spring must retain its overshoot", drag.pressProgress > 1.02f)
+                else assertTrue("The native large lens spring approaches its target without overshoot",
+                    drag.pressProgress in .9f..1f)
+                clock.settle(dispatcher)
+                drag.updateValue(3f)
+                dispatcher.drain()
+                drag.release()
+                dispatcher.drain()
+                clock.advance(dispatcher, 3)
+                assertTrue("The thumb value is still moving in this release case", drag.value < 2.9f)
+                assertTrue("Native unlift must not wait for the selected value to settle", drag.pressProgress < .99f)
+                drag.press()
+                dispatcher.drain()
+                clock.settle(dispatcher)
+                assertEquals("A new touch cancels the previous unlift", 1f, drag.pressProgress, .001f)
+            }
+        }
+    }
+
+    @Test
+    fun nativeQuickTapCompletesItsMinimumLiftBeforeUnlifting() {
+        listOf(NativeControlLensStyle.SliderThumb, NativeControlLensStyle.SegmentedIndicator).forEach { style ->
+            withQueuedDrag(lensStyle = style) { drag, dispatcher, clock ->
+                drag.press()
+                dispatcher.drain()
+                clock.advance(dispatcher, 4)
+                val onUp = drag.pressProgress
+                drag.release()
+                dispatcher.drain()
+                clock.advance(dispatcher, 5)
+                val duringMinimumLift = drag.pressProgress
+                assertTrue("A short tap must finish lifting before the native dwell ends",
+                    duringMinimumLift > onUp + .1f)
+                clock.advance(dispatcher, 10)
+                assertTrue("Unlift must begin after the minimum lifted lifetime",
+                    drag.pressProgress < duringMinimumLift)
+                clock.settle(dispatcher)
+                assertEquals(0f, drag.pressProgress, .001f)
+            }
+        }
+    }
+
     private class QueuedDragDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
         private val pending = ArrayDeque<Runnable>()
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { pending.addLast(block) }
         fun drain() { while (pending.isNotEmpty()) pending.removeFirst().run() }
     }
 
+    @OptIn(kotlin.time.ExperimentalTime::class)
     private class DragFrameClock : androidx.compose.runtime.MonotonicFrameClock {
         private val waiting = ArrayList<(Long) -> Unit>()
+        private val testTime = kotlin.time.TestTimeSource()
+        val timeSource: kotlin.time.TimeSource get() = testTime
         private var time = 0L
         override suspend fun <R> withFrameNanos(onFrame: (Long) -> R): R =
             kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
                 waiting.add { nanos -> if (continuation.isActive) continuation.resumeWith(runCatching { onFrame(nanos) }) }
             }
-        fun settle(dispatcher: QueuedDragDispatcher) {
-            repeat(180) {
+        fun advance(dispatcher: QueuedDragDispatcher, frames: Int) {
+            repeat(frames) {
                 time += 16_666_667L
+                testTime += 16_666_667L.nanoseconds
                 val ready = waiting.toList()
                 waiting.clear()
                 ready.forEach { it(time) }
                 dispatcher.drain()
             }
         }
+        fun settle(dispatcher: QueuedDragDispatcher) = advance(dispatcher, 180)
     }
 
-    private fun withQueuedDrag(block: (DampedDragAnimation, QueuedDragDispatcher, DragFrameClock) -> Unit) {
+    private fun withQueuedDrag(
+        lensStyle: NativeControlLensStyle? = null,
+        block: (DampedDragAnimation, QueuedDragDispatcher, DragFrameClock) -> Unit,
+    ) {
         val dispatcher = QueuedDragDispatcher()
         val clock = DragFrameClock()
         val scope = kotlinx.coroutines.CoroutineScope(dispatcher + clock)
         val drag = DampedDragAnimation(scope, 0f, 0f..3f, 0.001f, 1f, 78f / 56f,
-            onDragStarted = {}, onDragStopped = {}, onDrag = { _, _ -> })
+            onDragStarted = {}, onDragStopped = {}, onDrag = { _, _ -> }, lensStyle = lensStyle,
+            timeSource = clock.timeSource)
         try { block(drag, dispatcher, clock) } finally {
             scope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
             dispatcher.drain()
@@ -114,6 +471,14 @@ class NavigationIndicatorLensTest {
         val detached = NavigationContactField().grid(NavigationContactContour(pathApproximation(left, right)), 24f)
         assertField(detached, Offset(98f, 40f), -2f, Offset(1f, 0f))
         assertField(detached, Offset(122f, 40f), -2f, Offset(-1f, 0f))
+        val separated = NavigationContactField().grid(
+            NavigationContactContour(pathApproximation(left, left.map { it + Offset(320f, 0f) })), 24f)
+        val gap = Offset(210f, 40f)
+        val gapIndex = (((gap.y - separated.origin.y) / separated.step).toInt() * separated.width +
+            ((gap.x - separated.origin.x) / separated.step).toInt()) * 4
+        assertTrue("A distant gap between detached shapes must remain exterior", separated.rgba[gapIndex] > 0f)
+        assertTrue("The visible field must include its exterior support", separated.origin.x <= -24f &&
+            separated.origin.y <= -24f && separated.origin.x + (separated.width - 1) * separated.step >= 444f)
         // These are the exposed upper/lower necks after the two facing sides vanish.
         val joined = listOf(
             Offset(0f, 0f), Offset(80f, 0f), Offset(100f, 20f), Offset(120f, 20f),
@@ -216,6 +581,12 @@ class NavigationIndicatorLensTest {
             listOf(0f, 7.5f, 32f, 120f).forEach { band ->
                 val actual = NavigationContactField().grid(contour, band)
                 val expected = referenceContactField(contour.edges, actual)
+                // The visible grid changes only the old unresolved negative-distance sentinel.
+                // Keep every solved distance, normal and alpha bit checked against the old raster.
+                expected.indices.step(4).forEach { index ->
+                    if (expected[index + 1] == 0f && expected[index + 2] == 0f)
+                        expected[index] = kotlin.math.abs(expected[index])
+                }
                 assertContactFieldBits("Scene $scene, band $band", expected, actual.rgba)
             }
         }
@@ -228,12 +599,16 @@ class NavigationIndicatorLensTest {
             val contour = NavigationContactContour(pathApproximation(*polygons.toTypedArray()))
             listOf(0f, 7.5f, 32f, 120f).forEach { band ->
                 val geometry = NavigationContactField().grid(contour, band)
+                val rawGeometry = NavigationContactField.Grid(geometry.width, geometry.height).apply {
+                    origin = geometry.origin
+                    this.band = band
+                }
                 val actual = FloatArray(geometry.rgba.size)
                 assertTrue("Native raster must execute instead of silently falling back",
                     LiquidMenuNativeField.buildContact(contour.edges, geometry.origin.x, geometry.origin.y,
                         geometry.step, geometry.width, geometry.height, band, actual))
                 assertContactFieldBits("Native scene $scene, band $band",
-                    referenceContactField(contour.edges, geometry), actual)
+                    referenceContactField(contour.edges, rawGeometry), actual)
             }
         }
     }

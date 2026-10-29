@@ -74,14 +74,15 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawPlainBackdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.LocalGlassAppearance
 import io.github.neoruaa.glasmio.glass.LocalBlurBackdrop
+import io.github.neoruaa.glasmio.glass.LocalGlassBackdrop
 import io.github.neoruaa.glasmio.glass.glassBackdropSource
 import io.github.neoruaa.glasmio.glass.progressiveBlurBackdrop
 import io.github.neoruaa.glasmio.glass.scrollEdgeContentFade
@@ -421,7 +422,9 @@ fun GlasmioBottomSheet(
                                             }.background(chromeColors.groupedBackground.copy(alpha = 1f))),
                                     )
                                     Box(Modifier.fillMaxWidth().padding(top = handleHeight).onSizeChanged { toolbarHeight = it.height }) {
-                                        topBar()
+                                        CompositionLocalProvider(LocalGlassBackdrop provides chromeBackdrop) {
+                                            topBar()
+                                        }
                                     }
                                     Box(Modifier.fillMaxWidth().height(handleHeight), contentAlignment = Alignment.TopCenter) {
                                         Box(Modifier.padding(top = 6.dp).size(60.dp, 4.dp)

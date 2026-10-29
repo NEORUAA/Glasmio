@@ -2,6 +2,8 @@ package io.github.neoruaa.glasmio.ui
 
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.icons.*
 
 import androidx.compose.foundation.background
@@ -25,13 +27,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.dp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -67,16 +68,22 @@ fun GlasmioSheetSurface(
     glassFraction: Float = 1f,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    val colors = LocalGlassColors.current
+    val materialContext = rememberGlassMaterialContext(inheritLuminance = false)
+    val colors = materialContext.colors
     val appearance = LocalGlassAppearance.current
     val inheritedMaterial = LocalIosSheetMaterialContext.current
         ?: IosSheetMaterialContext(
             colors.isDark, if (glassFraction >= 0.5f) 1f else 0f,
             LocalGlasmioSheetGroupedListStyle.current,
         )
-    val contentMaterial = if (appearance.usesBackdrop) inheritedMaterial else inheritedMaterial.opaque()
+    val resolvedMaterial = if (materialContext.adaptive) inheritedMaterial.copy(isDark = materialContext.isDark) else inheritedMaterial
+    val contentMaterial = if (appearance.usesBackdrop) resolvedMaterial else resolvedMaterial.opaque()
+    val semanticDefaults = defaultGlassColors(materialContext.isDark, colors.accent)
+    val secondaryContent = if (colors.secondaryContent == semanticDefaults.secondaryContent)
+        contentMaterial.secondaryLabelColor else colors.secondaryContent
     val materialBackdrop = rememberLayerBackdrop()
     val glass = glassFraction.coerceIn(0f, 1f)
+    val systemBackground = if (materialContext.isDark) Color(0xFF1C1C1E) else Color.White
     val innerShadows = rememberNavigationInnerShadows(true)
     val animationScope = rememberCoroutineScope()
     val activeInteractiveHighlight = interactiveHighlight ?: remember(animationScope) {
@@ -99,8 +106,7 @@ fun GlasmioSheetSurface(
     // lives in the app window, so sample it with window-space coordinates. The library's
     // localPositionOf mapping cannot cross compose owners and silently sampled nothing.
     val backdropRenderer = if (appearance.usesBackdrop) {
-        val samplingBackdrop = rememberCrossWindowBackdrop(backdrop)
-        rememberSheetBackdropRenderer(samplingBackdrop, NavigationGlassMaterial.RegularLarge.frostRadius)
+        rememberCrossWindowBackdrop(backdrop)
     } else {
         emptyBackdrop()
     }
@@ -110,34 +116,21 @@ fun GlasmioSheetSurface(
                 .navigationGlassBackground(
                     backdrop = backdropRenderer,
                     shape = { shape },
-                    containerColor = colors.container,
+                    containerColor = if (appearance.reduceTransparency) systemBackground else colors.container,
                     navigationMaterial = true,
                     innerShadows = innerShadows,
                     isDark = colors.isDark,
-                    // The quarter-resolution backend already supplies the scene blur.
-                    blurRadius = 0.dp,
+                    materialContext = materialContext,
                     appearance = appearance,
                     material = NavigationGlassMaterial.RegularLarge,
                     exportedBackdrop = materialBackdrop,
                     pressProgressState = pressProgress,
                     highlightAlphaMultiplier = glass,
                     innerShadowAlpha = glass,
-                    preserveBackdropColors = true,
-                    // Android mapping calibrated against the physical regular/sheet backdrop.
-                    // This attenuates only the paint passes, preserving the native-sized optics.
-                    materialPaintAlpha = 0f,
-                    surfaceOverlay = {
-                        val systemBackground = if (colors.isDark) Color(0xFF1C1C1E) else Color.White
-                        if (!appearance.usesBackdrop) {
-                            drawRect(systemBackground)
-                        } else {
-                            if (colors.isDark) {
-                                drawRect(Color(0xFF111111).copy(alpha = 0.43f))
-                            } else {
-                                drawRect(Color.White.copy(alpha = 0.232f))
-                                drawRect(Color.White.copy(alpha = 0.065f), blendMode = BlendMode.Plus)
-                            }
-                            if (glass < 1f) drawRect(systemBackground.copy(alpha = 1f - glass))
+                    materialPaintAlpha = glass,
+                    backgroundOverlay = {
+                        if (appearance.usesBackdrop && glass < 1f) {
+                            drawRect(systemBackground.copy(alpha = 1f - glass))
                         }
                     },
                     layerBlock = sheetLayerBlock,
@@ -145,20 +138,20 @@ fun GlasmioSheetSurface(
                 .then(if (interactive) activeInteractiveHighlight.modifier else Modifier)
                 .then(if (interactive) activeInteractiveHighlight.gestureModifier else Modifier),
             content = {
-                CompositionLocalProvider(
-                    LocalContentColor provides colors.content,
-                    LocalGlassContentColor provides colors.content,
-                    LocalGroupedListBackgroundAlpha provides SheetGroupedListBackgroundAlpha,
-                    LocalIosSheetMaterialContext provides contentMaterial,
-                    LocalIosSheetBackdrop provides materialBackdrop,
-                    LocalGlassColors provides colors.copy(
-                        groupedBackground = contentMaterial.tableColor,
-                        elevatedBackground = contentMaterial.cellColor,
-                        separator = contentMaterial.separatorColor,
-                        secondaryContent = contentMaterial.secondaryLabelColor,
-                    ),
-                ) {
-                    content()
+                ProvideGlassMaterialContext(materialContext) {
+                    CompositionLocalProvider(
+                        LocalGroupedListBackgroundAlpha provides SheetGroupedListBackgroundAlpha,
+                        LocalIosSheetMaterialContext provides contentMaterial,
+                        LocalIosSheetBackdrop provides materialBackdrop,
+                        LocalGlassColors provides colors.copy(
+                            groupedBackground = contentMaterial.tableColor,
+                            elevatedBackground = contentMaterial.cellColor,
+                            separator = contentMaterial.separatorColor,
+                            secondaryContent = secondaryContent,
+                        ),
+                    ) {
+                        content()
+                    }
                 }
             },
     )

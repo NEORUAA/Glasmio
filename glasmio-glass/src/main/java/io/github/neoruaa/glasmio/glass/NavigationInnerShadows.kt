@@ -1,18 +1,9 @@
 package io.github.neoruaa.glasmio.glass
 
-import io.github.neoruaa.glasmio.core.*
-import io.github.neoruaa.glasmio.icons.*
-
-import android.graphics.BlendMode
-import android.graphics.BlendModeColorFilter
-import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RenderEffect
-import android.graphics.RenderNode
 import android.graphics.RuntimeShader
 import android.graphics.RuntimeXfermode
-import android.graphics.Shader
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.geometry.Offset
@@ -24,56 +15,41 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
-import kotlin.math.ceil
+import io.github.neoruaa.glasmio.glass.render.highlight.Highlight
+import io.github.neoruaa.glasmio.glass.render.highlight.HighlightStyle
+import io.github.neoruaa.glasmio.glass.render.highlight.NativeCasdfHighlightMaskFunctions
+import io.github.neoruaa.glasmio.glass.render.highlight.NativeGlassBackgroundEdgeFunctions
+import io.github.neoruaa.glasmio.glass.render.highlight.NativeVibrantColorMatrix
+import io.github.neoruaa.glasmio.glass.render.highlight.NativeVibrantColorMatrixFunctions
+import io.github.neoruaa.glasmio.glass.render.highlight.nativeVibrantMatrix
+import io.github.neoruaa.glasmio.glass.render.optics.GlassSdfShader
+import io.github.neoruaa.glasmio.glass.render.optics.glassCornerRadii
+import kotlin.math.PI
 
-/** GPU-only inner shadows above the glass background, below its highlights and foreground. */
+/** Native glassBackground ring/key-fill transfers; shared by live and retained surfaces. */
+@Suppress("UNUSED_PARAMETER")
 class NavigationInnerShadowRenderer(
     private val renderScale: Float = 1f,
     combineMasks: Boolean = Build.VERSION.SDK_INT >= 36,
 ) {
-    private val narrowMask = RenderNode("Navigation narrow inner shadow")
-    private val wideMask = RenderNode("Navigation wide inner shadow")
-    private val packedMask = if (Build.VERSION.SDK_INT >= 36 && combineMasks) {
-        RenderNode("Navigation packed inner shadows").apply {
-            setUseCompositingLayer(true, null)
-        }
-    } else null
-    private val packedPaint = if (Build.VERSION.SDK_INT >= 36 && combineMasks) {
-        createPackedPaint(40f / 255f)
-    } else null
-    private val darkPackedPaint = if (Build.VERSION.SDK_INT >= 36 && combineMasks) {
-        createPackedPaint(26f / 255f)
-    } else null
-    private val clearPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { blendMode = BlendMode.CLEAR }
-    private val plusPaint = Paint().apply {
-        blendMode = BlendMode.PLUS
-        colorFilter = BlendModeColorFilter(Color.rgb(40, 40, 40), BlendMode.SRC_IN)
-    }
-    private val darkPlusPaint = Paint().apply {
-        blendMode = BlendMode.PLUS
-        colorFilter = BlendModeColorFilter(Color.rgb(26, 26, 26), BlendMode.SRC_IN)
-    }
-    private val linearBurnPaint = if (Build.VERSION.SDK_INT >= 36 && !combineMasks) createLinearBurnPaint() else null
-    private val burnMask = if (Build.VERSION.SDK_INT < 36) {
-        RenderNode("Navigation linear burn alpha").apply {
-            setRenderEffect(
-                RenderEffect.createRuntimeShaderEffect(RuntimeShader(BurnAlphaShader), "mask"),
-            )
-        }
-    } else null
-    private val fallbackBurnPaint = Paint().apply { blendMode = BlendMode.COLOR_BURN }
-    private val fallbackDimPaint = Paint().apply {
-        colorFilter = BlendModeColorFilter(Color.BLACK, BlendMode.SRC_IN)
-        alpha = 25 // 1 - 230/255, exactly the complement of #E6E6E6.
-    }
-    private var key: GeometryKey? = null
-    private var outlinePath = android.graphics.Path()
-    private var shadowHolePath = android.graphics.Path()
-    private var padding = 0f
-    private var blurDensity = Float.NaN
-    private var maskWidth = 0
-    private var maskHeight = 0
+    private val materialRenderer = NavigationMaterialRenderer()
+    private val maskShaders = mutableMapOf<String?, RuntimeShader>()
+    private val effectShaders = mutableMapOf<String?, RuntimeShader>()
+    private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var lastMaskShader: RuntimeShader? = null
+    private var lastEffectShader: RuntimeShader? = null
+    private val blender = if (Build.VERSION.SDK_INT >= 36) NativeEdgeBlender() else null
+    private val path = Path()
+    private var geometry: Geometry? = null
+    private var effectGeometry: Geometry? = null
+    private var effectRecipe: NavigationMaterialRecipe? = null
+    private var effectOpacity = Float.NaN
+    private var effectHighlight: Highlight? = null
+    private var effectHighlightClearFraction: Float? = null
+    private val highlightInterpolation = NativeVibrantColorMatrix.HighlightInterpolation()
+    private var cachedEffect: RenderEffect? = null
 
     fun draw(
         scope: DrawScope,
@@ -81,269 +57,264 @@ class NavigationInnerShadowRenderer(
         bounds: Rect = Rect(Offset.Zero, scope.size),
         isDark: Boolean = false,
         alpha: Float = 1f,
+    ) = drawInternal(scope, shape, bounds, isDark, alpha, null, 0f)
+
+    internal fun drawEdges(
+        scope: DrawScope,
+        shape: Shape,
+        bounds: Rect = Rect(Offset.Zero, scope.size),
+        isDark: Boolean = false,
+        alpha: Float = 1f,
+        burnAlpha: Float = 1f,
+        field: NativeGlassFilterField? = null,
+        clearFraction: Float? = null,
+    ) = drawInternal(scope, shape, bounds, isDark, alpha, null, 0f, field, clearFraction)
+
+    internal fun materialEffect(
+        recipe: NavigationMaterialRecipe,
+        alpha: Float = 1f,
+        minimumDimension: Float = Float.NaN,
+        shape: Shape? = null,
+        size: Size = Size.Unspecified,
+        density: Density? = null,
+        layoutDirection: LayoutDirection = LayoutDirection.Ltr,
+        origin: Offset = Offset.Zero,
+        field: NativeGlassFilterField? = null,
+        clearFraction: Float? = null,
+        highlight: Highlight? = null,
+        highlightClearFraction: Float? = null,
+    ): RenderEffect {
+        val sourceField = field ?: (shape as? LiquidContactShape)?.let { navigationContainerGlassField(it) }
+        val effectShader = obtainShader(sourceField, effect = true)
+        val programChanged = effectShader !== lastEffectShader
+        val scoped = materialRenderer.recipeForSize(recipe, minimumDimension)
+        val opacity = alpha.coerceIn(0f, 1f)
+        val nextGeometry = if (shape != null && density != null && size.width.isFinite() && size.height.isFinite() && size.minDimension > 0f)
+            Geometry(shape, size, layoutDirection, density.density, density.fontScale,
+                scoped.darkFraction, clearFraction?.coerceIn(0f, 1f) ?: if (scoped.isClear) 1f else 0f,
+                origin, sourceField?.shaderFunctions) else null
+        val recipeChanged = !scoped.matches(effectRecipe)
+        val geometryChanged = nextGeometry != effectGeometry || programChanged || sourceField != null
+        val highlightFraction = highlightClearFraction?.coerceIn(0f, 1f)
+        if (recipeChanged || effectOpacity != opacity || geometryChanged || effectHighlight != highlight ||
+            effectHighlightClearFraction != highlightFraction || cachedEffect == null) {
+            if (recipeChanged || programChanged) updateNavigationMaterialUniforms(scoped, opacity, effectShader::setFloatUniform)
+            else {
+                effectShader.setFloatUniform("materialOpacity", opacity)
+                effectShader.setFloatUniform("appearance_materialOpacity", opacity)
+            }
+            if (nextGeometry != null && geometryChanged) prepareGeometry(effectShader, nextGeometry, sourceField)
+            sourceField?.configure?.invoke(effectShader)
+            effectShader.setFloatUniform("nativeEdgeOpacity", if (nextGeometry == null) 0f else 1f)
+            configureHighlight(effectShader, highlight, nextGeometry, highlightFraction)
+            // HWUI snapshots a RuntimeShader's uniforms while creating its RenderEffect.
+            cachedEffect = RenderEffect.createRuntimeShaderEffect(effectShader, "content")
+            effectGeometry = nextGeometry
+            effectRecipe = scoped
+            effectOpacity = opacity
+            effectHighlight = highlight
+            effectHighlightClearFraction = highlightFraction
+            lastEffectShader = effectShader
+        }
+        return requireNotNull(cachedEffect)
+    }
+
+    internal fun paintMaterial(scope: DrawScope, recipe: NavigationMaterialRecipe, alpha: Float = 1f): Boolean =
+        materialRenderer.draw(scope, recipe, alpha)
+
+    internal fun drawMaterial(
+        scope: DrawScope,
+        shape: Shape,
+        recipe: NavigationMaterialRecipe,
+        bounds: Rect = Rect(Offset.Zero, scope.size),
+        isDark: Boolean = false,
+        alpha: Float = 1f,
+        materialAlpha: Float = 1f,
+        burnAlpha: Float = 1f,
+        field: NativeGlassFilterField? = null,
+        clearFraction: Float? = null,
+    ) = drawInternal(scope, shape, bounds, isDark, alpha, recipe, materialAlpha, field, clearFraction)
+
+    private fun drawInternal(
+        scope: DrawScope,
+        shape: Shape,
+        bounds: Rect,
+        isDark: Boolean,
+        alpha: Float,
+        recipe: NavigationMaterialRecipe?,
+        materialAlpha: Float,
+        field: NativeGlassFilterField? = null,
+        clearFraction: Float? = null,
     ) {
         val canvas = scope.drawContext.canvas.nativeCanvas
-        val opacity = alpha.coerceIn(0f, 1f)
-        if (!canvas.isHardwareAccelerated || bounds.isEmpty || opacity <= 0f) return
-        val nextKey = GeometryKey(shape, bounds.size, scope.layoutDirection, scope.density, scope.fontScale)
-        // HWUI may discard display lists while a retained surface is hidden. Geometry
-        // equality alone does not guarantee that its native shadow masks still exist.
-        val masksRecorded = packedMask?.hasDisplayList() ?: (
-            narrowMask.hasDisplayList() && wideMask.hasDisplayList() &&
-                burnMask?.hasDisplayList() != false
-            )
-        if (key != nextKey || !masksRecorded) updateGeometry(scope, nextKey)
-        // Scale the mask coverage before the existing destination-aware blends.
-        // The packed RGB channels and the fallback burn shader keep their original math.
-        packedMask?.alpha = opacity
-        narrowMask.alpha = opacity
-        wideMask.alpha = opacity
+        if (!canvas.isHardwareAccelerated || bounds.isEmpty) return
+        val scopedRecipe = recipe?.let { materialRenderer.recipeForSize(it, bounds.size.minDimension / scope.density) }
+        // Older HWUI receives the same material/edge function in materialEffect on its sampled input.
+        if (Build.VERSION.SDK_INT < 36) return
+        val renderer = blender ?: return
+        val sourceField = field ?: (shape as? LiquidContactShape)?.let { navigationContainerGlassField(it) }
+        val edgeShader = obtainShader(sourceField, effect = false)
+        val nextGeometry = Geometry(shape, bounds.size, scope.layoutDirection, scope.density, scope.fontScale,
+            scopedRecipe?.darkFraction ?: if (isDark) 1f else 0f, clearFraction?.coerceIn(0f, 1f) ?: if (scopedRecipe?.isClear == true) 1f else 0f,
+            fieldSource = sourceField?.shaderFunctions)
+        if (nextGeometry != geometry || lastMaskShader !== edgeShader) {
+            prepareGeometry(edgeShader, nextGeometry, sourceField)
+            path.rewind()
+            when (val outline = shape.createOutline(bounds.size, scope.layoutDirection, scope)) {
+                is Outline.Rectangle -> path.addRect(outline.rect)
+                is Outline.Rounded -> path.addRoundRect(outline.roundRect)
+                is Outline.Generic -> path.addPath(outline.path)
+            }
+            geometry = nextGeometry
+            lastMaskShader = edgeShader
+            edgePaint.shader = edgeShader
+        }
+        sourceField?.configure?.invoke(edgeShader)
+        edgeShader.setFloatUniform("nativeEdgeOpacity", alpha.coerceIn(0f, 1f))
+        renderer.prepare(scopedRecipe, materialAlpha)
+        edgePaint.xfermode = renderer.shader
         val save = canvas.save()
         try {
             canvas.translate(bounds.left, bounds.top)
-            canvas.clipPath(outlinePath)
-            val packed = packedMask
-            if (packed != null) {
-                // The fixed draw position keeps the filtered snapshot independent of
-                // the upper/lower offsets, which are already encoded in the graph.
-                val paint = requireNotNull(if (isDark) darkPackedPaint else packedPaint)
-                drawMask(canvas, packed, bounds.size, 0f, paint)
-            } else {
-                val offset = 40f * scope.density
-                val plus = if (isDark) darkPlusPaint else plusPaint
-                // Figma stacks effects bottom to top: wide burn, upper Plus, lower Plus.
-                if (linearBurnPaint != null) {
-                    drawMask(canvas, wideMask, bounds.size, offset, linearBurnPaint)
-                } else {
-                    // For the opaque sampled backdrop, t = 1-m*(1-S), a = m*S/t.
-                    // ColorBurn(S,a), then black SrcOver(m*(1-S)), equals
-                    // (1-m)*D + m*max(D+S-1,0), including the blurred alpha edges.
-                    drawMask(canvas, requireNotNull(burnMask), bounds.size, offset, fallbackBurnPaint)
-                    drawMask(canvas, wideMask, bounds.size, offset, fallbackDimPaint)
-                }
-                drawMask(canvas, narrowMask, bounds.size, -offset, plus)
-                drawMask(canvas, narrowMask, bounds.size, offset, plus)
-            }
+            canvas.clipPath(path.asAndroidPath())
+            canvas.drawRect(0f, 0f, bounds.width, bounds.height, edgePaint)
         } finally {
             canvas.restoreToCount(save)
         }
     }
 
-    private fun updateGeometry(scope: DrawScope, nextKey: GeometryKey) {
-        val outline = nextKey.shape.createOutline(nextKey.size, nextKey.layoutDirection, scope)
-        outlinePath = Path().apply {
-            when (outline) {
-                is Outline.Rectangle -> addRect(outline.rect)
-                is Outline.Rounded -> addRoundRect(outline.roundRect)
-                is Outline.Generic -> addPath(outline.path)
-            }
-        }.asAndroidPath()
-        val combineCorners = outlinePath.isConvex ||
-            (nextKey.shape as? LiquidContactShape)?.hasConsistentWinding == true
-        shadowHolePath = if (nextKey.shape is LiquidMenuContour) {
-            expandedLiquidMenuShadowHole(outlinePath, 40f * scope.density)
-        } else {
-            expandedShadowHole(40f * scope.density, combineCorners)
-        }
-        if (blurDensity != scope.density) {
-            // Figma exports blur 10/30 as Gaussian sigma 5/15. Android converts its
-            // public radius to sigma = radius * 0.57735 + 0.5; invert that after
-            // scaling sigma into mask pixels so the visible blur stays unchanged.
-            // These filters stay unchanged while the shape morphs at the same density.
-            val narrowSigma = 5f * scope.density
-            val wideSigma = 15f * scope.density
-            val narrowRadius = (narrowSigma * renderScale - 0.5f) / 0.57735f
-            val wideRadius = (wideSigma * renderScale - 0.5f) / 0.57735f
-            padding = ceil(40f * scope.density + 3f * wideSigma)
-            val narrowBlur = RenderEffect.createBlurEffect(narrowRadius, narrowRadius, Shader.TileMode.CLAMP)
-            val wideBlur = RenderEffect.createBlurEffect(wideRadius, wideRadius, Shader.TileMode.CLAMP)
-            val packed = packedMask
-            if (packed != null) {
-                val offset = 40f * scope.density * renderScale
-                val burn = RenderEffect.createColorFilterEffect(
-                    BlendModeColorFilter(Color.RED, BlendMode.SRC_IN),
-                    RenderEffect.createOffsetEffect(0f, offset, wideBlur),
-                )
-                val upper = RenderEffect.createColorFilterEffect(
-                    BlendModeColorFilter(Color.GREEN, BlendMode.SRC_IN),
-                    RenderEffect.createOffsetEffect(0f, -offset, narrowBlur),
-                )
-                val lower = RenderEffect.createColorFilterEffect(
-                    BlendModeColorFilter(Color.BLUE, BlendMode.SRC_IN),
-                    RenderEffect.createOffsetEffect(0f, offset, narrowBlur),
-                )
-                // Separate RGB channels carry the three alpha masks without losing
-                // overlapping values. Their combined alpha is not used by the blender.
-                packed.setRenderEffect(
-                    RenderEffect.createBlendModeEffect(
-                        RenderEffect.createBlendModeEffect(burn, upper, BlendMode.PLUS),
-                        lower,
-                        BlendMode.PLUS,
-                    ),
-                )
-            } else {
-                narrowMask.setRenderEffect(narrowBlur)
-                wideMask.setRenderEffect(wideBlur)
-            }
-            blurDensity = scope.density
-        }
-        val requiredWidth = ceil((nextKey.size.width + padding * 2f) * renderScale).toInt()
-        val requiredHeight = ceil((nextKey.size.height + padding * 2f) * renderScale).toInt()
-        // Only the backing allocation grows. The path, sampling origin and blur remain exact;
-        // the extra white margin matches the mask's existing CLAMP boundary.
-        maskWidth = maxOf(maskWidth, (requiredWidth + 63) / 64 * 64)
-        maskHeight = maxOf(maskHeight, (requiredHeight + 63) / 64 * 64)
-        val width = maskWidth
-        val height = maskHeight
-        val packed = packedMask
-        if (packed != null) {
-            recordMask(packed, width, height)
-        } else {
-            recordMask(narrowMask, width, height)
-            recordMask(wideMask, width, height)
-            burnMask?.let { node ->
-                node.setPosition(0, 0, width, height)
-                val recording = node.beginRecording(width, height)
-                try {
-                    recording.drawRenderNode(wideMask)
-                } finally {
-                    node.endRecording()
-                }
-            }
-        }
-        key = nextKey
-    }
-
-    private fun recordMask(node: RenderNode, width: Int, height: Int) {
-        node.setPosition(0, 0, width, height)
-        val recording = node.beginRecording(width, height)
-        try {
-            recording.scale(renderScale, renderScale)
-            recording.drawColor(Color.WHITE)
-            recording.translate(padding, padding)
-            recording.drawPath(shadowHolePath, clearPaint)
-        } finally {
-            node.endRecording()
+    private fun obtainShader(field: NativeGlassFilterField?, effect: Boolean): RuntimeShader {
+        val cache = if (effect) effectShaders else maskShaders
+        return cache.getOrPut(field?.shaderFunctions) {
+            val source = field?.shaderFunctions?.let { it + CustomEdgeFieldAdapter } ?: DefaultEdgeFieldShader
+            RuntimeShader(if (effect) NavigationMaterialShaderFunctions + source + NativeGlassBackgroundEdgeFunctions +
+                NativeCasdfHighlightMaskFunctions + NativeVibrantColorMatrixFunctions + MaterialEdgeEffectMain
+                else source + NativeGlassBackgroundEdgeFunctions + EdgeMaskMain)
         }
     }
 
-    private fun expandedShadowHole(spread: Float, combineCorners: Boolean): android.graphics.Path {
-        // Figma exports spread -40 as a square-kernel dilation of the inner hole.
-        // Navigation outlines have full-width/height center chords. Four translated
-        // copies and two connecting strips preserve their original corner curves.
-        // Increasing the shape size or using a round stroke changes those curves.
-        val bounds = android.graphics.RectF()
-        outlinePath.computeBounds(bounds, true)
-        val expanded = android.graphics.Path().apply { fillType = android.graphics.Path.FillType.WINDING }
-        for (x in floatArrayOf(-spread, spread)) {
-            for (y in floatArrayOf(-spread, spread)) {
-                if (combineCorners) {
-                    // Convex and explicitly verified contact contours have one winding
-                    // direction. Nonzero fill is their union before the final PathOp.
-                    expanded.addPath(outlinePath, x, y)
-                } else {
-                    val corner = android.graphics.Path(outlinePath).apply { offset(x, y) }
-                    expanded.op(corner, android.graphics.Path.Op.UNION)
-                }
-            }
+    private fun prepareGeometry(shader: RuntimeShader, geometry: Geometry, field: NativeGlassFilterField?) {
+        if (field == null) {
+            val density = Density(geometry.density, geometry.fontScale)
+            shader.setFloatUniform("size", geometry.size.width, geometry.size.height)
+            shader.setFloatUniform("cornerRadii", glassCornerRadii(geometry.shape, geometry.size, geometry.direction, density))
         }
-        val strips = android.graphics.Path().apply {
-            addRect(
-                bounds.centerX() - spread, bounds.top - spread,
-                bounds.centerX() + spread, bounds.bottom + spread,
-                android.graphics.Path.Direction.CW,
-            )
-            addRect(
-                bounds.left - spread, bounds.centerY() - spread,
-                bounds.right + spread, bounds.centerY() + spread,
-                android.graphics.Path.Direction.CW,
-            )
-        }
-        expanded.op(strips, android.graphics.Path.Op.UNION)
-        return expanded
+        shader.setFloatUniform("nativeEdgeDensity", geometry.density)
+        shader.setFloatUniform("nativeEdgeDark", geometry.darkFraction)
+        shader.setFloatUniform("nativeEdgeClear", geometry.clear)
+        shader.setFloatUniform("nativeEdgeOrigin", geometry.origin.x, geometry.origin.y)
     }
 
-    private fun drawMask(canvas: Canvas, node: RenderNode, size: Size, offset: Float, paint: Paint) {
-        val save = canvas.saveLayer(0f, 0f, size.width, size.height, paint)
-        try {
-            canvas.translate(-padding, offset - padding)
-            canvas.scale(1f / renderScale, 1f / renderScale)
-            canvas.drawRenderNode(node)
-        } finally {
-            canvas.restoreToCount(save)
-        }
+    private fun configureHighlight(shader: RuntimeShader, highlight: Highlight?, geometry: Geometry?, clearFraction: Float?) {
+        val style = highlight?.style
+        val matrix = style?.nativeVibrantMatrix()
+        val opacity = if (highlight != null && style != null && matrix != null && geometry != null && highlight.width.value > 0f)
+            (highlight.alpha * style.color.alpha).coerceIn(0f, 1f) else 0f
+        shader.setFloatUniform("nativeSurfaceHighlightOpacity", opacity)
+        shader.setFloatUniform("nativeSurfaceHighlightHeight", (highlight?.width?.value ?: 1f) * (geometry?.density ?: 1f))
+        val nativeStyle = style as? HighlightStyle.Default
+        shader.setFloatUniform("nativeSurfaceHighlightAngle", (nativeStyle?.angle ?: 0f) * (PI / 180.0).toFloat())
+        shader.setFloatUniform("nativeSurfaceHighlightCurvature", .75f * (nativeStyle?.falloff ?: 1f).coerceAtLeast(.01f))
+        if (matrix != null && clearFraction != null) highlightInterpolation.configure(clearFraction, shader::setFloatUniform)
+        else (matrix ?: NativeVibrantColorMatrix.RegularHighlight).configure(shader::setFloatUniform)
     }
 
     fun release() {
-        narrowMask.discardDisplayList()
-        wideMask.discardDisplayList()
-        packedMask?.discardDisplayList()
-        burnMask?.discardDisplayList()
-        key = null
-        maskWidth = 0
-        maskHeight = 0
+        geometry = null
+        effectGeometry = null
+        effectRecipe = null
+        effectHighlight = null
+        effectHighlightClearFraction = null
+        cachedEffect = null
+        maskShaders.clear()
+        effectShaders.clear()
+        lastMaskShader = null
+        lastEffectShader = null
+        edgePaint.shader = null
     }
 
-    private data class GeometryKey(
+    private data class Geometry(
         val shape: Shape,
         val size: Size,
-        val layoutDirection: LayoutDirection,
+        val direction: LayoutDirection,
         val density: Float,
         val fontScale: Float,
+        val darkFraction: Float,
+        val clear: Float,
+        val origin: Offset = Offset.Zero,
+        val fieldSource: String? = null,
     )
 
-    private companion object {
-        @RequiresApi(36)
-        fun createPackedPaint(plusValue: Float) = Paint().apply {
-            // Keep channel data intact: the color constants belong in the blender,
-            // rather than in a color filter on this final compositing paint.
-            xfermode = RuntimeXfermode(PackedShadowShader).apply {
-                setFloatUniform("plusValue", plusValue)
+    @RequiresApi(36)
+    private class NativeEdgeBlender {
+        val shader = RuntimeXfermode(MaterialEdgeBlenderShader)
+        private var recipe: NavigationMaterialRecipe? = null
+        private var opacity = Float.NaN
+
+        fun prepare(value: NavigationMaterialRecipe?, alpha: Float) {
+            val nextOpacity = alpha.coerceIn(0f, 1f)
+            val changed = if (value == null) recipe != null else !value.matches(recipe)
+            if (changed || opacity != nextOpacity) {
+                updateNavigationMaterialUniforms(value, nextOpacity, shader::setFloatUniform)
+                recipe = value
+                opacity = nextOpacity
             }
         }
+    }
 
-        @RequiresApi(36)
-        fun createLinearBurnPaint() = Paint().apply {
-            colorFilter = BlendModeColorFilter(Color.rgb(230, 230, 230), BlendMode.SRC_IN)
-            xfermode = RuntimeXfermode(LinearBurnShader)
-        }
+    private companion object {
+        val NavigationMaterialRecipe.isClear: Boolean get() = nativeFace && saturation == 1.06f && white == 1.08f
 
-        // Premultiplied source-over linear burn, without division at zero alpha.
-        const val LinearBurnShader = """
-half4 main(half4 src, half4 dst) {
-    half overlap = src.a * dst.a;
-    half3 burn = max(half3(0.0), src.rgb * dst.a + dst.rgb * src.a - overlap);
-    return half4(src.rgb * (1.0 - dst.a) + dst.rgb * (1.0 - src.a) + burn,
-        src.a + dst.a - overlap);
-}
-
+        const val DefaultEdgeFieldShader = GlassSdfShader + """
+float3 nativeEdgeField(float2 p) { return glassField(p, 0.0); }
 """
-
-        // Apply premultiplied source-over linear burn, then both saturated Plus
-        // passes. Add the masks before clamping so overlapping highlights keep
-        // the same energy as the separate passes, including translucent targets.
-        const val PackedShadowShader = """
-uniform float plusValue;
-half4 main(half4 src, half4 dst) {
-    half3 masks = clamp(src.rgb, half3(0.0), half3(1.0));
-    half w = masks.r;
-    half plusMasks = masks.g + masks.b;
-    half e = 230.0 / 255.0;
-    half3 burn = dst.rgb * (1.0 - w) + w * e * (1.0 - dst.a)
-        + w * max(half3(0.0), dst.rgb - dst.a * (1.0 - e));
-    half alpha = dst.a + w * (1.0 - dst.a);
-    return half4(min(burn + plusValue * plusMasks, half3(1.0)),
-        min(alpha + plusMasks, 1.0));
+        const val CustomEdgeFieldAdapter = """
+float3 nativeEdgeField(float2 p) { return navigationGlassField(p); }
+"""
+        const val EdgeMaskMain = """
+half4 main(float2 p) {
+    float2 masks = nativeGlassBackgroundEdgeMasks(p);
+    return half4(masks.x, masks.y, nativeEdgeOpacity, 1.0);
 }
 """
-
-        const val BurnAlphaShader = """
-uniform shader mask;
-half4 main(float2 position) {
-    float m = clamp(mask.eval(position).a, 0.0, 1.0);
-    float s = 230.0 / 255.0;
-    float a = m * s / (1.0 - m + m * s);
-    return half4(half3(s * a), a);
+        const val MaterialEdgeEffectMain = """
+uniform shader content;
+uniform float nativeSurfaceHighlightOpacity;
+uniform float nativeSurfaceHighlightHeight;
+uniform float nativeSurfaceHighlightAngle;
+uniform float nativeSurfaceHighlightCurvature;
+half4 nativeMaterialEdgeForAppearance(half4 sampled, float2 p, bool alternate) {
+    half4 face = navigationMaterialFaceForAppearance(sampled, alternate);
+    if (nativeEdgeOpacity > 0.0) face = nativeGlassBackgroundEdges(face, p);
+    half4 result = materialOpacity > 0.0 ? navigationMaterialFinishForAppearance(sampled, face, alternate) : face;
+    if (nativeSurfaceHighlightOpacity > 0.0) {
+        float3 field = nativeEdgeField(p - nativeEdgeOrigin);
+        float mask = nativeCasdfHighlightCoverage(field.x, field.yz, nativeSurfaceHighlightHeight,
+            nativeSurfaceHighlightAngle, nativeSurfaceHighlightCurvature) * nativeSurfaceHighlightOpacity;
+        result = half4(nativeVibrantColorMatrixOver(float4(0.0, 0.0, 0.0, mask), float4(result), float4(result)));
+    }
+    return result;
+}
+half4 main(float2 p) {
+    half4 sampled = navigationWorkingToNative(content.eval(p));
+    half4 result = nativeMaterialEdgeForAppearance(sampled, p, false);
+    if (materialAppearanceMix > 0.0) result = half4(mix(float4(result),
+        float4(nativeMaterialEdgeForAppearance(sampled, p, true)), materialAppearanceMix));
+    return navigationNativeToWorking(result);
+}
+"""
+        const val MaterialEdgeBlenderShader = NavigationMaterialShaderFunctions + DefaultEdgeFieldShader + NativeGlassBackgroundEdgeFunctions + """
+half4 nativeMaterialEdgeForAppearance(half4 sampled, half4 masks, bool alternate) {
+    half4 face = navigationMaterialFaceForAppearance(sampled, alternate);
+    face = nativeApplyGlassBackgroundEdges(face, float2(masks.r, masks.g), float(masks.b));
+    return materialOpacity > 0.0 ? navigationMaterialFinishForAppearance(sampled, face, alternate) : face;
+}
+half4 main(half4 src, half4 dst) {
+    dst = navigationWorkingToNative(dst);
+    half4 result = nativeMaterialEdgeForAppearance(dst, src, false);
+    if (materialAppearanceMix > 0.0) result = half4(mix(float4(result),
+        float4(nativeMaterialEdgeForAppearance(dst, src, true)), materialAppearanceMix));
+    return navigationNativeToWorking(result);
 }
 """
     }

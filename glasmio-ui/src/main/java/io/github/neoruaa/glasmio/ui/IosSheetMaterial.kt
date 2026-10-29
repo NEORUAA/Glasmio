@@ -8,11 +8,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Shape
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.kyant.backdrop.drawPlainBackdrop
-import com.kyant.backdrop.effects.colorFilter
-import com.kyant.backdrop.effects.opacity
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
+import io.github.neoruaa.glasmio.glass.render.effects.colorFilter
+import io.github.neoruaa.glasmio.glass.render.effects.opacity
 import io.github.neoruaa.glasmio.core.SheetGroupedListBackgroundAlpha
 
 /** Native cells by default; ToolbarTint matches sheet controls while the sheet is translucent. */

@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.add
@@ -30,19 +31,33 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.graphics.graphicsLayer
@@ -50,15 +65,19 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogWindowProvider
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import androidx.compose.ui.zIndex
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.core.LocalGlassAppearance
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.glass.GlassSurfaceStyle
+import io.github.neoruaa.glasmio.glass.BottomNavigationContact
 import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
 import io.github.neoruaa.glasmio.glass.LocalGlassBackdrop
 import io.github.neoruaa.glasmio.glass.trackBackdropPosition
@@ -67,6 +86,8 @@ import io.github.neoruaa.glasmio.icons.SfSymbol
 import io.github.neoruaa.glasmio.ui.CompactBottomControlIconSize
 import io.github.neoruaa.glasmio.ui.CompactBottomControlSize
 import io.github.neoruaa.glasmio.ui.GlasmioIconButton
+import io.github.neoruaa.glasmio.ui.GlasmioNavigationBar
+import io.github.neoruaa.glasmio.ui.GlasmioTabItem
 import io.github.neoruaa.glasmio.ui.GlasmioSearchToolbar
 import io.github.neoruaa.glasmio.ui.NavigationBarSurfaceHeight
 import kotlin.math.roundToInt
@@ -79,6 +100,7 @@ import kotlin.math.roundToInt
  * Route changes and the entry-focus flag remain owned by the host. By default its navigation
  * dispatcher handles Back; [handleBack] opts into dismissal only while the IME is absent.
  * Leaving an active search clears its input and restores the window's soft-input policy.
+ * [sourceBoundsInWindow] optionally supplies the measured collapsed endpoint in window pixels.
  */
 @Composable
 fun GlasmioFloatingSearch(
@@ -96,6 +118,7 @@ fun GlasmioFloatingSearch(
     resultsBottomSpacing: Dp = 56.dp,
     handleBack: Boolean = false,
     transition: GlasmioSearchTransition? = null,
+    sourceBoundsInWindow: Rect? = null,
     results: @Composable BoxScope.(PaddingValues) -> Unit = {},
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -171,6 +194,13 @@ fun GlasmioFloatingSearch(
     val toolbarBackdrop = rememberCombinedBackdrop(backdrop, resultsBackdrop)
     val usesBackdrop = LocalGlassAppearance.current.usesBackdrop
     val morph = transition ?: rememberGlasmioSearchTransition(active)
+    var openingSourceBounds by remember { mutableStateOf(sourceBoundsInWindow) }
+    LaunchedEffect(active) {
+        if (active) openingSourceBounds = sourceBoundsInWindow
+    }
+    LaunchedEffect(sourceBoundsInWindow) {
+        if (active && openingSourceBounds == null) openingSourceBounds = sourceBoundsInWindow
+    }
     Box(modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().then(
             if (active && query.text.isNotEmpty()) Modifier.clearAndSetSemantics {} else Modifier,
@@ -209,6 +239,7 @@ fun GlasmioFloatingSearch(
             cancelLabel = cancelLabel,
             placeholder = placeholder,
             autoFocus = active && autoFocus,
+            sourceBoundsInWindow = openingSourceBounds,
         )
     }
 }
@@ -230,22 +261,41 @@ private fun BoxScope.SearchBarLayer(
     cancelLabel: String,
     placeholder: String,
     autoFocus: Boolean,
+    sourceBoundsInWindow: Rect?,
 ) {
     val value = progress.value
     if (!active && value <= 0f) return
+    val direction = LocalLayoutDirection.current
+    var toolbarOriginInWindow by remember { mutableStateOf<Offset?>(null) }
+    val source = sourceBoundsInWindow?.takeIf {
+        it.width > 0f && it.height > 0f &&
+            it.left.isFinite() && it.top.isFinite() && it.right.isFinite() && it.bottom.isFinite()
+    }
     Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(toolbarPadding)) {
         Box(
             Modifier.align(Alignment.BottomEnd)
                 .padding(horizontal = 8.dp)
+                .onGloballyPositioned { toolbarOriginInWindow = it.positionInWindow() }
                 .graphicsLayer { alpha = value.coerceIn(0f, 1f) }
                 .layout { measurable, constraints ->
                     val collapsed = 48.dp.roundToPx()
                     val maxWidth = constraints.maxWidth
-                    val width = (collapsed + (maxWidth - collapsed) * value)
-                        .roundToInt().coerceIn(0, maxWidth)
-                    val height = 48.dp.roundToPx()
+                    val startWidth = source?.width ?: collapsed.toFloat()
+                    val startHeight = source?.height ?: collapsed.toFloat()
+                    val fraction = value.coerceIn(0f, 1f)
+                    val width = (startWidth + (maxWidth - startWidth) * fraction)
+                        .roundToInt().coerceIn(1, maxWidth.coerceAtLeast(1))
+                    val height = (startHeight + (collapsed - startHeight) * fraction).roundToInt().coerceAtLeast(1)
+                    val envelopeHeight = maxOf(collapsed, startHeight.roundToInt())
+                    val origin = toolbarOriginInWindow
+                    val startX = if (source != null && origin != null) source.left - origin.x
+                    else if (direction == LayoutDirection.Ltr) maxWidth - startWidth else 0f
+                    val startBottom = if (source != null && origin != null) source.bottom - origin.y
+                    else envelopeHeight.toFloat()
+                    val x = (startX * (1f - fraction)).roundToInt()
+                    val bottom = (startBottom + (envelopeHeight - startBottom) * fraction).roundToInt()
                     val placeable = measurable.measure(Constraints.fixed(width, height))
-                    layout(maxWidth, height) { placeable.place(maxWidth - width, 0) }
+                    layout(maxWidth, envelopeHeight) { placeable.place(x, bottom - height) }
                 },
         ) {
             CompositionLocalProvider(LocalGlassBackdrop provides backdrop) {
@@ -265,6 +315,70 @@ private fun BoxScope.SearchBarLayer(
     }
 }
 
+/**
+ * A navigation item can share the main capsule or occupy its own trailing capsule.
+ * Selection and actions keep the same keys in both presentations. The host owns routes,
+ * search state and outer window insets; [onItemBoundsChanged] reports actual window pixels.
+ */
+@Composable
+fun <T> GlasmioNavigationBarWithTrailingItem(
+    items: List<GlasmioTabItem<T>>,
+    trailingItem: GlasmioTabItem<T>,
+    selectedKey: T,
+    onSelected: (T) -> Unit,
+    onExpand: () -> Unit,
+    compactProgress: State<Float>,
+    modifier: Modifier = Modifier,
+    detachTrailingItem: Boolean = true,
+    compactSize: Dp = CompactBottomControlSize,
+    backdrop: Backdrop = LocalGlassBackdrop.current,
+    onItemBoundsChanged: ((T, Rect) -> Unit)? = null,
+) {
+    require(items.isNotEmpty()) { "At least one main navigation item is required." }
+    require(items.none { it.key == trailingItem.key }) { "The trailing item key must be unique." }
+    val mainItems = remember(items, trailingItem, detachTrailingItem) {
+        if (detachTrailingItem) items else items + trailingItem
+    }
+    BottomNavigationContact(backdrop = backdrop, modifier = modifier) {
+        GlasmioNavigationBar(
+            items = mainItems,
+            selectedKey = selectedKey,
+            onSelected = onSelected,
+            onExpand = onExpand,
+            compactProgress = compactProgress,
+            compactSize = compactSize,
+            backdrop = backdrop,
+            modifier = Modifier.weight(1f).zIndex(1f),
+            onItemBoundsChanged = onItemBoundsChanged,
+        )
+        if (detachTrailingItem) {
+            Spacer(Modifier.size(width = 8.dp, height = 1.dp))
+            FloatingNavigationControl(
+                compactProgress = compactProgress,
+                onClick = { onSelected(trailingItem.key) },
+                backdrop = backdrop,
+                compactSize = compactSize,
+                itemSelected = trailingItem.key == selectedKey,
+                itemContentDescription = trailingItem.contentDescription,
+                onBoundsChanged = onItemBoundsChanged?.let { callback ->
+                    { bounds -> callback(trailingItem.key, bounds) }
+                },
+            ) { _ ->
+                SfIcon(
+                    trailingItem.symbol,
+                    contentDescription = trailingItem.contentDescription,
+                    tint = LocalGlassColors.current.let { if (trailingItem.key == selectedKey) it.accent else it.content },
+                    size = CompactBottomControlIconSize,
+                    fontSize = 18.sp,
+                    weight = FontWeight.Medium,
+                    fontFeatureSettings = "'ss16' 1",
+                    fitGlyphToBounds = false,
+                )
+            }
+        }
+    }
+}
+
 /** The navigation's adjacent search control, sharing the caller's compact progress. */
 @Composable
 fun GlasmioFloatingSearchButton(
@@ -274,30 +388,60 @@ fun GlasmioFloatingSearchButton(
     modifier: Modifier = Modifier,
     backdrop: Backdrop = LocalGlassBackdrop.current,
 ) {
+    FloatingNavigationControl(compactProgress, onClick, modifier, backdrop) { _ ->
+        SfIcon(
+            SfSymbol.Search,
+            contentDescription = contentDescription,
+            tint = LocalGlassColors.current.content,
+            size = CompactBottomControlIconSize,
+            fontSize = 18.sp,
+            weight = FontWeight.Medium,
+            fontFeatureSettings = "'ss16' 1",
+            fitGlyphToBounds = false,
+        )
+    }
+}
+
+@Composable
+private fun FloatingNavigationControl(
+    compactProgress: State<Float>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    backdrop: Backdrop,
+    compactSize: Dp = CompactBottomControlSize,
+    itemSelected: Boolean? = null,
+    itemContentDescription: String? = null,
+    onBoundsChanged: ((Rect) -> Unit)? = null,
+    content: @Composable (Float) -> Unit,
+) {
     val contact = LocalBottomControlContact.current
     Box(
         modifier.size(NavigationBarSurfaceHeight)
-            .then(contact?.takeIf { it.capturesLensSource.value }?.neighborRecordingModifier ?: Modifier),
-        contentAlignment = Alignment.CenterEnd,
+            .then(contact?.takeIf { it.capturesLensSource.value }?.neighborRecordingModifier ?: Modifier)
+            .then(if (itemSelected != null) Modifier.clearAndSetSemantics {
+                role = Role.Tab
+                selected = itemSelected
+                itemContentDescription?.let { contentDescription = it }
+                onClick { onClick(); true }
+            } else Modifier),
+        contentAlignment = Alignment.Center,
     ) {
         val progress = compactProgress.value
         val controlSize = NavigationBarSurfaceHeight -
-            (NavigationBarSurfaceHeight - CompactBottomControlSize) * progress
+            (NavigationBarSurfaceHeight - compactSize) * progress
         GlasmioIconButton(
             onClick = onClick,
             backdrop = backdrop,
             style = GlassSurfaceStyle.Navigation,
-            modifier = Modifier.size(controlSize),
+            nativeNavigationFlex = true,
+            modifier = Modifier.size(controlSize)
+                .onGloballyPositioned { coordinates ->
+                    onBoundsChanged?.invoke(coordinates.boundsInWindow())
+                },
             morphProgress = compactProgress,
             morphCaptureWidth = NavigationBarSurfaceHeight,
         ) {
-            SfIcon(
-                SfSymbol.Search,
-                contentDescription = contentDescription,
-                tint = LocalGlassColors.current.content,
-                size = 26.dp + (CompactBottomControlIconSize - 26.dp) * progress,
-                weight = FontWeight.SemiBold,
-            )
+            content(progress)
         }
     }
 }

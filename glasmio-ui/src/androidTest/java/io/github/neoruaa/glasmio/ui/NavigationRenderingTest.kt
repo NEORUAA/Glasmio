@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,6 +31,7 @@ import androidx.compose.foundation.text.contextmenu.data.TextContextMenuSession
 import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuToolbarProvider
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuDataProvider
 import androidx.compose.foundation.text.contextmenu.provider.TextContextMenuProvider
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
@@ -49,10 +52,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.layout
@@ -99,7 +107,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
-import com.kyant.backdrop.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
@@ -110,13 +118,38 @@ import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.icons.SfSymbol
 import io.github.neoruaa.glasmio.icons.SfIcon
 import io.github.neoruaa.glasmio.glass.LiquidMenuMorphMotion
+import io.github.neoruaa.glasmio.glass.LiquidMenuContour
+import io.github.neoruaa.glasmio.glass.LiquidMenuFieldTexture
+import io.github.neoruaa.glasmio.glass.rememberGlassMorphRenderer
 import io.github.neoruaa.glasmio.glass.NavigationGlassMaterial
+import io.github.neoruaa.glasmio.glass.NativeControlLensStyle
+import io.github.neoruaa.glasmio.glass.nativeControlLens
+import io.github.neoruaa.glasmio.glass.nativeControlLensProgram
+import io.github.neoruaa.glasmio.glass.nativeControlLensReferenceProducer
+import io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import io.github.neoruaa.glasmio.glass.NavigationDropShadowRenderer
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropProvider
+import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.GlassSurface
 import io.github.neoruaa.glasmio.glass.GlassEmphasis
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.materializeNativeGlassAtlas
+import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
+import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
+import io.github.neoruaa.glasmio.glass.render.rememberBackdropLuminance
+import io.github.neoruaa.glasmio.glass.render.rememberResolvedGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCanvasBackdrop
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.navigationGlassBackgroundResolved
+import io.github.neoruaa.glasmio.glass.rememberNavigationInnerShadows
 import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
+import io.github.neoruaa.glasmio.glass.GlasmioToolbarActionGroup
+import io.github.neoruaa.glasmio.glass.GlasmioToolbarActionStyle
 import io.github.neoruaa.glasmio.glass.glasmioMenuAnchor
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -137,6 +170,1441 @@ class NavigationRenderingTest {
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
 
     @Test
+    fun controlLensMaterializedGaussianPassesMatchLegacyProducer() {
+        org.junit.Assume.assumeTrue("The legacy pipeline reference is limited to emulator GPUs",
+            android.os.Build.HARDWARE.contains("ranchu") || android.os.Build.HARDWARE.contains("goldfish"))
+        val sampler = io.github.neoruaa.glasmio.glass.NativeGlassMipAtlas(
+            androidx.compose.ui.unit.IntSize(1, 1), androidx.compose.ui.unit.IntSize(1, 1),
+            listOf(androidx.compose.ui.unit.IntRect(0, 0, 1, 1)), null, colorManaged = true,
+        ).samplingFunctions
+        val analyticProgram = nativeControlLensProgram(sampler, fullyResting = false, small = false, tab = false)
+        class FixtureScope(private val analyticReference: Boolean) : BackdropEffectScopeImpl() {
+            override val shape = com.kyant.shapes.Capsule()
+            override fun obtainRuntimeShader(key: String, string: String): io.github.neoruaa.glasmio.glass.render.RuntimeShader {
+                return super.obtainRuntimeShader(key,
+                    if (analyticReference && key.startsWith("Glasmio.ControlLens.true.")) analyticProgram else string)
+            }
+        }
+        data class Case(val role: NativeControlLensStyle, val lift: Float, val dark: Boolean, val translucent: Boolean = false)
+        val cases = listOf(
+            Case(NativeControlLensStyle.TabBarIndicator, 0f, false),
+            Case(NativeControlLensStyle.SliderThumb, 0f, true),
+            Case(NativeControlLensStyle.SwitchThumb, .35f, false),
+            Case(NativeControlLensStyle.SliderThumb, .85f, true, translucent = true),
+            Case(NativeControlLensStyle.TabBarIndicator, .6f, false),
+            Case(NativeControlLensStyle.SegmentedIndicator, .9f, true),
+        )
+        val selected = mutableStateOf(Triple(0, false, false))
+        val failures = ArrayList<String>()
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                val (index, reference, producerOnly) = selected.value
+                val case = cases[index]
+                val rasterizedScene = case.lift > 0f &&
+                    (case.role == NativeControlLensStyle.TabBarIndicator || case.role == NativeControlLensStyle.SegmentedIndicator)
+                val fixture = remember(index, reference) { FixtureScope(reference && !rasterizedScene) }
+                val source = rememberGraphicsLayer()
+                val passes = List(4) { rememberGraphicsLayer() }
+                val output = rememberGraphicsLayer()
+                val graphicsContext = androidx.compose.ui.platform.LocalGraphicsContext.current
+                val controlPasses = remember(graphicsContext) { io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses(graphicsContext) }
+                DisposableEffect(controlPasses) { onDispose { controlPasses.release() } }
+                Box(Modifier.requiredSize(224.dp, 552.dp).background(Color.Black).testTag("control-lens-pass-parity")
+                    .drawWithContent {
+                        val originalSize = drawContext.size
+                        try {
+                            drawContext.size = Size(80f, 40f)
+                            fixture.update(this)
+                        } finally { drawContext.size = originalSize }
+                        fixture.colorManagedNativeGlass = true
+                        fixture.nativeGlassHeadroom = 1.2f
+                        fixture.apply {
+                            nativeControlLens(case.role, case.lift, case.dark,
+                                liftedContent = if (case.role == NativeControlLensStyle.TabBarIndicator ||
+                                    case.role == NativeControlLensStyle.SegmentedIndicator) emptyBackdrop() else null,
+                                restingColor = Color.White, tint = Color(0xFF34C759))
+                        }
+                        val extent = requireNotNull(fixture.effectTextureSize)
+                        val baseWidth = (fixture.size.width + fixture.padding * 2f).roundToInt()
+                        val baseHeight = (fixture.size.height + fixture.padding * 2f).roundToInt()
+                        source.clip = true
+                        source.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                        source.record(this, layoutDirection, extent) {
+                            drawRect(Color(.16f, .25f, .42f, if (case.translucent) .35f else 1f),
+                                size = Size(baseWidth.toFloat(), baseHeight.toFloat()))
+                            for (x in 0 until baseWidth step 7) {
+                                drawRect(Color(.85f, .33f, .08f, .6f), topLeft = Offset(x.toFloat(), 0f),
+                                    size = Size(3f, baseHeight.toFloat()))
+                            }
+                            for (y in 0 until baseHeight step 11) {
+                                drawRect(Color(.06f, .72f, .88f, .5f), topLeft = Offset(0f, y.toFloat()),
+                                    size = Size(baseWidth.toFloat(), 2f))
+                            }
+                            // An independent transparent portal makes accidental plane loss observable.
+                            for (x in 0 until baseWidth step 13) {
+                                drawRect(Color(.92f, .12f, .46f, .65f),
+                                    topLeft = Offset(x.toFloat(), baseHeight.toFloat()),
+                                    size = Size(4f, baseHeight.toFloat()))
+                            }
+                        }
+                        val controlAtlas = fixture.materializedMipAtlas?.takeIf { !reference && it.controlBlurPlane != null }
+                        val effects = if (reference) buildList<android.graphics.RenderEffect> {
+                            fixture.nativeControlLensReferenceProducer(case.role, case.lift)?.let(::add)
+                            if (rasterizedScene) {
+                                // Native spectral rays sample a rasterized scene. Preserve that
+                                // independent pass on both sides of the Gaussian producer comparison.
+                                add(fixture.materializedInputEffects.last().asAndroidRenderEffect())
+                            }
+                        } else fixture.materializedInputEffects.map { it.asAndroidRenderEffect() }
+                        assertTrue("Control fixture needs at most four independent passes", effects.size <= passes.size)
+                        var previous = source
+                        if (controlAtlas != null) {
+                            var recordings = 0
+                            var sourceCalls = 0
+                            controlPasses.recordControlBlur(controlAtlas,
+                                record = { layer, targetSize, block ->
+                                    recordings++
+                                    layer.record(this, layoutDirection, targetSize, block)
+                                },
+                                sourceBlock = { sourceCalls++; drawLayer(source) })
+                            assertEquals("Plane-only blur retains three producer recordings", 3, recordings)
+                            assertEquals("Plane-only blur records the actual source once", 1, sourceCalls)
+                        } else {
+                            effects.forEachIndexed { passIndex, effect ->
+                                val input = previous
+                                val layer = passes[passIndex]
+                                layer.clip = true
+                                layer.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                                layer.renderEffect = effect.asComposeRenderEffect()
+                                layer.record(this, layoutDirection, extent) { drawLayer(input) }
+                                previous = layer
+                            }
+                        }
+                        if (producerOnly) {
+                            // Compare the three original source planes before the final optical transfer.
+                            if (controlAtlas != null) controlPasses.drawControlBlurAtlas(this, controlAtlas)
+                            else drawLayer(previous)
+                        } else {
+                            val input = previous
+                            output.clip = true
+                            output.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                            output.renderEffect = fixture.renderEffect
+                            output.record(this, layoutDirection, extent) {
+                                if (controlAtlas != null) controlPasses.drawControlBlurAtlas(this, controlAtlas)
+                                else drawLayer(input)
+                            }
+                            drawLayer(output)
+                        }
+                    })
+            }
+        }
+        cases.forEachIndexed { index, case ->
+            for (producerOnly in listOf(true, false)) {
+                compose.runOnIdle { selected.value = Triple(index, true, producerOnly) }
+                compose.waitForIdle()
+                val reference = compose.onNodeWithTag("control-lens-pass-parity").captureToImage().toPixelMap()
+                compose.runOnIdle { selected.value = Triple(index, false, producerOnly) }
+                compose.waitForIdle()
+                val staged = compose.onNodeWithTag("control-lens-pass-parity").captureToImage().toPixelMap()
+                val width = if (producerOnly) 224 else 130
+                val height = if (producerOnly) 368 + (if (case.role == NativeControlLensStyle.TabBarIndicator) 46 else 184) else 90
+                var maximum = 0f
+                var total = 0f
+                var maximumPoint = ""
+                val outlierDetails = ArrayList<String>()
+                repeat(height) { y -> repeat(width) { x ->
+                    val a = reference[x, y]
+                    val b = staged[x, y]
+                    val difference = maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue), abs(a.alpha - b.alpha))
+                    total += difference
+                    if (difference > maximum) { maximum = difference; maximumPoint = "$x,$y" }
+                    if (difference > 2f / 255f && outlierDetails.size < 8) outlierDetails += "$x,$y diff=$difference"
+                } }
+                val mean = total / (width * height)
+                val detail = "role=${case.role} lift=${case.lift} producer=$producerOnly max=$maximum at=$maximumPoint mean=$mean" +
+                    " $outlierDetails"
+                println("GLASMIO_CONTROL_GAUSSIAN_PARITY $detail")
+                if (maximum > 2f / 255f || mean > .5f / 255f) failures += detail
+            }
+        }
+        assertTrue("Materialized Gaussian producers must preserve the legacy control rendering: $failures", failures.isEmpty())
+    }
+
+    @Test
+    fun nativeControlLensesRestoreTheirRestingBodiesAfterLifting() {
+        val lift = mutableFloatStateOf(0f)
+        val dark = mutableStateOf(false)
+        val naturalSource = mutableStateOf(0)
+        val roles = NativeControlLensStyle.entries
+        val transitionDifferences = ArrayList<String>()
+        compose.setContent {
+            GlasmioTheme(isDark = dark.value) {
+                val portal = rememberLayerBackdrop(onDraw = {
+                    // A transparent source must not make the resting body translucent.
+                    for (x in listOf(82.dp, 226.dp)) {
+                        drawRect(Color(0xFF0088FF), topLeft = Offset(x.toPx(), 0f),
+                            size = Size(12.dp.toPx(), size.height))
+                    }
+                })
+                val translucent = rememberLayerBackdrop(onDraw = {
+                    drawRect(Color(.2f, .3f, .4f, .4f))
+                })
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(300.dp, 180.dp),
+                    sampledContent = {
+                        Canvas(Modifier.fillMaxSize()) {
+                            drawRect(Color(0xFF34C759))
+                            val stripe = 8.dp.toPx()
+                            for (index in 0..(size.width / stripe).toInt()) {
+                                if (index % 2 == 0) drawRect(Color(0xFF183858),
+                                    topLeft = Offset(index * stripe, 0f), size = Size(stripe, size.height))
+                            }
+                        }
+                    },
+                    overlayContent = { natural ->
+                        Box(Modifier.fillMaxSize().layerBackdrop(portal))
+                        Box(Modifier.fillMaxSize().layerBackdrop(translucent))
+                        roles.forEachIndexed { index, role ->
+                            key(naturalSource.value, role) {
+                                Box(Modifier.offset((14 + index % 2 * 144).dp, (16 + index / 2 * 80).dp)
+                                    .size(128.dp, 52.dp).testTag("resting-control-$role")
+                                    .drawPlainBackdrop(
+                                        backdrop = when (naturalSource.value) {
+                                            1 -> emptyBackdrop()
+                                            2 -> translucent
+                                            else -> natural
+                                        },
+                                        shape = { com.kyant.shapes.Capsule() },
+                                        effects = {
+                                            nativeControlLens(role, lift.floatValue, dark.value,
+                                                liftedContent = if (role == NativeControlLensStyle.SegmentedIndicator ||
+                                                    role == NativeControlLensStyle.TabBarIndicator) portal else null,
+                                                restingColor = Color.White)
+                                        },
+                                    ))
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        val scenarios = listOf(0 to false, 1 to false, 2 to false, 0 to true, 1 to true, 2 to true)
+        scenarios.forEach { (sourceKind, isDark) ->
+            compose.runOnIdle { dark.value = isDark; naturalSource.value = sourceKind; lift.floatValue = 0f }
+            compose.waitForIdle()
+            val before = roles.associateWith { role ->
+                compose.onNodeWithTag("resting-control-$role").captureToImage().toPixelMap()
+            }
+            roles.filter { it != NativeControlLensStyle.TabBarIndicator }.forEach { role ->
+                val pixels = requireNotNull(before[role])
+                // Native idle Small/Segment views contain only their opaque resting body.
+                // Check the lower interior too: a permanent ClearGlass inner shadow fails here.
+                for (fraction in listOf(.12f, .5f, .88f)) {
+                    val color = pixels[(pixels.width * .4f).roundToInt(), (pixels.height * fraction).roundToInt()]
+                    assertTrue("$role must have a plain white resting body: dark=$isDark, y=$fraction, color=$color",
+                        minOf(color.red, color.green, color.blue) > .985f)
+                }
+            }
+            listOf(NativeControlLensStyle.SegmentedIndicator, NativeControlLensStyle.TabBarIndicator).forEach { role ->
+                val pixels = requireNotNull(before[role])
+                for (fraction in listOf(.06f, .5f, .94f)) {
+                    val color = pixels[(pixels.width * 74f / 128f).roundToInt(), (pixels.height * fraction).roundToInt()]
+                    assertEquals("$role resting content must stay unwarped and untinted", 0f, color.red, .01f)
+                    assertEquals("$role resting content must keep its blue tint", 136f / 255f, color.green, .01f)
+                    assertEquals("$role resting content must keep its blue tint", 1f, color.blue, .01f)
+                }
+            }
+            compose.runOnIdle { lift.floatValue = .0001f }
+            compose.waitForIdle()
+            roles.forEach { role ->
+                val original = requireNotNull(before[role])
+                val transitioning = compose.onNodeWithTag("resting-control-$role").captureToImage().toPixelMap()
+                var difference = 0f
+                for (y in 0 until transitioning.height) for (x in 0 until transitioning.width) {
+                    val a = original[x, y]
+                    val b = transitioning[x, y]
+                    difference = maxOf(difference, abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
+                }
+                if (difference >= .01f) transitionDifferences += "$role dark=$isDark source=$sourceKind: $difference"
+            }
+            compose.runOnIdle { lift.floatValue = 1f }
+            compose.waitForIdle()
+            compose.runOnIdle { lift.floatValue = 0f }
+            compose.waitForIdle()
+            roles.forEach { role ->
+                val original = requireNotNull(before[role])
+                val after = compose.onNodeWithTag("resting-control-$role").captureToImage().toPixelMap()
+                var difference = 0f
+                for (y in 0 until after.height) for (x in 0 until after.width) {
+                    val a = original[x, y]
+                    val b = after[x, y]
+                    difference = maxOf(difference, abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
+                }
+                assertTrue("$role must restore its resting rendering after release: $difference", difference < 1f / 255f)
+            }
+        }
+        assertTrue("Control materials must approach their resting state continuously: $transitionDifferences",
+            transitionDifferences.isEmpty())
+    }
+
+    @Test
+    fun nativeControlLensesKeepNeutralThumbsAndSeparateTheLiftedContentPlane() {
+        val flatPortal = mutableStateOf(false)
+        val emptyNatural = mutableStateOf(false)
+        val roles = NativeControlLensStyle.entries
+        compose.setContent {
+            GlasmioTheme(isDark = false) {
+                val portal = rememberLayerBackdrop(onDraw = {
+                    drawRect(Color(.25f, .25f, .25f))
+                    if (!flatPortal.value) {
+                        val stripe = 8.dp.toPx()
+                        for (index in 0..(size.width / stripe).toInt()) {
+                            drawRect(if (index % 2 == 0) Color.White else Color.Black,
+                                topLeft = Offset(index * stripe, 0f), size = Size(stripe, size.height))
+                        }
+                    }
+                })
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(300.dp, 180.dp),
+                    sampledContent = {
+                        Canvas(Modifier.fillMaxSize()) {
+                            drawRect(Color(.5f, .5f, .5f))
+                            val stripe = 8.dp.toPx()
+                            for (index in 0..(size.width / stripe).toInt()) {
+                                drawRect(if (index % 2 == 0) Color.White else Color.Black,
+                                    topLeft = Offset(index * stripe, 0f), size = Size(stripe, size.height))
+                            }
+                        }
+                    },
+                    overlayContent = { natural ->
+                        // Record the portal independently without painting it into the natural source.
+                        Box(Modifier.fillMaxSize().layerBackdrop(portal))
+                        roles.forEachIndexed { index, role ->
+                            val hasLiftedContent = role == NativeControlLensStyle.SegmentedIndicator ||
+                                role == NativeControlLensStyle.TabBarIndicator
+                            key(emptyNatural.value, role) {
+                                Box(Modifier.offset((14 + index % 2 * 144).dp, (16 + index / 2 * 80).dp)
+                                    .size(128.dp, 52.dp).testTag("native-control-$role")
+                                    .drawPlainBackdrop(
+                                        backdrop = if (emptyNatural.value) emptyBackdrop() else natural,
+                                        shape = { com.kyant.shapes.Capsule() },
+                                        effects = {
+                                            nativeControlLens(role, 1f, false,
+                                                liftedContent = if (hasLiftedContent) portal else null)
+                                        },
+                                    ))
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        listOf(false, true).forEach { noNatural ->
+            compose.runOnIdle { emptyNatural.value = noNatural; flatPortal.value = false }
+            compose.waitForIdle()
+            val before = roles.associateWith { role ->
+                compose.onNodeWithTag("native-control-$role").captureToImage().toPixelMap()
+            }
+            listOf(NativeControlLensStyle.SwitchThumb, NativeControlLensStyle.SliderThumb).forEach { role ->
+                val pixels = requireNotNull(before[role])
+                var maximumChroma = 0f
+                for (y in 2 until pixels.height - 2) for (x in 2 until pixels.width - 2) {
+                    val c = pixels[x, y]
+                    maximumChroma = maxOf(maximumChroma, maxOf(c.red, c.green, c.blue) - minOf(c.red, c.green, c.blue))
+                }
+                // Real UIKit style 0 has zero foreground aberration for both thumb roles.
+                assertTrue("The native $role must keep grayscale sources neutral: empty=$noNatural, chroma=$maximumChroma",
+                    maximumChroma < .015f)
+            }
+            compose.runOnIdle { flatPortal.value = true }
+            compose.waitForIdle()
+            roles.forEach { role ->
+                val original = requireNotNull(before[role])
+                val after = compose.onNodeWithTag("native-control-$role").captureToImage().toPixelMap()
+                var difference = 0.0
+                for (y in 0 until after.height) for (x in 0 until after.width) {
+                    val a = original[x, y]
+                    val b = after[x, y]
+                    difference += maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
+                }
+                val mean = difference / (after.width * after.height)
+                if (role == NativeControlLensStyle.SegmentedIndicator || role == NativeControlLensStyle.TabBarIndicator)
+                    assertTrue("The active $role must sample its lifted content independently: $mean", mean > .005)
+                else assertTrue("Changing the portal must not change the natural-only $role: $mean", mean < 1.0 / 255.0)
+            }
+        }
+    }
+
+    @Test
+    fun nativeMipGridsMatchTheOriginalMetalKernelOnOddAndEvenTextures() {
+        val json = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().context.assets
+            .open("native-mip-fixture.json").bufferedReader().use { org.json.JSONObject(it.readText()) }
+        val cases = json.getJSONArray("datasets")
+        val sizes = ArrayList<androidx.compose.ui.unit.IntSize>()
+        val pyramids = ArrayList<List<io.github.neoruaa.glasmio.glass.NativeGlassMipLevel>>()
+        val atlases = ArrayList<List<io.github.neoruaa.glasmio.glass.NativeGlassMipAtlas>>()
+        val atlasSamples = ArrayList<List<android.graphics.RuntimeShader>>()
+        repeat(cases.length()) { index ->
+            val entry = cases.getJSONObject(index)
+            val dimensions = entry.getJSONArray("sourceDimensions")
+            val width = dimensions.getInt(0)
+            val height = dimensions.getInt(1)
+            val bits = entry.getJSONArray("sourceRGBA16FBits")
+            val pixels = java.nio.ByteBuffer.allocateDirect(bits.length() * 2).order(java.nio.ByteOrder.nativeOrder())
+            repeat(bits.length()) { pixels.putShort(bits.getInt(it).toShort()) }
+            pixels.rewind()
+            // Test numeric texture channels in a matching working space without an implicit EOTF.
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.RGBA_F16,
+                true, android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB))
+            bitmap.copyPixelsFromBuffer(pixels)
+            val cache = io.github.neoruaa.glasmio.glass.render.RuntimeShaderCacheImpl()
+            sizes += androidx.compose.ui.unit.IntSize(width, height)
+            val source = android.graphics.RenderEffect.createBitmapEffect(bitmap)
+            val pyramid = io.github.neoruaa.glasmio.glass.NativeGlassMipPyramid(cache)
+            pyramids += pyramid.levels(source, sizes.last(), 3f,
+                io.github.neoruaa.glasmio.glass.NativeGlassMipKernel.Compute13Tap)
+            val variants = listOf(false to false, true to false, true to true).map { (managed, nativeStorage) ->
+                pyramid.atlas(source, sizes.last(), 3f,
+                    io.github.neoruaa.glasmio.glass.NativeGlassMipKernel.Compute13Tap,
+                    colorManaged = managed, nativeGammaStorage = nativeStorage)
+            }
+            atlases += variants
+            atlasSamples += variants.map { atlas ->
+                android.graphics.RuntimeShader(atlas.samplingFunctions + """
+                uniform float atlasLevel;
+                uniform float2 atlasOutputSize;
+                half4 main(float2 p) {
+                    float4 color = nativeAtlasSample(p / atlasOutputSize * nativeAtlasBaseSize, atlasLevel);
+                    return half4(nativeAtlasEncode(color));
+                }
+                """.trimIndent())
+            }
+        }
+        val selection = mutableStateOf(Triple(0, 1, 0))
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides androidx.compose.ui.unit.Density(1f)) {
+                val (case, level, path) = selection.value
+                val variant = when { path >= 5 -> 2; path >= 3 -> 1; else -> 0 }
+                val atlas = atlases[case][variant]
+                val storage = path == 1 || path == 3
+                val consumer = path == 2 || path == 4 || path == 5
+                val size = when {
+                    storage -> atlas.size
+                    consumer -> atlas.rects[level].let { androidx.compose.ui.unit.IntSize(it.width, it.height) }
+                    else -> sizes[case]
+                }
+                Box(Modifier.size(size.width.dp, size.height.dp).background(Color.Black).testTag("metal-mip-grid")) {
+                    if (consumer) {
+                        Box(Modifier.fillMaxSize().drawPlainBackdrop(emptyBackdrop(), { RectangleShape }, effects = {
+                            check(materializeNativeGlassAtlas(atlas))
+                            val program = atlasSamples[case][variant]
+                            atlas.configure(program)
+                            program.setFloatUniform("atlasLevel", level.toFloat())
+                            program.setFloatUniform("atlasOutputSize", size.width.toFloat(), size.height.toFloat())
+                            renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(program, "content")
+                                .asComposeRenderEffect()
+                        }))
+                    } else {
+                        Canvas(Modifier.fillMaxSize().graphicsLayer {
+                            renderEffect = requireNotNull(if (storage) atlas.producerEffect
+                                else pyramids[case][level].effect).asComposeRenderEffect()
+                        }) { drawRect(Color.White) }
+                    }
+                }
+            }
+        }
+        // Keep the explicit legacy working-space reference and exercise native-gamma
+        // storage through the actual production recorder and cropped consumer seam.
+        listOf(0, 1, 2, 3, 4, 5).forEach { path ->
+            repeat(cases.length()) { case ->
+                val expectedLevels = cases.getJSONObject(case).getJSONArray("levels")
+                repeat(expectedLevels.length()) { levelIndex ->
+                    val expected = expectedLevels.getJSONObject(levelIndex)
+                    val level = expected.getInt("level")
+                    compose.runOnIdle { selection.value = Triple(case, level, path) }
+                    compose.waitForIdle()
+                    val actual = compose.onNodeWithTag("metal-mip-grid").captureToImage().toPixelMap()
+                    val dimensions = expected.getJSONArray("dimensions")
+                    val width = dimensions.getInt(0)
+                    val height = dimensions.getInt(1)
+                    val bits = expected.getJSONArray("nativeOutputRGBA16FBits")
+                    var maximum = 0f
+                    var total = 0f
+                    repeat(height) { y -> repeat(width) { x ->
+                        val pixel = if (path == 1 || path == 3) {
+                            val rect = atlases[case][if (path >= 3) 1 else 0].rects[level]
+                            actual[rect.left + x, rect.top + y]
+                        } else actual[((x + .5f) * actual.width / width).toInt().coerceAtMost(actual.width - 1),
+                            ((y + .5f) * actual.height / height).toInt().coerceAtMost(actual.height - 1)]
+                        val offset = (y * width + x) * 4
+                        // The captured node composites premultiplied shader output onto known black.
+                        val error = maxOf(abs(pixel.red - android.util.Half.toFloat(bits.getInt(offset).toShort())),
+                            abs(pixel.green - android.util.Half.toFloat(bits.getInt(offset + 1).toShort())),
+                            abs(pixel.blue - android.util.Half.toFloat(bits.getInt(offset + 2).toShort())))
+                        maximum = maxOf(maximum, error)
+                        total += error
+                    } }
+                    println("GLASMIO_NATIVE_MIP path=$path case=$case level=$level max=$maximum mean=${total / (width * height)}")
+                    assertTrue("Native Metal mip path=$path case=$case level=$level: max=$maximum, mean=${total / (width * height)}",
+                        maximum < .018f && total / (width * height) < .009f)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun nativeGlassKeepsTheThinDarkContourOutsideItsUpperHighlight() {
+        var buttonBounds = Rect.Zero
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides androidx.compose.ui.unit.Density(3f)) {
+                GlasmioTheme(isDark = false) {
+                    GlasmioBackdropHost(
+                        modifier = Modifier.size(200.dp, 100.dp).testTag("native-edge-scene"),
+                        sampledContent = { Box(Modifier.fillMaxSize().background(Color(0xFFF2F2F7))) },
+                        overlayContent = { backdrop ->
+                            GlasmioButton(
+                                onClick = {}, backdrop = backdrop,
+                                modifier = Modifier.offset(30.dp, 24.dp).width(140.dp)
+                                    .onGloballyPositioned { buttonBounds = it.boundsInParent() },
+                                size = GlasmioButtonSize.Large,
+                                emphasis = GlassEmphasis.Prominent,
+                                navigationSurfaceColor = Color(0xFF0087FF),
+                            ) {}
+                        },
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+        val pixels = compose.onNodeWithTag("native-edge-scene").captureToImage().toPixelMap()
+        val middle = buttonBounds.center.x.roundToInt()
+        fun row(y: Int): Color {
+            var red = 0f; var green = 0f; var blue = 0f
+            for (x in middle - 9..middle + 9) {
+                val value = pixels[x, y]
+                red += value.red; green += value.green; blue += value.blue
+            }
+            return Color(red / 19f, green / 19f, blue / 19f)
+        }
+        val body = row(buttonBounds.center.y.roundToInt())
+        val top = buttonBounds.top.roundToInt()
+        val edge = (top - 6..top + 18).map { it to row(it) }
+            .filter { (_, color) -> color.blue - color.red > .25f }
+        assertTrue("The native contour must be visible in the capture", edge.isNotEmpty())
+        val dark = edge.minBy { (_, color) -> color.blue }
+        val bright = edge.maxBy { (_, color) -> color.green }
+        // The 13 mini reference has a narrow dark dip before the cyan key/fill lobe.
+        assertTrue("Keep the native dark contour: body=$body, edge=$dark", dark.second.blue < body.blue - .02f)
+        assertTrue("The native cyan highlight follows the dark contour: dark=$dark, bright=$bright",
+            bright.first > dark.first && bright.second.green > body.green + .15f)
+    }
+
+    @Test
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 36)
+    fun nativeVibrantHighlightRetainsItsColorAndHdrEnergyInAnFp16Target() {
+        val usage = android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
+            android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
+        org.junit.Assume.assumeTrue(android.hardware.HardwareBuffer.isSupported(
+            144, 40, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage))
+        val nativeSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.EXTENDED_SRGB)
+        listOf(nativeSpace, android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB)).forEach { space ->
+            val buffer = android.hardware.HardwareBuffer.create(
+                144, 40, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage)
+            val node = android.graphics.RenderNode("native-vibrant-hdr").apply { setPosition(0, 0, 144, 40) }
+            try {
+                val canvas = node.beginRecording(144, 40)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                val blue = android.graphics.Paint().apply {
+                    setColor(android.graphics.Color.pack(0f, .5f, 1f, 1f, nativeSpace))
+                }
+                canvas.drawRect(48f, 0f, 144f, 40f, blue)
+                val vibrant = io.github.neoruaa.glasmio.glass.render.highlight.NativeVibrantColorMatrixBlender()
+                vibrant.prepare(io.github.neoruaa.glasmio.glass.render.highlight.NativeVibrantColorMatrix.RegularHighlight)
+                val highlight = android.graphics.Paint().apply {
+                    color = android.graphics.Color.WHITE
+                    xfermode = vibrant.shader
+                }
+                canvas.drawRect(8f, 8f, 32f, 32f, highlight)
+                canvas.drawRect(64f, 8f, 88f, 32f, highlight)
+                val extendedMask = android.graphics.Paint(highlight).apply {
+                    shader = android.graphics.RuntimeShader("half4 main(float2 p) { return half4(1.6671348); }")
+                }
+                canvas.drawRect(112f, 8f, 136f, 32f, extendedMask)
+                node.endRecording()
+                android.graphics.HardwareBufferRenderer(buffer).use { renderer ->
+                    renderer.setContentRoot(node)
+                    val done = java.util.concurrent.CountDownLatch(1)
+                    val error = java.util.concurrent.atomic.AtomicReference<Throwable>()
+                    renderer.obtainRenderRequest().setColorSpace(space).draw({ it.run() }) { result ->
+                        try {
+                            check(result.status == android.graphics.HardwareBufferRenderer.RenderResult.SUCCESS)
+                            result.fence.use { if (it.isValid) check(it.await(java.time.Duration.ofSeconds(3))) }
+                        } catch (failure: Throwable) {
+                            error.set(failure)
+                        } finally {
+                            done.countDown()
+                        }
+                    }
+                    assertTrue("The FP16 render must finish", done.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    error.get()?.let { throw it }
+                    val hardware = requireNotNull(android.graphics.Bitmap.wrapHardwareBuffer(buffer, space))
+                    try {
+                        val pixels = requireNotNull(hardware.copy(android.graphics.Bitmap.Config.RGBA_F16, false))
+                        try {
+                            val white = pixels.getColor(4, 20).convert(nativeSpace)
+                            val litWhite = pixels.getColor(20, 20).convert(nativeSpace)
+                            val untouchedBlue = pixels.getColor(52, 20).convert(nativeSpace)
+                            val litBlue = pixels.getColor(76, 20).convert(nativeSpace)
+                            val extendedBlue = pixels.getColor(124, 20).convert(nativeSpace)
+                            assertEquals("The ordinary white point stays unchanged", 1f, white.red(), .005f)
+                            assertEquals("The native highlight exceeds SDR white", 1.0589f, litWhite.red(), .01f)
+                            assertEquals("The untouched backdrop stays unchanged", .5f, untouchedBlue.green(), .005f)
+                            // Native regular VCM reference for gamma-sRGB (0, .5, 1), including its 1.2 clamp.
+                            assertEquals("The highlight retains its blue-dependent red channel", .0334f, litBlue.red(), .015f)
+                            assertEquals("The highlight retains its blue-dependent green channel", .62155f, litBlue.green(), .015f)
+                            assertEquals("The native HDR blue channel survives the output", 1.2f, litBlue.blue(), .015f)
+                            assertEquals("Native coverage above one must survive the mask paint", 1.333427f, extendedBlue.blue(), .02f)
+                            println("GLASMIO_NATIVE_HDR space=${space.name} white=${litWhite.red()} blue=${litBlue.red()},${litBlue.green()},${litBlue.blue()} extendedBlue=${extendedBlue.red()},${extendedBlue.green()},${extendedBlue.blue()}")
+                        } finally {
+                            pixels.recycle()
+                        }
+                    } finally {
+                        hardware.recycle()
+                    }
+                }
+            } finally {
+                node.discardDisplayList()
+                buffer.close()
+            }
+        }
+    }
+
+    @Test
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 34)
+    fun nativeRelativeColorEncodingRetainsItsComposedFp16Scene() {
+        val usage = android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
+            android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
+        org.junit.Assume.assumeTrue(android.hardware.HardwareBuffer.isSupported(
+            96, 64, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage))
+        data class Scene(val backdrop: FloatArray, val actual: FloatArray, val relativeAlpha: Float)
+        val scenes = listOf(
+            Scene(floatArrayOf(.3f, .5f, .8f, 1f), floatArrayOf(.1f, .7f, 1.2f), .35f),
+            Scene(floatArrayOf(.75f, .2f, 1.2f, .4f), floatArrayOf(.4f, .7f, 1.25f), .3f),
+            Scene(floatArrayOf(1.1f, .6f, .2f, .7f), floatArrayOf(-.03f, .15f, 1.1f), .55f),
+            Scene(floatArrayOf(0f, 0f, 0f, 0f), floatArrayOf(1.1f, .15f, .3f), .25f),
+        )
+        val spaces = listOf(android.graphics.ColorSpace.Named.EXTENDED_SRGB,
+            android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB)
+        for (named in spaces) for (managed in listOf(false, true)) {
+            val space = android.graphics.ColorSpace.get(named)
+            val buffer = android.hardware.HardwareBuffer.create(
+                96, 64, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage)
+            val node = android.graphics.RenderNode("native-relative-color").apply { setPosition(0, 0, 96, 64) }
+            val expectedAlphas = ArrayList<Float>()
+            try {
+                val functions = io.github.neoruaa.glasmio.glass.nativeGlassAtlasColorFunctions(managed)
+                fun paint(expression: String, uniforms: Map<String, FloatArray>, over: Boolean = false): android.graphics.Paint {
+                    val declarations = uniforms.keys.joinToString("\n") { "uniform float4 $it;" }
+                    val shader = android.graphics.RuntimeShader(functions + declarations +
+                        "\nhalf4 main(float2 p) { return half4($expression); }")
+                    uniforms.forEach { (name, values) -> shader.setFloatUniform(name, values) }
+                    return android.graphics.Paint().apply {
+                        this.shader = shader
+                        blendMode = if (over) android.graphics.BlendMode.SRC_OVER else android.graphics.BlendMode.SRC
+                    }
+                }
+                val canvas = node.beginRecording(96, 64)
+                canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.BlendMode.CLEAR)
+                scenes.forEachIndexed { row, scene ->
+                    val backdrop = FloatArray(4) { if (it == 3) scene.backdrop[3] else scene.backdrop[it] * scene.backdrop[3] }
+                    val alpha = scene.relativeAlpha + backdrop[3] * (1f - scene.relativeAlpha)
+                    expectedAlphas += alpha
+                    val actual = FloatArray(4) { if (it == 3) alpha else scene.actual[it] * alpha }
+                    val relative = FloatArray(4) { if (it == 3) scene.relativeAlpha
+                        else actual[it] - backdrop[it] * (1f - scene.relativeAlpha) }
+                    val top = row * 16f
+                    canvas.drawRect(0f, top, 32f, top + 16f,
+                        paint("nativeAtlasEncode(actual)", mapOf("actual" to actual)))
+                    canvas.drawRect(32f, top, 96f, top + 16f,
+                        paint("nativeAtlasEncode(backdrop)", mapOf("backdrop" to backdrop)))
+                    canvas.drawRect(32f, top, 64f, top + 16f,
+                        paint("nativeAtlasEncodeRelative(relative, backdrop)",
+                            mapOf("relative" to relative, "backdrop" to backdrop), over = true))
+                    // Keep the old nonlinear-operator path as a discriminating control.
+                    canvas.drawRect(64f, top, 96f, top + 16f,
+                        paint("nativeAtlasEncode(relative)", mapOf("relative" to relative), over = true))
+                }
+                node.endRecording()
+                android.graphics.HardwareBufferRenderer(buffer).use { renderer ->
+                    renderer.setContentRoot(node)
+                    val done = java.util.concurrent.CountDownLatch(1)
+                    val error = java.util.concurrent.atomic.AtomicReference<Throwable>()
+                    renderer.obtainRenderRequest().setColorSpace(space).draw({ it.run() }) { result ->
+                        try {
+                            check(result.status == android.graphics.HardwareBufferRenderer.RenderResult.SUCCESS)
+                            result.fence.use { if (it.isValid) check(it.await(java.time.Duration.ofSeconds(3))) }
+                        } catch (failure: Throwable) { error.set(failure) }
+                        finally { done.countDown() }
+                    }
+                    assertTrue("The relative-color FP16 render must finish", done.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    error.get()?.let { throw it }
+                    val hardware = requireNotNull(android.graphics.Bitmap.wrapHardwareBuffer(buffer, space))
+                    try {
+                        val pixels = requireNotNull(hardware.copy(android.graphics.Bitmap.Config.RGBA_F16, false))
+                        try {
+                            var legacyDifference = 0f
+                            scenes.indices.forEach { row ->
+                                val reference = pixels.getColor(16, row * 16 + 8).components
+                                val actual = pixels.getColor(48, row * 16 + 8).components
+                                val legacy = pixels.getColor(80, row * 16 + 8).components
+                                repeat(4) { channel ->
+                                    assertEquals("space=$named managed=$managed row=$row channel=$channel",
+                                        reference[channel], actual[channel], .008f)
+                                    legacyDifference = maxOf(legacyDifference, abs(reference[channel] - legacy[channel]))
+                                }
+                                assertEquals(expectedAlphas[row], actual[3], .002f)
+                                if (row == 0) assertTrue("HDR blue must survive the composed scene", actual[2] > 1f)
+                                if (row == 2) assertTrue("Negative red must survive the composed scene", actual[0] < 0f)
+                            }
+                            if (managed && named == android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB)
+                                assertTrue("The fixture must reject directly converting a nonlinear relative operator", legacyDifference > .02f)
+                        } finally { pixels.recycle() }
+                    } finally { hardware.recycle() }
+                }
+            } finally {
+                node.discardDisplayList()
+                buffer.close()
+            }
+        }
+
+        // Exercise the production texture barriers as well as the operator above. Numeric
+        // native-gamma texels must match through the Activity-owned layers in both
+        // working spaces, with the completed result read back into an FP16 target.
+        val graphicsContext = java.util.concurrent.atomic.AtomicReference<androidx.compose.ui.graphics.GraphicsContext>()
+        compose.setContent {
+            graphicsContext.set(androidx.compose.ui.platform.LocalGraphicsContext.current)
+            Box(Modifier.size(1.dp))
+        }
+        compose.waitForIdle()
+        val nativeSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.EXTENDED_SRGB)
+        val sourceSize = androidx.compose.ui.unit.IntSize(96, 64)
+        for (named in spaces) {
+            val space = android.graphics.ColorSpace.get(named)
+            val buffer = android.hardware.HardwareBuffer.create(
+                192, 64, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage)
+            val node = android.graphics.RenderNode("native-relative-mip-transport").apply { setPosition(0, 0, 192, 64) }
+            val passes = ArrayList<io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses>()
+            val consumers = ArrayList<androidx.compose.ui.graphics.layer.GraphicsLayer>()
+            try {
+                compose.runOnIdle {
+                    val context = graphicsContext.get()
+                    val scope = androidx.compose.ui.graphics.drawscope.CanvasDrawScope()
+                    val canvas = node.beginRecording(192, 64)
+                    canvas.drawColor(android.graphics.Color.TRANSPARENT, android.graphics.BlendMode.CLEAR)
+                    scope.draw(Density(1f), LayoutDirection.Ltr,
+                        androidx.compose.ui.graphics.Canvas(canvas), Size(192f, 64f)) {
+                        val sourceShader = android.graphics.RuntimeShader(
+                            io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions + """
+uniform float4 sourceBand0;
+uniform float4 sourceBand1;
+uniform float4 sourceBand2;
+uniform float4 sourceBand3;
+half4 main(float2 p) {
+    float4 value = p.y < 16.0 ? sourceBand0 : (p.y < 32.0 ? sourceBand1 : (p.y < 48.0 ? sourceBand2 : sourceBand3));
+    return half4(glassNativeGammaToWorkingPremul(value));
+}
+""")
+                        scenes.forEachIndexed { row, scene ->
+                            // Supply signed, extended premultiplied channels directly to the GPU.
+                            val alpha = scene.backdrop[3]
+                            val red = if (row == 2) -.2f else scene.actual[0]
+                            sourceShader.setFloatUniform("sourceBand$row", red * alpha,
+                                scene.actual[1] * alpha, scene.actual[2] * alpha, alpha)
+                        }
+                        val sourcePaint = android.graphics.Paint().apply {
+                            shader = sourceShader
+                            blendMode = android.graphics.BlendMode.SRC
+                        }
+                        for (nativeStorage in listOf(false, true)) {
+                            val pyramid = io.github.neoruaa.glasmio.glass.NativeGlassMipPyramid(
+                                io.github.neoruaa.glasmio.glass.render.RuntimeShaderCacheImpl())
+                            val atlas = pyramid.atlas(null, sourceSize, 3f,
+                                io.github.neoruaa.glasmio.glass.NativeGlassMipKernel.Compute13Tap,
+                                colorManaged = true, nativeGammaStorage = nativeStorage)
+                            val producer = io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses(context)
+                            passes += producer
+                            var recordings = 0
+                            var sourceCalls = 0
+                            val packed = producer.recordPyramid(atlas, record = { layer, size, block ->
+                                recordings++
+                                layer.record(this, layoutDirection, size, block)
+                            }, sourceBlock = {
+                                sourceCalls++
+                                drawContext.canvas.nativeCanvas.drawRect(0f, 0f, 96f, 64f, sourcePaint)
+                            })
+                            assertEquals("Mip transport does not add a producer pass", atlas.rects.size + 1, recordings)
+                            assertEquals("Mip transport records its real source once", 1, sourceCalls)
+                            fun consumer(mode: Int): androidx.compose.ui.graphics.layer.GraphicsLayer {
+                                val shader = android.graphics.RuntimeShader(atlas.samplingFunctions + """
+float4 mipActual(float2 p, float4 backdrop) {
+    float4 sampled = nativeAtlasSample(p, 1.5);
+    float opacity = p.y < 16.0 ? .35 : (p.y < 32.0 ? .3 : (p.y < 48.0 ? .55 : .25));
+    float alpha = opacity + backdrop.a * (1.0 - opacity);
+    return float4(sampled.rgb / max(sampled.a, .00001) * alpha, alpha);
+}
+half4 main(float2 p) {
+    float4 backdrop = nativeAtlasBilinear(p, 0);
+""" + when (mode) {
+                                    0 -> "return half4(nativeAtlasEncode(backdrop)); }"
+                                    else -> """
+    float4 actual = mipActual(p, backdrop);
+    float opacity = p.y < 16.0 ? .35 : (p.y < 32.0 ? .3 : (p.y < 48.0 ? .55 : .25));
+    float4 relative = float4(actual.rgb - backdrop.rgb * (1.0 - opacity), opacity);
+    return half4(nativeAtlasEncodeRelative(relative, backdrop));
+}
+"""
+                                })
+                                atlas.configure(shader)
+                                return context.createGraphicsLayer().also { layer ->
+                                    consumers += layer
+                                    layer.clip = true
+                                    layer.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                                    layer.renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
+                                        .asComposeRenderEffect()
+                                    layer.record(this, layoutDirection, atlas.size) { drawLayer(packed) }
+                                }
+                            }
+                            val origin = if (nativeStorage) 96f else 0f
+                            withTransform({ translate(origin, 0f) }) {
+                                clipRect(0f, 0f, 96f, 64f) {
+                                    drawLayer(consumer(0))
+                                    drawLayer(consumer(1))
+                                }
+                            }
+                        }
+                    }
+                    node.endRecording()
+                }
+                android.graphics.HardwareBufferRenderer(buffer).use { renderer ->
+                    renderer.setContentRoot(node)
+                    val done = java.util.concurrent.CountDownLatch(1)
+                    val error = java.util.concurrent.atomic.AtomicReference<Throwable>()
+                    renderer.obtainRenderRequest().setColorSpace(space).draw({ it.run() }) { result ->
+                        try {
+                            check(result.status == android.graphics.HardwareBufferRenderer.RenderResult.SUCCESS)
+                            result.fence.use { if (it.isValid) check(it.await(java.time.Duration.ofSeconds(3))) }
+                        } catch (failure: Throwable) { error.set(failure) }
+                        finally { done.countDown() }
+                    }
+                    assertTrue("The materialized FP16 mip render must finish", done.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    error.get()?.let { throw it }
+                    val hardware = requireNotNull(android.graphics.Bitmap.wrapHardwareBuffer(buffer, space))
+                    try {
+                        val pixels = requireNotNull(hardware.copy(android.graphics.Bitmap.Config.RGBA_F16, false))
+                        try {
+                            var maximum = 0f
+                            var maximumAlpha = 0f
+                            var transportError = 0f
+                            var transportDetail = ""
+                            repeat(64) { y -> repeat(96) { x ->
+                                val legacy = pixels.getColor(x, y).components
+                                val transported = pixels.getColor(x + 96, y).components
+                                repeat(4) { channel ->
+                                    val difference = abs(legacy[channel] - transported[channel])
+                                    if (difference > transportError) {
+                                        transportError = difference
+                                        transportDetail = "xy=$x,$y channel=$channel row=${y / 16} legacy=${legacy.contentToString()} " +
+                                            "carrier=${transported.contentToString()}"
+                                    }
+                                    maximum = maxOf(maximum, difference)
+                                }
+                                maximumAlpha = maxOf(maximumAlpha, abs(legacy[3] - transported[3]))
+                            } }
+                            val diagnostic = "space=$named max=$maximum alpha=$maximumAlpha transport=$transportError [$transportDetail]"
+                            println("GLASMIO_NATIVE_MIP_FP16 $diagnostic")
+                            android.util.Log.i("GlasmioMipFp16", diagnostic)
+                            assertTrue("Native-gamma mip transport retains composed FP16 values: $diagnostic", maximum <= .008f)
+                            assertTrue("Native-gamma mip transport retains alpha in $named: $maximumAlpha", maximumAlpha <= .002f)
+                            val blue = pixels.getColor(144, 8).convert(nativeSpace)
+                            val negative = pixels.getColor(144, 40).convert(nativeSpace)
+                            android.util.Log.i("GlasmioMipFp16", "space=$named blue=${blue.components.contentToString()} negative=${negative.components.contentToString()}")
+                            assertTrue("The actual mip pipeline retains HDR blue", blue.blue() > 1f)
+                            // These GraphicsLayers use the Activity's intermediate format,
+                            // which can clip negative source colors on an SDR display even
+                            // when the outer readback is FP16. Compare every transported
+                            // channel above; the direct FP16 operator separately asserts
+                            // negative-color preservation without that platform boundary.
+                            assertTrue("The actual mip pipeline retains partial alpha", negative.alpha() in .7f.. .99f)
+                        } finally { pixels.recycle() }
+                    } finally { hardware.recycle() }
+                }
+            } finally {
+                node.discardDisplayList()
+                compose.runOnIdle {
+                    consumers.forEach(graphicsContext.get()::releaseGraphicsLayer)
+                    passes.forEach { it.release() }
+                }
+                buffer.close()
+            }
+        }
+
+    }
+
+    @Test
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 36)
+    fun nativeTouchGlowRetainsItsUnclampedHdrEnergyInAnFp16Target() {
+        val width = 420
+        val height = 100
+        val usage = android.hardware.HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or
+            android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
+        org.junit.Assume.assumeTrue(android.hardware.HardwareBuffer.isSupported(
+            width, height, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage))
+        val nativeSpace = android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.EXTENDED_SRGB)
+        val tint = Color(0xFF0088FF)
+        val size = Size(140f, 50f)
+        val position = Offset(70.5f, 25.5f)
+        val bounds = androidx.compose.ui.geometry.Rect(Offset.Zero, size)
+        // Only the erroneous cap changes in this negative control. Keep the native mask,
+        // coefficients, two opacities and destination-space composition identical.
+        val clampedTransfer = io.github.neoruaa.glasmio.glass.NativePressGlowTransfer
+            .replace("float2(0.0, 0.0)", "float2(1.2, 0.0)")
+        val negativeBlender = android.graphics.RuntimeXfermode(
+            io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions + clampedTransfer + """
+uniform float glowGain;
+half4 main(half4 src, half4 dst) {
+    float4 target = glassWorkingToNativeGammaPremul(float4(dst));
+    return half4(glassNativeGammaToWorkingPremul(float4(nativeApplyPressGlow(
+        half4(target), float(src.r), float(src.g), glowGain))));
+}
+""")
+        negativeBlender.setFloatUniform("glowGain", io.github.neoruaa.glasmio.glass.nativePressDodgeGain(false, tint, false))
+        val negativeMask = android.graphics.RuntimeShader(
+            io.github.neoruaa.glasmio.glass.NativePressGlowFunctions + io.github.neoruaa.glasmio.glass.PressMaskMain)
+        io.github.neoruaa.glasmio.glass.configureNativePressGlow(negativeMask, 1f, position, bounds,
+            1f, true, null, false, tint, false, 0f)
+        val negativePaint = android.graphics.Paint().apply { shader = negativeMask; xfermode = negativeBlender }
+        val production = io.github.neoruaa.glasmio.glass.PressHighlightRenderer()
+        val scope = androidx.compose.ui.graphics.drawscope.CanvasDrawScope()
+        listOf(nativeSpace, android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.LINEAR_EXTENDED_SRGB)).forEach { space ->
+            val buffer = android.hardware.HardwareBuffer.create(
+                width, height, android.hardware.HardwareBuffer.RGBA_FP16, 1, usage)
+            val node = android.graphics.RenderNode("native-touch-glow-hdr").apply { setPosition(0, 0, width, height) }
+            try {
+                val canvas = node.beginRecording(width, height)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                val blue = android.graphics.Paint().apply {
+                    setColor(android.graphics.Color.pack(0f, 136f / 255f, 1f, 1f, nativeSpace))
+                }
+                canvas.drawRect(0f, 50f, width.toFloat(), height.toFloat(), blue)
+                for (row in 0..1) {
+                    var saved = canvas.save()
+                    canvas.translate(140f, row * 50f)
+                    scope.draw(Density(1f), androidx.compose.ui.unit.LayoutDirection.Ltr,
+                        androidx.compose.ui.graphics.Canvas(canvas), size) {
+                        production.draw(this, 1f, position, tint = tint)
+                    }
+                    canvas.restoreToCount(saved)
+                    saved = canvas.save()
+                    canvas.translate(280f, row * 50f)
+                    canvas.drawRect(0f, 0f, 140f, 50f, negativePaint)
+                    canvas.restoreToCount(saved)
+                }
+                node.endRecording()
+                android.graphics.HardwareBufferRenderer(buffer).use { renderer ->
+                    renderer.setContentRoot(node)
+                    val done = java.util.concurrent.CountDownLatch(1)
+                    val error = java.util.concurrent.atomic.AtomicReference<Throwable>()
+                    renderer.obtainRenderRequest().setColorSpace(space).draw({ it.run() }) { result ->
+                        try {
+                            check(result.status == android.graphics.HardwareBufferRenderer.RenderResult.SUCCESS)
+                            result.fence.use { if (it.isValid) check(it.await(java.time.Duration.ofSeconds(3))) }
+                        } catch (failure: Throwable) { error.set(failure) }
+                        finally { done.countDown() }
+                    }
+                    assertTrue("The touch-glow FP16 render must finish", done.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                    error.get()?.let { throw it }
+                    val hardware = requireNotNull(android.graphics.Bitmap.wrapHardwareBuffer(buffer, space))
+                    try {
+                        val pixels = requireNotNull(hardware.copy(android.graphics.Bitmap.Config.RGBA_F16, false))
+                        try {
+                            val white = pixels.getColor(70, 25).convert(nativeSpace)
+                            val litWhite = pixels.getColor(210, 25).convert(nativeSpace)
+                            val clampedWhite = pixels.getColor(350, 25).convert(nativeSpace)
+                            val untouchedBlue = pixels.getColor(70, 75).convert(nativeSpace)
+                            val litBlue = pixels.getColor(210, 75).convert(nativeSpace)
+                            val clampedBlue = pixels.getColor(350, 75).convert(nativeSpace)
+                            assertEquals("The baseline white stays unchanged", 1f, white.red(), .005f)
+                            assertEquals("The baseline blue stays unchanged", 136f / 255f, untouchedBlue.green(), .005f)
+                            // Exact 13 mini held-1600 matrices/opacities at the circular shadow's center.
+                            assertEquals("The touch matrices retain their native white response", 1.1858f, litWhite.red(), .01f)
+                            assertEquals("The old cap suppresses white HDR energy", 1.0651f, clampedWhite.red(), .01f)
+                            assertEquals("The touch response keeps its blue-dependent green", .6863f, litBlue.green(), .015f)
+                            assertEquals("The touch response retains extended blue", 1.3838f, litBlue.blue(), .015f)
+                            assertEquals("The old cap suppresses blue HDR energy", 1.1568f, clampedBlue.blue(), .015f)
+                            assertTrue("The fixture must reject the old white cap", litWhite.red() - clampedWhite.red() > .1f)
+                            assertTrue("The fixture must reject the old blue cap", litBlue.blue() - clampedBlue.blue() > .2f)
+                            assertEquals("Touch lighting preserves opaque alpha", 1f, litBlue.alpha(), .003f)
+                            println("GLASMIO_NATIVE_PRESS_HDR space=${space.name} white=${litWhite.red()} legacyWhite=${clampedWhite.red()} blue=${litBlue.red()},${litBlue.green()},${litBlue.blue()} legacyBlue=${clampedBlue.blue()}")
+                        } finally { pixels.recycle() }
+                    } finally { hardware.recycle() }
+                }
+            } finally {
+                node.discardDisplayList()
+                buffer.close()
+            }
+        }
+    }
+
+    @Test
+    fun sampledLayerRetainsItsAncestorScaleAndRotation() {
+        val rotation = mutableFloatStateOf(0f)
+        val showSample = mutableStateOf(false)
+        compose.setContent {
+            val source = rememberLayerBackdrop()
+            Box(Modifier.size(300.dp, 220.dp).background(Color.Gray).testTag("matrix-scene")) {
+                Canvas(Modifier.offset(48.dp, 40.dp).size(180.dp, 140.dp)
+                    .graphicsLayer { scaleX = .5f; scaleY = .5f; rotationZ = rotation.floatValue }
+                    .layerBackdrop(source)) {
+                    drawRect(Color.White)
+                    repeat(9) { stripe ->
+                        if (stripe % 2 == 0) drawRect(Color.Black,
+                            topLeft = Offset(stripe * size.width / 9f, 0f),
+                            size = Size(size.width / 9f, size.height))
+                    }
+                }
+                if (showSample.value) Box(Modifier.fillMaxSize().drawPlainBackdrop(
+                    backdrop = source, shape = { RectangleShape }, effects = {},
+                ))
+            }
+        }
+        listOf(0f, 25f).forEach { angle ->
+            compose.runOnIdle { rotation.floatValue = angle; showSample.value = false }
+            compose.waitForIdle()
+            val expected = compose.onNodeWithTag("matrix-scene").captureToImage().toPixelMap()
+            compose.runOnIdle { showSample.value = true }
+            compose.waitForIdle()
+            val actual = compose.onNodeWithTag("matrix-scene").captureToImage().toPixelMap()
+            var error = 0f
+            var count = 0
+            for (y in 4 until expected.height - 4 step 2) {
+                for (x in 4 until expected.width - 4 step 2) {
+                    val reference = expected[x, y]
+                    if (reference.red > .02f && reference.red < .98f) continue
+                    error += abs(actual[x, y].red - reference.red)
+                    count++
+                }
+            }
+            assertTrue("The patterned source must cover a useful sample area", count > 500)
+            assertTrue("The sampled source must keep its ancestor transform at rotation=$angle, mean error=${error / count}",
+                error / count < .025f)
+        }
+    }
+
+    @Test
+    fun luminanceOnlyProbesKeepOverflowVisibleAndTrackTheirCurrentRegion() {
+        val enabled = mutableStateOf(false)
+        val ownerWidth = mutableFloatStateOf(100f)
+        val rightRegion = mutableStateOf(false)
+        var probe: io.github.neoruaa.glasmio.glass.render.BackdropLuminance? = null
+        compose.setContent {
+            val luminance = rememberBackdropLuminance()
+            SideEffect { probe = luminance }
+            GlasmioTheme(isDark = false) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(300.dp, 160.dp).testTag("luminance-overflow-scene"),
+                    sampledContent = {
+                        Canvas(Modifier.fillMaxSize()) {
+                            drawRect(Color.Black)
+                            drawRect(Color.White, Offset(size.width / 2f, 0f), Size(size.width / 2f, size.height))
+                        }
+                    },
+                    overlayContent = { backdrop ->
+                        val density = LocalDensity.current
+                        val sampling = if (!enabled.value) Modifier else Modifier.sampleBackdropLuminance(
+                            backdrop, luminance, sampleBounds = {
+                                with(density) {
+                                    if (rightRegion.value) Rect(60.dp.toPx(), -20.dp.toPx(), 120.dp.toPx(), 40.dp.toPx())
+                                    else Rect(-120.dp.toPx(), -20.dp.toPx(), -60.dp.toPx(), 40.dp.toPx())
+                                }
+                            })
+                        Box(Modifier.align(Alignment.Center).size(ownerWidth.floatValue.dp, 44.dp).then(sampling)) {
+                            Box(Modifier.requiredSize(120.dp, 44.dp).graphicsLayer {
+                                scaleX = 1.7f; scaleY = 1.7f
+                            }.background(Color.Red))
+                        }
+                    },
+                )
+            }
+        }
+        val scene = compose.onNodeWithTag("luminance-overflow-scene")
+        for (width in listOf(100f, 0f)) {
+            compose.runOnIdle { enabled.value = false; ownerWidth.floatValue = width }
+            compose.waitForIdle()
+            val reference = scene.captureToImage().toPixelMap()
+            compose.runOnIdle { enabled.value = true; rightRegion.value = false }
+            compose.waitUntil(10_000) { probe?.value?.let { it < .1f } == true }
+            compose.waitForIdle()
+            val actual = scene.captureToImage().toPixelMap()
+            var visible = 0
+            for (y in 0 until reference.height) for (x in 0 until reference.width) {
+                val expected = reference[x, y]
+                if (expected.red > .9f && expected.green < .1f && expected.blue < .1f) {
+                    visible++
+                    val observed = actual[x, y]
+                    assertTrue("A luminance-only probe must not clip overflowing content, even with a zero-width owner: " +
+                        "width=$width, x=$x, y=$y, color=$observed",
+                        observed.red > .9f && observed.green < .1f && observed.blue < .1f)
+                }
+            }
+            assertTrue("The overflow reference must contain visible content", visible > 100)
+            compose.runOnIdle { rightRegion.value = true }
+            compose.waitUntil(10_000) { probe?.value?.let { it > .9f } == true }
+        }
+        compose.runOnIdle { enabled.value = false }
+    }
+
+    @Test
+    fun adaptiveGlassAnimatesMaterialAndForegroundContinuouslyAcrossRapidRetargets() {
+        data class Frame(val targetDark: Boolean, val fraction: Float, val nestedFraction: Float,
+            val foreground: Color, val nestedOwnsProbe: Boolean, val independentOwnsProbe: Boolean)
+        val observed = java.util.concurrent.atomic.AtomicReference<Frame>()
+        val controlledProbe = java.util.concurrent.atomic.AtomicReference<io.github.neoruaa.glasmio.glass.render.BackdropLuminance>()
+        val appearance = GlassAppearance(adaptiveColorScheme = true)
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                    GlasmioTheme(isDark = false, appearance = appearance) {
+                        val colors = LocalGlassColors.current
+                        val probe = rememberBackdropLuminance()
+                        val context = rememberResolvedGlassMaterialContext(colors, appearance, false,
+                            probe, ownsLuminance = true, sampleBackdrop = true)
+                        val backdrop = rememberCanvasBackdrop { drawRect(Color(.45f, .45f, .45f)) }
+                        val shadows = rememberNavigationInnerShadows(true)
+                        SideEffect { controlledProbe.set(probe) }
+                        Box(Modifier.size(160.dp, 64.dp).testTag("adaptive-animation-material")
+                            .navigationGlassBackgroundResolved(
+                                backdrop = backdrop, shape = { com.kyant.shapes.Capsule() },
+                                containerColor = colors.container, navigationMaterial = true,
+                                innerShadows = shadows, isDark = context.isDark,
+                                darkFraction = context.darkFraction, appearance = appearance,
+                                // The test alone publishes luminance; real sampling must not overwrite it.
+                                luminanceState = null,
+                            )) {
+                            Box(Modifier.offset(4.dp, 26.dp).size(12.dp).background(Color.Red))
+                            ProvideGlassMaterialContext(context) {
+                                val foreground = LocalContentColor.current
+                                val nested = rememberGlassMaterialContext()
+                                Box(Modifier.offset(144.dp, 26.dp).size(12.dp).background(foreground))
+                                ProvideGlassMaterialContext(rememberGlassMaterialContext(sampleBackdrop = false)) {
+                                    val independent = rememberGlassMaterialContext()
+                                    SideEffect {
+                                        observed.set(Frame(context.isDark, context.darkFraction, nested.darkFraction,
+                                            foreground, nested.luminanceState != null, independent.luminanceState != null))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            fun sample(): Triple<Color, Color, Color> {
+                val image = compose.onNodeWithTag("adaptive-animation-material").captureToImage().toPixelMap()
+                return Triple(image[image.width / 2, image.height / 2],
+                    image[(image.width * .0625f).roundToInt(), image.height / 2],
+                    image[(image.width * .9375f).roundToInt(), image.height / 2])
+            }
+            fun difference(a: Color, b: Color) =
+                (abs(a.red - b.red) + abs(a.green - b.green) + abs(a.blue - b.blue)) / 3f
+            fun verifySharedFrame(): Frame = requireNotNull(observed.get()).also {
+                assertEquals("A child must reuse its parent's presentation instead of starting another spring",
+                    it.fraction, it.nestedFraction, 0f)
+                assertTrue("An inherited surface has one probe writer", !it.nestedOwnsProbe)
+                assertTrue("An unsampled host must let its descendant own a probe", it.independentOwnsProbe)
+            }
+            compose.mainClock.advanceTimeByFrame()
+            val light = sample()
+            assertEquals(0f, verifySharedFrame().fraction, 0f)
+            compose.runOnIdle { requireNotNull(controlledProbe.get()).publish(.1f) }
+            compose.mainClock.advanceTimeByFrame()
+            compose.mainClock.advanceTimeBy(96)
+            val intermediateFrame = verifySharedFrame()
+            val intermediate = sample()
+            assertTrue("A dark target must retain a continuous presentation weight: $intermediateFrame",
+                intermediateFrame.targetDark && intermediateFrame.fraction in .01f.. .99f)
+            assertTrue("The foreground must interpolate alongside the material",
+                intermediateFrame.foreground != Color.Black && intermediateFrame.foreground != Color.White)
+            assertTrue("The rendered foreground must use that interpolated color",
+                difference(intermediate.third, intermediateFrame.foreground) < .02f)
+            compose.mainClock.advanceTimeBy(2_000)
+            val dark = sample()
+            assertEquals(1f, verifySharedFrame().fraction, 0f)
+            assertTrue("The endpoints must produce distinct material pixels", difference(light.first, dark.first) > .02f)
+            assertTrue("An intermediate material must differ from both endpoints: light=${light.first}, " +
+                "middle=${intermediate.first}, dark=${dark.first}",
+                difference(intermediate.first, light.first) > .005f && difference(intermediate.first, dark.first) > .005f)
+            listOf(light, intermediate, dark).forEach {
+                assertTrue("Changing material weights must not fade out the control's opaque content: ${it.second}",
+                    it.second.red > .98f && it.second.green < .02f && it.second.blue < .02f && it.second.alpha > .98f)
+            }
+
+            compose.runOnIdle { requireNotNull(controlledProbe.get()).publish(.8f) }
+            compose.mainClock.advanceTimeByFrame()
+            compose.mainClock.advanceTimeBy(96)
+            val beforeRetarget = verifySharedFrame().fraction
+            assertTrue(beforeRetarget in .01f.. .99f)
+            compose.runOnIdle { requireNotNull(controlledProbe.get()).publish(.1f) }
+            compose.mainClock.advanceTimeByFrame()
+            val afterRetarget = verifySharedFrame()
+            assertTrue("A rapid reversal must preserve its current presentation, before=$beforeRetarget, after=$afterRetarget",
+                afterRetarget.targetDark && afterRetarget.fraction in .01f.. .99f &&
+                    abs(afterRetarget.fraction - beforeRetarget) < .12f)
+            compose.mainClock.advanceTimeBy(2_000)
+            assertTrue("Retargeting must reach the unchanged dark endpoint", difference(dark.first, sample().first) < .005f)
+            compose.runOnIdle { requireNotNull(controlledProbe.get()).publish(.8f) }
+            compose.mainClock.advanceTimeByFrame()
+            compose.mainClock.advanceTimeBy(2_000)
+            assertEquals(0f, verifySharedFrame().fraction, 0f)
+            assertTrue("The light endpoint must remain unchanged after a round trip", difference(light.first, sample().first) < .005f)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
+    fun adaptiveGlassSamplesItsOwnRegionAndUpdatesItsForeground() {
+        val flipped = mutableStateOf(false)
+        val left = java.util.concurrent.atomic.AtomicReference(Color.Unspecified)
+        val right = java.util.concurrent.atomic.AtomicReference(Color.Unspecified)
+        val diagnostic = java.util.concurrent.ConcurrentHashMap<String, String>()
+        compose.setContent {
+            GlasmioTheme(isDark = false, appearance = GlassAppearance(adaptiveColorScheme = true)) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(300.dp, 100.dp),
+                    sampledContent = {
+                        Canvas(Modifier.fillMaxSize()) {
+                            val leftColor = if (flipped.value) Color.White else Color.Black
+                            drawRect(leftColor)
+                            drawRect(if (flipped.value) Color.Black else Color.White,
+                                topLeft = Offset(size.width / 2f, 0f), size = Size(size.width / 2f, size.height))
+                        }
+                    },
+                    overlayContent = { backdrop ->
+                        // A non-sampling parent must not make its children inherit an unwritten probe.
+                        ProvideGlassMaterialContext(rememberGlassMaterialContext(sampleBackdrop = false)) {
+                            Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                GlassSurface(Modifier.size(120.dp, 56.dp).testTag("adaptive-left"), backdrop = backdrop) {
+                                    val color = LocalContentColor.current
+                                    val context = rememberGlassMaterialContext()
+                                    SideEffect {
+                                        left.set(color)
+                                        diagnostic["left"] = "luma=${context.probe.value}, target=${context.isDark}, " +
+                                            "fraction=${context.darkFraction}, color=$color, semantic=${context.colors.content}"
+                                    }
+                                }
+                                GlassSurface(Modifier.size(120.dp, 56.dp).testTag("adaptive-right"), backdrop = backdrop) {
+                                    val color = LocalContentColor.current
+                                    val context = rememberGlassMaterialContext()
+                                    SideEffect {
+                                        right.set(color)
+                                        diagnostic["right"] = "luma=${context.probe.value}, target=${context.isDark}, " +
+                                            "fraction=${context.darkFraction}, color=$color, semantic=${context.colors.content}"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        try {
+            compose.waitUntil(10_000) { left.get() == Color.White && right.get() == Color.Black }
+            compose.runOnIdle { flipped.value = true }
+            compose.waitUntil(10_000) { left.get() == Color.Black && right.get() == Color.White }
+        } finally {
+            println("GLASMIO_ADAPTIVE_REGION flipped=${flipped.value} $diagnostic")
+        }
+    }
+
+    @Test
+    fun adaptiveAlertKeepsItsContentInTheResolvedMaterialAppearance() {
+        val background = mutableStateOf(Color.Black)
+        val foreground = java.util.concurrent.atomic.AtomicReference(Color.Unspecified)
+        val semantic = java.util.concurrent.atomic.AtomicReference(Color.Unspecified)
+        val diagnostic = java.util.concurrent.atomic.AtomicReference("")
+        val accent = Color(0xFF8E44AD)
+        compose.setContent {
+            GlasmioTheme(isDark = false, colors = defaultGlassColors(false, accent),
+                appearance = GlassAppearance(adaptiveColorScheme = true)) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(320.dp, 140.dp),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(background.value)) },
+                    overlayContent = { backdrop ->
+                        GlasmioAlertSurface(backdrop = backdrop, title = "Title") {
+                            val contentColor = LocalContentColor.current
+                            val colors = LocalGlassColors.current
+                            val context = rememberGlassMaterialContext()
+                            SideEffect {
+                                foreground.set(contentColor)
+                                semantic.set(colors.content)
+                                diagnostic.set("luma=${context.probe.value}, target=${context.isDark}, fraction=${context.darkFraction}, " +
+                                    "foreground=$contentColor, semantic=${colors.content}, context=${context.colors.content}")
+                                assertEquals("Semantic accent must survive material adaptation", accent, colors.accent)
+                            }
+                        }
+                    },
+                )
+            }
+        }
+        try {
+            compose.waitUntil(10_000) { foreground.get() == Color.White && semantic.get() == Color.White }
+            compose.runOnIdle { background.value = Color.White }
+            compose.waitUntil(10_000) { foreground.get() == Color.Black && semantic.get() == Color.Black }
+        } finally {
+            println("GLASMIO_ADAPTIVE_ALERT background=${background.value} ${diagnostic.get()}")
+        }
+    }
+
+    @Test
+    fun realTouchGlowKeepsItsTintAndFollowsTheFinger() {
+        compose.setContent {
+            GlasmioTheme(isDark = false, colors = defaultGlassColors(false, Color(0xFF0088FF))) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(220.dp, 100.dp),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color(0xFFF2F2F7))) },
+                    overlayContent = { backdrop ->
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            GlasmioButton({}, Modifier.width(140.dp).testTag("native-touch-glow"),
+                                size = GlasmioButtonSize.Large, emphasis = GlassEmphasis.Prominent,
+                                backdrop = backdrop) { Text("Continue") }
+                        }
+                    },
+                )
+            }
+        }
+        val button = compose.onNodeWithTag("native-touch-glow")
+        fun sample(): Pair<Color, Color> {
+            val image = button.captureToImage().toPixelMap()
+            return image[(image.width * .16f).roundToInt(), (image.height * .16f).roundToInt()] to
+                image[(image.width * .84f).roundToInt(), (image.height * .16f).roundToInt()]
+        }
+        fun luma(c: Color) = c.red * .2126f + c.green * .7152f + c.blue * .0722f
+        val idle = sample()
+        compose.mainClock.autoAdvance = false
+        try {
+            button.performTouchInput { down(Offset(center.x * .44f, center.y)) }
+            compose.mainClock.advanceTimeBy(1500)
+            val held = sample()
+            val near = luma(held.first) - luma(idle.first)
+            val far = luma(held.second) - luma(idle.second)
+            // A real iPhone hold has a whole-face vibrancy change and stronger local illumination.
+            assertTrue("The native global matrix must brighten the far side: $far", far > .015f)
+            assertTrue("The native local matrix must follow the finger: near=$near, far=$far", near > far + .015f)
+            assertTrue("A blue prominent hold must preserve its saturated tint", held.first.red < .035f && held.second.red < .035f)
+            button.performTouchInput { up() }
+            compose.mainClock.advanceTimeBy(2000)
+            val released = sample()
+            assertEquals("Release must restore the idle material", luma(idle.first), luma(released.first), .015f)
+            assertEquals("Release must remove both vibrancy layers", luma(idle.second), luma(released.second), .015f)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
+    fun sharedGlassAndProminentColorsRetainNativeBackdropResponse() {
+        val source = mutableStateOf(Color.Black)
+        val dark = mutableStateOf(false)
+        val reduced = mutableStateOf(false)
+        val tags = NavigationGlassMaterial.entries.map { it.name } + listOf("blue", "red")
+        compose.setContent {
+            GlasmioTheme(
+                isDark = dark.value,
+                colors = defaultGlassColors(dark.value, Color(0xFF0088FF)),
+                appearance = GlassAppearance(reduceTransparency = reduced.value),
+            ) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(300.dp, 520.dp),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(source.value)) },
+                    overlayContent = { backdrop ->
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            NavigationGlassMaterial.entries.forEach { material ->
+                                GlassSurface(Modifier.size(240.dp, 56.dp).testTag(material.name),
+                                    shape = ContinuousRoundedRectangle(28.dp), material = material,
+                                    backdrop = backdrop) { }
+                            }
+                            GlasmioButton({}, Modifier.width(240.dp).testTag("blue"),
+                                size = GlasmioButtonSize.Large, emphasis = GlassEmphasis.Prominent,
+                                backdrop = backdrop) { }
+                            GlasmioButton({}, Modifier.width(240.dp).testTag("red"),
+                                size = GlasmioButtonSize.Large, emphasis = GlassEmphasis.Prominent,
+                                destructive = true, backdrop = backdrop) { }
+                        }
+                    },
+                )
+            }
+        }
+        fun samples(): Map<String, Color> = tags.associateWith { tag ->
+            val image = compose.onNodeWithTag(tag).captureToImage().toPixelMap()
+            image[image.width / 2, image.height / 2]
+        }
+        fun difference(a: Color, b: Color): Float =
+            (abs(a.red - b.red) + abs(a.green - b.green) + abs(a.blue - b.blue)) / 3f
+        listOf(false, true).forEach { isDark ->
+            compose.runOnIdle { dark.value = isDark; source.value = Color.Black }
+            compose.waitForIdle()
+            val black = samples()
+            compose.runOnIdle { source.value = Color.White }
+            compose.waitForIdle()
+            val white = samples()
+            tags.forEach { tag ->
+                assertTrue("$tag must respond to the sampled background in dark=$isDark; black=${black[tag]}, white=${white[tag]}",
+                    difference(black.getValue(tag), white.getValue(tag)) > .01f)
+            }
+            assertTrue("Clear must preserve more background contrast than Regular Small",
+                difference(black.getValue("Clear"), white.getValue("Clear")) >
+                    difference(black.getValue("RegularSmall"), white.getValue("RegularSmall")) * 1.1f)
+            // Center samples captured from the 50-point UIKit controls on iPhone 13 mini.
+            val nativeBlack = if (isDark) mapOf(
+                "RegularSmall" to Color(.12549f, .12549f, .12549f),
+                "blue" to Color(0f, .52941f, 1f),
+                "red" to Color(1f, .25490f, .26275f),
+            ) else mapOf(
+                "RegularSmall" to Color(.52019f, .52019f, .52035f),
+                "blue" to Color(0f, .41569f, .81176f),
+                "red" to Color(.89412f, .09412f, .10196f),
+            )
+            val nativeWhite = if (isDark) mapOf(
+                "RegularSmall" to Color(.72523f, .72523f, .72541f),
+                "blue" to Color(.11922f, .57647f, .98039f),
+                "red" to Color(.98824f, .39216f, .40392f),
+            ) else mapOf(
+                "RegularSmall" to Color.White,
+                "blue" to Color(0f, .53725f, 1f),
+                "red" to Color(1f, .22745f, .23922f),
+            )
+            listOf(black to nativeBlack, white to nativeWhite).forEach { (actual, native) ->
+                native.forEach { (tag, expected) ->
+                    val observed = actual.getValue(tag)
+                    val error = maxOf(abs(observed.red - expected.red), abs(observed.green - expected.green),
+                        abs(observed.blue - expected.blue))
+                    assertTrue("$tag center must match UIKit dark=$isDark: expected=$expected, actual=$observed", error < .03f)
+                }
+            }
+        }
+        compose.runOnIdle { reduced.value = true; source.value = Color.Black }
+        compose.waitForIdle()
+        val opaqueBlack = samples()
+        compose.runOnIdle { source.value = Color.White }
+        compose.waitForIdle()
+        val opaqueWhite = samples()
+        tags.forEach { tag ->
+            assertTrue("Reduce Transparency must keep $tag independent of the backdrop",
+                difference(opaqueBlack.getValue(tag), opaqueWhite.getValue(tag)) < .005f)
+        }
+    }
+
+    @Test
     fun separatedAndJoinedNavigationKeepOneMaterialAndTheSameDividerAnchor() {
         val direction = mutableStateOf(LayoutDirection.Ltr)
         val appearance = mutableStateOf(GlassAppearance())
@@ -151,11 +1619,12 @@ class NavigationRenderingTest {
                         modifier = Modifier.size(360.dp, 220.dp).testTag("opticalScene"),
                         sampledContent = {
                             Canvas(Modifier.fillMaxSize()) {
+                                // Broad separated markers survive the native 8-point fill and isolate coordinate mapping.
                                 drawRect(Color.White)
-                                listOf(-24f, 0f, 24f).forEach { x ->
+                                listOf(-48f, 0f, 48f).forEach { x ->
                                     drawRect(Color.Black,
-                                        topLeft = Offset(size.width / 2f + x.dp.toPx() - 3.dp.toPx(), 0f),
-                                        size = Size(6.dp.toPx(), size.height))
+                                        topLeft = Offset(size.width / 2f + x.dp.toPx() - 7.dp.toPx(), 0f),
+                                        size = Size(14.dp.toPx(), size.height))
                                 }
                             }
                         },
@@ -199,7 +1668,8 @@ class NavigationRenderingTest {
             }
         }
         try {
-            listOf(GlassAppearance(), GlassAppearance(reduceTransparency = true)).forEach { mode ->
+            listOf(GlassAppearance(), GlassAppearance(adaptiveColorScheme = true),
+                GlassAppearance(reduceTransparency = true)).forEach { mode ->
                 listOf(LayoutDirection.Ltr, LayoutDirection.Rtl).forEach { layoutDirection ->
                     compose.runOnIdle { appearance.value = mode; direction.value = layoutDirection }
                     compose.waitForIdle()
@@ -213,18 +1683,24 @@ class NavigationRenderingTest {
                         requireNotNull(owner.surface.value).bounds.top + 2f * density): List<Float> {
                         val pixels = scene.captureToImage().toPixelMap()
                         val y = sampleY.roundToInt()
-                        return listOf(-24f, 0f, 24f).map { offset ->
+                        return listOf(-48f, 0f, 48f).map { offset ->
                             val center = pixels.width / 2f + offset * density
                             var weight = 0.0
                             var moment = 0.0
+                            var maximumShade = 0f
                             for (x in (center - 10f * density).roundToInt()..(center + 10f * density).roundToInt()) {
                                 val color = pixels[x, y]
                                 val shade = (1f - (color.red + color.green + color.blue) / 3f).coerceAtLeast(0f)
+                                maximumShade = maxOf(maximumShade, shade)
                                 val w = shade * shade * shade
                                 weight += w
                                 moment += x * w
                             }
-                            assertTrue("The ruler must remain visible through the material", weight > 0.1)
+                            // Native press vibrancy changes contrast; the centroid test needs a
+                            // discernible marker, not a fixed integral of its cubed brightness.
+                            assertTrue("The ruler must remain visible through the material: offset=$offset, y=$y, " +
+                                "weight=$weight, maximumShade=$maximumShade, direction=$layoutDirection",
+                                maximumShade > .05f && weight > 0.0)
                             (moment / weight).toFloat()
                         }
                     }
@@ -238,7 +1714,7 @@ class NavigationRenderingTest {
                         assertEquals("The central ruler must not shift toward the short bar's center",
                             referenceCenters[1], rest[1], 2f)
                         assertTrue("The left ruler bends left, matching a full-width reference",
-                            rest[0] <= sceneBounds.width / 2f - 24f * density + 1f)
+                            rest[0] <= sceneBounds.width / 2f - 48f * density + 1f)
                     }
                     val home = compose.onNode(
                         SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab) and
@@ -257,7 +1733,11 @@ class NavigationRenderingTest {
                                 rest[1], dividerCenters()[1], 2f)
                         }
                     }
-                    compose.runOnIdle { assertTrue(owner.connected.value) }
+                    compose.runOnIdle {
+                        assertTrue("Held navigation must join its neighbor: mode=$mode, direction=$layoutDirection, " +
+                            "members=${owner.members.map { it.capsule() }}, transform=${owner.lensTransform.value}, " +
+                            "press=${owner.pressProgress()}", owner.connected.value)
+                    }
                     home.performTouchInput { up() }
                     compose.mainClock.advanceTimeBy(1000)
                     compose.mainClock.autoAdvance = true
@@ -269,6 +1749,19 @@ class NavigationRenderingTest {
                         compose.runOnIdle {
                             assertTrue("Compact geometry retains the same material owner",
                                 owner.materialBackdrop === source && owner.members.all { it.sharesSurface })
+                        }
+                        if (progress == 1f) {
+                            val pixels = scene.captureToImage().toPixelMap()
+                            val centerX = pixels.width / 2
+                            val centerY = (navigation.top - sceneBounds.top + 32f * density).roundToInt()
+                            // The central black ruler is far outside both compact circles.
+                            // No backing rectangle may replace the untouched source in this gap.
+                            for (dy in -2..2) for (dx in -2..2) {
+                                val color = pixels[centerX + dx, centerY + dy]
+                                assertTrue("The compact gap must retain its source: " +
+                                    "mode=$mode, direction=$layoutDirection, color=$color",
+                                    maxOf(color.red, color.green, color.blue) < .02f)
+                            }
                         }
                     }
                 }
@@ -587,6 +2080,129 @@ class NavigationRenderingTest {
         val unframed = compose.onNodeWithTag("separator-group").captureToImage().toPixelMap()
         assertTrue("Unframed groups retain the standalone TextField separator",
             colorError(unframed[unframed.width / 2, 0], Color.White) > .02f)
+    }
+
+    @Test
+    fun sheetRefractionKeepsEachCornerIndependentOfTheOtherRadii() {
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val uniform = mutableStateOf<Float?>(null)
+        compose.setContent {
+            GlasmioTheme(isDark = false) {
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    GlasmioBackdropHost(
+                        modifier = Modifier.size(340.dp, 400.dp).testTag("sheet-corners-scene"),
+                        sampledContent = {
+                            Canvas(Modifier.fillMaxSize()) {
+                                val step = 24.dp.toPx()
+                                for (row in 0..(size.height / step).toInt()) {
+                                    for (column in 0..(size.width / step).toInt()) {
+                                        drawRect(if ((row + column) % 2 == 0) Color(0xFF0068D9) else Color(0xFFFFC93C),
+                                            Offset(column * step, row * step), Size(step, step))
+                                    }
+                                }
+                            }
+                        },
+                        overlayContent = { backdrop ->
+                            val radius = uniform.value
+                            GlasmioSheetSurface(
+                                modifier = Modifier.align(Alignment.Center).size(300.dp, 340.dp),
+                                backdrop = backdrop,
+                                shape = if (radius != null) ContinuousRoundedRectangle(radius.dp)
+                                    else ContinuousRoundedRectangle(topStart = 38.dp, topEnd = 30.dp,
+                                        bottomStart = 20.dp, bottomEnd = 12.dp),
+                                interactive = false,
+                                applyDragScale = false,
+                            ) {}
+                        },
+                    )
+                }
+            }
+        }
+        val scene = compose.onNodeWithTag("sheet-corners-scene")
+        for (layout in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+            compose.runOnIdle { direction.value = layout; uniform.value = null }
+            compose.waitForIdle()
+            val asymmetric = scene.captureToImage().toPixelMap()
+            val density = compose.density.density
+            val radii = if (layout == LayoutDirection.Ltr) listOf(38f, 30f, 12f, 20f)
+                else listOf(30f, 38f, 20f, 12f)
+            var largestRadiusDifference = 0f
+            radii.distinct().forEach { radius ->
+                compose.runOnIdle { uniform.value = radius }
+                compose.waitForIdle()
+                val reference = scene.captureToImage().toPixelMap()
+                radii.forEachIndexed { corner, expected ->
+                    val right = corner == 1 || corner == 2
+                    val bottom = corner >= 2
+                    var sum = 0f
+                    var count = 0
+                    for (dy in 1..48) for (dx in 1..48) {
+                        val x = ((if (right) 320f - dx else 20f + dx) * density).roundToInt()
+                        val y = ((if (bottom) 370f - dy else 30f + dy) * density).roundToInt()
+                        val a = asymmetric[x, y]
+                        val b = reference[x, y]
+                        sum += maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
+                        count++
+                    }
+                    val error = sum / count
+                    if (expected == radius) assertTrue(
+                        "Each corner must match its own uniform-radius optical reference: layout=$layout, " +
+                            "corner=$corner, radius=$radius, error=$error", error < .015f)
+                    else if (radius == 38f) largestRadiusDifference = maxOf(largestRadiusDifference, error)
+                }
+            }
+            assertTrue("Small corners must remain distinguishable from the largest radius: $largestRadiusDifference",
+                largestRadiusDifference > .02f)
+        }
+    }
+
+    @Test
+    fun sheetForegroundSurvivesTheGlassToOpaqueDetentAndBack() {
+        val glass = mutableFloatStateOf(1f)
+        val marker = Color(0xFF18A35C)
+        compose.setContent {
+            GlasmioTheme(isDark = false) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.size(300.dp, 260.dp),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color(0xFF335577))) },
+                    overlayContent = { backdrop ->
+                        GlasmioSheetSurface(
+                            modifier = Modifier.align(Alignment.Center).size(240.dp, 200.dp).testTag("sheet-detent"),
+                            backdrop = backdrop,
+                            interactive = false,
+                            applyDragScale = false,
+                            glassFraction = glass.floatValue,
+                        ) {
+                            Text("Sheet content", modifier = Modifier.align(Alignment.TopCenter).padding(top = 20.dp),
+                                color = Color.Black)
+                            Box(Modifier.align(Alignment.Center).size(64.dp, 40.dp).background(marker))
+                        }
+                    },
+                )
+            }
+        }
+        var initialBackplate: Color? = null
+        listOf(1f, .5f, 0f, 1f).forEach { fraction ->
+            compose.runOnIdle { glass.floatValue = fraction }
+            compose.waitForIdle()
+            val pixels = compose.onNodeWithTag("sheet-detent").captureToImage().toPixelMap()
+            val foreground = pixels[pixels.width / 2, pixels.height / 2]
+            fun difference(a: Color, b: Color) = maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
+            assertTrue("The detent carrier must stay behind sheet content: fraction=$fraction, color=$foreground",
+                difference(foreground, marker) < .01f)
+            val backplate = pixels[pixels.width / 2, pixels.height * 3 / 4]
+            when {
+                fraction == 0f -> assertTrue("The expanded detent must retain its opaque backplate",
+                    difference(backplate, Color.White) < .01f)
+                initialBackplate == null -> {
+                    initialBackplate = backplate
+                    assertTrue("The glass detent must sample the colored backdrop",
+                        difference(backplate, Color.White) > .04f)
+                }
+                fraction == 1f -> assertTrue("Returning to glass must restore the sampled material",
+                    difference(backplate, requireNotNull(initialBackplate)) < .01f)
+            }
+        }
     }
 
     @Test
@@ -999,6 +2615,7 @@ class NavigationRenderingTest {
                                 morphSourceMaterial = anchor.sourceMaterial,
                                 morphSourceFrostRadius = anchor.sourceFrostRadius,
                                 morphSourceMaterialPaint = anchor.sourceMaterialPaint,
+                                morphSourceMaterialEffect = anchor.sourceMaterialEffect,
                                 morphSourceUsesShadowLift = anchor.sourceUsesShadowLift,
                                 morphSourceUsesInnerShadows = anchor.sourceUsesInnerShadows,
                                 onMenuBoundsChanged = { target = it },
@@ -1059,7 +2676,7 @@ class NavigationRenderingTest {
         compose.setContent {
             density = LocalDensity.current.density
             val shadow = remember {
-                NavigationDropShadowRenderer(shadowRadius = 48.dp, shadowOffsetY = 8.dp, shadowAlpha = 0.25f)
+                NavigationDropShadowRenderer(useNativeProfile = true, nativeMaterial = NavigationGlassMaterial.RegularMedium)
             }
             DisposableEffect(shadow) { onDispose { shadow.release() } }
             GlasmioTheme(isDark = false) {
@@ -1093,8 +2710,8 @@ class NavigationRenderingTest {
         compose.runOnIdle { reference.value = true }
         val static = compose.onNodeWithTag("source-shadow-handoff").captureToImage().toPixelMap()
         val strips = listOf(
-            Rect(sourceLocal.center.x - 12f * density, sourceLocal.top - 34f * density, sourceLocal.center.x + 12f * density, sourceLocal.top - 18f * density),
-            Rect(sourceLocal.center.x - 12f * density, sourceLocal.bottom + 18f * density, sourceLocal.center.x + 12f * density, sourceLocal.bottom + 34f * density),
+            Rect(sourceLocal.center.x - 12f * density, sourceLocal.top - 16f * density, sourceLocal.center.x + 12f * density, sourceLocal.top - 8f * density),
+            Rect(sourceLocal.center.x - 12f * density, sourceLocal.bottom + 8f * density, sourceLocal.center.x + 12f * density, sourceLocal.bottom + 16f * density),
         )
         strips.forEach { band ->
             var observed = 0.0
@@ -1107,9 +2724,11 @@ class NavigationRenderingTest {
                     samples++
                 }
             }
-            assertTrue("The static toolbar reference must have a visible exterior shadow", expected / samples > 0.01)
+            assertTrue("The static toolbar reference must have a visible exterior shadow: ${expected / samples}", expected / samples > 0.01)
             assertTrue("The final morph frame cannot lose its source shadow", observed > expected * 0.8)
-            assertTrue("The final morph shadow must approach the static toolbar", abs(observed - expected) / samples < 0.015)
+            assertTrue("The final morph shadow must approach the static toolbar: " +
+                "band=$band, observed=${observed / samples}, expected=${expected / samples}",
+                abs(observed - expected) / samples < 0.015)
         }
     }
 
@@ -1178,11 +2797,14 @@ class NavigationRenderingTest {
         val sharpContrast = contrast(sharp)
         val softContrast = contrast(frosted)
         assertTrue("A zero-frost source must retain its real backdrop detail", sharpContrast > 0.08f)
-        assertTrue("Updating the source frost must update the retained capture's real blur", softContrast < sharpContrast * 0.4f)
+        assertTrue(
+            "Updating the source frost must update the retained capture's real blur: sharp=$sharpContrast, soft=$softContrast",
+            softContrast < sharpContrast * 0.4f,
+        )
     }
 
     @Test
-    fun clearLensPreservesDarkSourceContrastWithoutChangingNavigationDefaults() {
+    fun clearMaterialUsesTheNativeBlackFloorWithoutTheLegacyShadowLift() {
         compose.setContent {
             GlasmioTheme(isDark = false) {
                 io.github.neoruaa.glasmio.glass.GlasmioBackdropHost(
@@ -1210,8 +2832,8 @@ class NavigationRenderingTest {
         val navigation = compose.onNodeWithTag("clear-navigation-source").captureToImage().toPixelMap()
         val dark = original[original.width / 2, original.height / 2]
         val lifted = navigation[navigation.width / 2, navigation.height / 2]
-        assertTrue("The magnifier must retain dark source contrast", dark.red < 0.2f)
-        assertTrue("Existing navigation still keeps its calibrated shadow lift", lifted.red > dark.red + 0.15f)
+        assertTrue("The contrast-preserving Clear source must stay dark: ${dark.red}", dark.red < .2f)
+        assertEquals("Clear follows the measured UIKit black endpoint", .125f, lifted.red, .02f)
     }
 
     @Test
@@ -1253,12 +2875,10 @@ class NavigationRenderingTest {
             assertTrue("Only fully opaque source colors can skip the inner filter",
                 if (opaque) optimizedFilter == null else optimizedFilter === selectedFilter)
             val sourceScale = remember {
-                { lerp(1f, 1.2f, press.floatValue) * (1f - progress.floatValue).coerceAtLeast(0.82f) }
+                { lerp(1f, 1.16f, press.floatValue) }
             }
-            val labelAlpha = remember { { (1f - progress.floatValue * 1.35f).coerceIn(0f, 1f) } }
-            val lateScale = remember {
-                { lerp(1f, (22f / 28f) / 0.82f, compactIconLateProgress(progress.floatValue)) }
-            }
+            val labelAlpha = remember { { (1f - progress.floatValue).coerceIn(0f, 1f) } }
+            val lateScale = remember { { 1f } }
             val density = LocalDensity.current
             CompositionLocalProvider(LocalGlassColors provides colors, LocalLiquidTabScale provides sourceScale) {
                 MaterialTheme {
@@ -1285,6 +2905,7 @@ class NavigationRenderingTest {
                                         selectedIndex = 1,
                                         isLtr = true,
                                         horizontalInsetPx = with(density) { 4.dp.toPx() },
+                                        expandedTabWidthPx = with(density) { 58.dp.toPx() },
                                         selectedContentLateScale = lateScale,
                                         labelAlpha = labelAlpha,
                                         selectedIconColorFilter = if (optimized) optimizedFilter else selectedFilter,
@@ -1381,11 +3002,9 @@ class NavigationRenderingTest {
                     val expandedWidth = (contentWidthPx / 3)
                         .coerceAtLeast(with(density) { 75.dp.toPx() })
                         .coerceAtMost(maximumWidth)
-                    val tabScale = remember { { (1f - progress.floatValue).coerceAtLeast(0.82f) } }
-                    val labelAlpha = remember { { (1f - progress.floatValue * 1.35f).coerceIn(0f, 1f) } }
-                    val lateScale = remember {
-                        { lerp(1f, (22f / 28f) / 0.82f, compactIconLateProgress(progress.floatValue)) }
-                    }
+                    val tabScale = remember { { 1f } }
+                    val labelAlpha = remember { { (1f - progress.floatValue).coerceIn(0f, 1f) } }
+                    val lateScale = remember { { 1f } }
                     CompositionLocalProvider(LocalLiquidTabScale provides tabScale) {
                         Box(
                             Modifier.size(160.dp, 80.dp).background(Color.White)
@@ -1402,14 +3021,15 @@ class NavigationRenderingTest {
                                     selectedIndex = 1,
                                     isLtr = true,
                                     horizontalInsetPx = insetPx,
+                                    expandedTabWidthPx = expandedWidth,
                                     selectedContentLateScale = lateScale,
                                     labelAlpha = labelAlpha,
                                     selectedIconColorFilter = null,
                                     contentColor = colors.content,
                                 )
                             } else {
-                                // The original composition-driven width, padding and label
-                                // collapse are the pixel oracle for the deferred layout.
+                                // Native-sized composition is the pixel oracle for the
+                                // deferred layout, including an explicit custom 44dp target.
                                 val compact = progress.floatValue.coerceIn(0f, 1f)
                                 val visibility = labelAlpha()
                                 val width = with(density) {
@@ -1441,15 +3061,17 @@ class NavigationRenderingTest {
                                             contentDescription = library.contentDescription,
                                             tint = colors.content,
                                             size = 28.dp,
-                                            weight = FontWeight.SemiBold,
+                                            fontSize = 18.sp,
+                                            weight = FontWeight.Medium,
+                                            fitGlyphToBounds = false,
                                             modifier = Modifier.padding(top = 3.dp * visibility)
                                                 .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
                                         )
                                         Text(
                                             text = library.label,
                                             color = colors.content,
-                                            style = IosTypography.caption.copy(fontSize = 10.sp, lineHeight = 13.sp),
-                                            fontWeight = FontWeight.Bold,
+                                            style = IosTypography.caption.copy(fontSize = 10.sp, lineHeight = 12.sp),
+                                            fontWeight = FontWeight.Medium,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.layout { measurable, constraints ->
@@ -1557,6 +3179,214 @@ class NavigationRenderingTest {
     }
 
     @Test
+    fun toolbarSeparationKeepsItsNativeMaterialOnTheMovingContour() {
+        val progress = mutableFloatStateOf(0f)
+        val drivenByStyle = mutableStateOf(false)
+        val separated = mutableStateOf(false)
+        val opaque = mutableStateOf(true)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val clicks = IntArray(3)
+        val background = Color(0xFF235578)
+        compose.setContent {
+            GlasmioTheme(isDark = false, appearance = GlassAppearance(
+                adaptiveColorScheme = false, reduceTransparency = opaque.value)) {
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    GlasmioBackdropHost(
+                        modifier = Modifier.size(300.dp, 160.dp).testTag("toolbar-separation-scene"),
+                        sampledContent = { Box(Modifier.fillMaxSize().background(background)) },
+                        overlayContent = {
+                            GlasmioToolbarActionGroup(Modifier.align(Alignment.Center),
+                                style = if (separated.value) GlasmioToolbarActionStyle.Separated
+                                    else GlasmioToolbarActionStyle.Merged,
+                                separationProgress = progress.floatValue.takeUnless { drivenByStyle.value }) {
+                                repeat(3) { index ->
+                                    GlasmioIconButton(onClick = { clicks[index]++ },
+                                        modifier = Modifier.testTag("separation-action-$index"),
+                                        style = GlassSurfaceStyle.Navigation) { }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        val scene = compose.onNodeWithTag("toolbar-separation-scene")
+        fun error(a: Color, b: Color) = maxOf(abs(a.red - b.red),
+            abs(a.green - b.green), abs(a.blue - b.blue))
+        compose.mainClock.autoAdvance = false
+        try {
+            for (layout in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+                compose.runOnIdle { direction.value = layout; progress.floatValue = 0f; opaque.value = true }
+                compose.mainClock.advanceTimeBy(64)
+                compose.waitForIdle()
+                val merged = scene.captureToImage().toPixelMap()
+                // Include a reverse target before rest. A rounded-rect fallback hides
+                // these necks until the shared run abruptly disappears.
+                val probeOffsets = intArrayOf(-4, 0, 4)
+                for (phase in listOf(.87f, .96f, .91f)) {
+                    compose.runOnIdle { progress.floatValue = phase; opaque.value = true }
+                    compose.mainClock.advanceTimeBy(64)
+                    compose.waitForIdle()
+                    val outline = scene.captureToImage().toPixelMap()
+                    compose.runOnIdle { opaque.value = false }
+                    compose.mainClock.advanceTimeBy(64)
+                    compose.waitForIdle()
+                    val native = scene.captureToImage().toPixelMap()
+                    var samples = 0
+                    var totalError = 0.0
+                    var largestError = 0f
+                    val guard = 4
+                    for (y in guard until outline.height - guard) {
+                        for (x in guard until outline.width - guard) {
+                            if (error(merged[x, y], Color.White) > .02f) continue
+                            if (probeOffsets.any { dy ->
+                                probeOffsets.any { dx ->
+                                    error(outline[x + dx, y + dy], background) > 1f / 255f
+                                }
+                            }) continue
+                            val difference = error(native[x, y], background)
+                            totalError += difference
+                            largestError = maxOf(largestError, difference)
+                            samples++
+                        }
+                    }
+                    assertTrue("The intermediate toolbar must visibly retract its necks: " +
+                        "layout=$layout, progress=$phase, samples=$samples", samples > 20)
+                    assertTrue("Native glass must follow the retracting toolbar instead of filling its old capsule: " +
+                        "layout=$layout, progress=$phase, mean=${totalError / samples}, max=$largestError",
+                        totalError / samples < .035 && largestError < .12f)
+                }
+            }
+            compose.runOnIdle {
+                direction.value = LayoutDirection.Ltr; opaque.value = false
+                drivenByStyle.value = true; separated.value = false
+            }
+            compose.mainClock.advanceTimeBy(1200)
+            compose.waitForIdle()
+            val initial = scene.captureToImage().toPixelMap()
+            val initialBounds = (0..2).map { compose.onNodeWithTag("separation-action-$it")
+                .fetchSemanticsNode().boundsInRoot }
+            compose.runOnIdle { separated.value = true }
+            compose.mainClock.advanceTimeBy(160)
+            val intermediate = scene.captureToImage().toPixelMap()
+            listOf(false, true, false, true).forEach { target ->
+                compose.runOnIdle { separated.value = target }
+                compose.mainClock.advanceTimeBy(48)
+            }
+            compose.mainClock.advanceTimeBy(1800)
+            compose.waitForIdle()
+            val detached = scene.captureToImage().toPixelMap()
+            var differentFromInitial = 0f
+            var differentFromDetached = 0f
+            for (y in 0 until initial.height) for (x in 0 until initial.width) {
+                differentFromInitial = maxOf(differentFromInitial, error(intermediate[x, y], initial[x, y]))
+                differentFromDetached = maxOf(differentFromDetached, error(intermediate[x, y], detached[x, y]))
+            }
+            assertTrue("The style driver must render an intermediate contour before settlement",
+                differentFromInitial > .01f && differentFromDetached > .01f)
+            (0..2).forEach { index ->
+                val action = compose.onNodeWithTag("separation-action-$index")
+                val bounds = action.fetchSemanticsNode().boundsInRoot
+                assertEquals(initialBounds[index].left, bounds.left, .5f)
+                assertEquals(initialBounds[index].top, bounds.top, .5f)
+                action.performTouchInput { click(center) }
+            }
+            compose.runOnIdle { assertTrue("Every action remains independently clickable", clicks.all { it == 1 }) }
+            compose.runOnIdle { separated.value = false }
+            compose.mainClock.advanceTimeBy(1800)
+            compose.waitForIdle()
+            val restored = scene.captureToImage().toPixelMap()
+            var roundTripError = 0.0
+            for (y in 0 until initial.height) for (x in 0 until initial.width) {
+                roundTripError += error(initial[x, y], restored[x, y])
+            }
+            assertTrue("Rapid retargeting and independent clicks must return to the original merged material",
+                roundTripError / (initial.width * initial.height) < 2.0 / 255.0)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
+    fun plainMenuGaussianTailDoesNotExtendItsKeyFillIntoExteriorRectangles() {
+        val smoothing = mutableFloatStateOf(.6f)
+        val renderScale = mutableFloatStateOf(.5f)
+        val gaussian = mutableStateOf(true)
+        var host: LayoutCoordinates? = null
+        var menu = Rect.Zero
+        compose.setContent {
+            // The native half-point key strip extends beyond the two-pixel field halo at 3x.
+            CompositionLocalProvider(LocalDensity provides Density(3f)) {
+                GlasmioTheme(isDark = false) {
+                    GlasmioBackdropHost(
+                        modifier = Modifier.size(330.dp).testTag("menu-field-exterior"),
+                        sampledContent = { Box(Modifier.fillMaxSize().background(Color.White)) },
+                        overlayContent = { backdrop ->
+                            val renderer = rememberGlassMorphRenderer(backdrop, active = true,
+                                materialPreset = NavigationGlassMaterial.RegularMedium,
+                                renderScale = renderScale.floatValue)
+                            val field = remember { LiquidMenuFieldTexture() }
+                            Box(Modifier.fillMaxSize().onGloballyPositioned { host = it }.drawWithContent {
+                                val coordinates = host ?: return@drawWithContent
+                                menu = Rect(70.dp.toPx(), 90.dp.toPx(), 260.dp.toPx(), 240.dp.toPx())
+                                val radius = 34.dp.toPx()
+                                val shape = LiquidMenuContour(Rect(Offset.Zero, menu.size),
+                                    Offset(radius, radius), null, Offset.Zero, smoothing.floatValue)
+                                val sampled = requireNotNull(shape.sampledField())
+                                field.update(sampled, menu.topLeft)
+                                renderer.draw(
+                                    scope = this, coordinates = coordinates, viewport = Rect(Offset.Zero, size),
+                                    origin = Offset.Zero, bounds = menu, radius = radius, shape = shape,
+                                    tint = Color.White, highlightAlpha = 1f, navigationMaterial = true,
+                                    lensBounds = menu, lensSmoothing = smoothing.floatValue,
+                                    menuField = field.takeIf { gaussian.value },
+                                    refractionHeight = 0.dp, refractionAmount = 0.dp,
+                                    dropShadowAlpha = 0f,
+                                )
+                            })
+                        },
+                    )
+                }
+            }
+        }
+        val scene = compose.onNodeWithTag("menu-field-exterior")
+        for ((scale, sigma) in listOf(.5f, 1f).flatMap { scale ->
+            listOf(.6f, 1f, 2f, 4f, 8f).map { sigma -> scale to sigma }
+        }) {
+            compose.runOnIdle {
+                renderScale.floatValue = scale; smoothing.floatValue = sigma; gaussian.value = true
+            }
+            compose.waitForIdle()
+            val actual = scene.captureToImage().toPixelMap()
+            compose.runOnIdle { gaussian.value = false }
+            compose.waitForIdle()
+            val reference = scene.captureToImage().toPixelMap()
+            // Compare the same native material and geometry. Only its bounded Gaussian
+            // texture is disabled in the reference; the unbounded analytic field is exact
+            // along these straight exterior edges. Keep real shadows out of this key test.
+            val strips = listOf(
+                Rect(menu.left - 42f, menu.center.y - 30f, menu.left - 8f, menu.center.y + 30f),
+                Rect(menu.center.x - 30f, menu.top - 42f, menu.center.x + 30f, menu.top - 8f),
+                Rect(menu.right + 8f, menu.center.y - 30f, menu.right + 42f, menu.center.y + 30f),
+                Rect(menu.center.x - 30f, menu.bottom + 8f, menu.center.x + 30f, menu.bottom + 42f),
+            )
+            strips.forEachIndexed { edge, strip ->
+                var maximumError = 0f
+                for (y in strip.top.toInt() until strip.bottom.toInt()) {
+                    for (x in strip.left.toInt() until strip.right.toInt()) {
+                        val a = actual[x, y]
+                        val b = reference[x, y]
+                        maximumError = maxOf(maximumError, abs(a.red - b.red),
+                            abs(a.green - b.green), abs(a.blue - b.blue))
+                    }
+                }
+                assertTrue("A Gaussian menu must not extend its key fill into an exterior rectangle: " +
+                    "scale=$scale, sigma=$sigma, edge=$edge, error=$maximumError", maximumError <= 2f / 255f)
+            }
+        }
+    }
+
+    @Test
     fun plainMenuClosingOpacityPreservesShadowBeyondEveryLogicalEdge() {
         val motion = LiquidMenuMorphMotion()
         val glassSourceReference = mutableStateOf(false)
@@ -1644,11 +3474,12 @@ class NavigationRenderingTest {
                 maximumError = maxOf(maximumError, error)
             }
             val pixels = (right - left) * (bottom - top)
-            assertTrue("The native reference must contain a visible $edge shadow outside the logical menu",
+            assertTrue("The native reference must contain a visible $edge shadow outside the logical menu: ${referenceShade / pixels}",
                 referenceShade / pixels > 2.0 / 255.0)
-            assertTrue("Plain material opacity must retain the $edge shadow outside its menu-sized RenderNode",
+            assertTrue("Plain material opacity must retain the $edge shadow outside its menu-sized RenderNode: ${actualShade / pixels}",
                 actualShade / pixels > 2.0 / 255.0)
-            assertTrue("The $edge shadow must match native post-blur opacity: max=$maximumError, mean=${totalError / pixels}",
+            assertTrue("The $edge shadow must match native post-blur opacity: max=$maximumError, " +
+                "mean=${totalError / pixels}, observed=${actualShade / pixels}, expected=${referenceShade / pixels}",
                 maximumError <= 3f / 255f && totalError / pixels <= 1.5 / 255.0)
         }
     }

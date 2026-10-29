@@ -70,17 +70,17 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.compose.ui.util.lerp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
-import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.highlight.HighlightStyle
-import com.kyant.backdrop.shadow.InnerShadow
-import com.kyant.backdrop.shadow.Shadow
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.drawBackdrop
+import io.github.neoruaa.glasmio.glass.render.effects.blur
+import io.github.neoruaa.glasmio.glass.render.effects.lens
+import io.github.neoruaa.glasmio.glass.render.effects.vibrancy
+import io.github.neoruaa.glasmio.glass.render.highlight.Highlight
+import io.github.neoruaa.glasmio.glass.render.highlight.HighlightStyle
+import io.github.neoruaa.glasmio.glass.render.shadow.InnerShadow
+import io.github.neoruaa.glasmio.glass.render.shadow.Shadow
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -192,6 +192,7 @@ fun GlasmioIconButton(
     sampleBackdrop: Boolean = true,
     morphProgress: androidx.compose.runtime.State<Float>? = null,
     morphCaptureWidth: Dp? = null,
+    nativeNavigationFlex: Boolean = false,
     groupSurfaceSeparation: (() -> Float)? = LocalToolbarActionSeparation.current,
     onLongClick: (() -> Unit)? = null,
     detailAction: Boolean = false,
@@ -213,6 +214,7 @@ fun GlasmioIconButton(
             sampleBackdrop = sampleBackdrop,
             morphProgress = morphProgress,
             morphCaptureWidth = morphCaptureWidth,
+            nativeNavigationFlex = nativeNavigationFlex,
             groupSurfaceSeparation = groupSurfaceSeparation,
             onClick = onClick,
             onLongClick = onLongClick,

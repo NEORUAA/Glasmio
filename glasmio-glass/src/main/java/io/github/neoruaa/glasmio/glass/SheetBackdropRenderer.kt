@@ -20,7 +20,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
-import com.kyant.backdrop.Backdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
 import kotlin.math.ceil
 
 @Composable
@@ -40,6 +40,8 @@ class SheetBackdropRenderer(
     private val layer: GraphicsLayer,
 ) : Backdrop {
     override val isCoordinatesDependent: Boolean get() = true
+
+    override fun observeSourceChanges(observer: () -> Unit): () -> Unit = backdrop.observeSourceChanges(observer)
 
     private val renderScale = 0.25f
 

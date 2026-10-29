@@ -89,16 +89,24 @@ internal class NavigationContactField {
     }
 
     fun grid(contour: NavigationContactContour, band: Float): Grid {
+        val bounds = contour.bounds
+        // Every interior point is within half the contour's shorter bounding dimension
+        // of an edge. Unvisited cells beyond this reach are therefore exterior, including
+        // the empty space between disconnected controls.
+        val effectiveBand = maxOf(band, bounds.size.minDimension * .5f)
         buffers.firstOrNull {
-            it.band >= band && (it.contour === contour || it.contour?.let { cached ->
+            it.band >= effectiveBand && (it.contour === contour || it.contour?.let { cached ->
                 cached.fingerprint == contour.fingerprint && cached.edges.contentEquals(contour.edges)
             } == true)
         }?.let { return it }
-        val bounds = contour.bounds
         val step = 2f
-        val origin = Offset(floor(bounds.left / step) * step - step, floor(bounds.top / step) * step - step)
-        val width = ceil((bounds.right - origin.x) / step).toInt() + 2
-        val height = ceil((bounds.bottom - origin.y) / step).toInt() + 2
+        // The field now supplies visible exterior coverage/shadows, rather than only
+        // clipped inner optics. Allocate the requested support instead of clamping a
+        // near-boundary texel over the whole material's exterior rectangle.
+        val origin = Offset(floor((bounds.left - effectiveBand) / step) * step - step,
+            floor((bounds.top - effectiveBand) / step) * step - step)
+        val width = ceil((bounds.right + effectiveBand - origin.x) / step).toInt() + 2
+        val height = ceil((bounds.bottom + effectiveBand - origin.y) / step).toInt() + 2
         // Rotate bounded buckets. Do not recycle bitmaps still referenced by display lists.
         val reusable = buffers.takeIf { it.size == 3 }?.firstOrNull {
             it.width >= width && it.height >= height && it.width * it.height <= width * height * 2
@@ -108,7 +116,7 @@ internal class NavigationContactField {
         else if (buffers.size == 3) buffers.removeAt(0)
         buffers.add(result)
         result.origin = origin
-        result.band = band
+        result.band = effectiveBand
         result.contour = contour
         build(contour.edges, result)
         result.generation++
@@ -119,7 +127,10 @@ internal class NavigationContactField {
     /** Reject impossible candidates early and resolve each cell's normal only once. */
     private fun build(edges: FloatArray, grid: Grid) {
         if (LiquidMenuNativeField.buildContact(edges, grid.origin.x, grid.origin.y, grid.step,
-                grid.width, grid.height, grid.band, grid.rgba)) return
+                grid.width, grid.height, grid.band, grid.rgba)) {
+            finishExteriorCells(grid)
+            return
+        }
         val width = grid.width
         val height = grid.height
         val step = grid.step
@@ -196,6 +207,18 @@ internal class NavigationContactField {
                 rgba[output + 2] /= distance
             }
             rgba[output + 3] = 1f
+        }
+        finishExteriorCells(grid)
+    }
+
+    private fun finishExteriorCells(grid: Grid) {
+        val rgba = grid.rgba
+        for (output in rgba.indices step 4) {
+            // The bounded edge raster leaves both normal channels zero only when no
+            // segment came within its reach. Its old negative sentinel was safe solely
+            // behind a shape clip; it must never become visible opaque glass in a gap.
+            if (rgba[output] < 0f && rgba[output + 1] == 0f && rgba[output + 2] == 0f)
+                rgba[output] = -rgba[output]
         }
     }
 

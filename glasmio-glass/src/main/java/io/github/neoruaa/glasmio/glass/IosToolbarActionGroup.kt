@@ -2,7 +2,11 @@ package io.github.neoruaa.glasmio.glass
 
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
+import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 
+import android.graphics.RenderEffect
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.Arrangement
@@ -104,6 +108,8 @@ class GlasmioMenuAnchorState constructor() {
     private var standaloneMaterial: NavigationGlassMaterial? = null
     private var standaloneFrostRadius: Dp? = null
     private var standaloneMaterialPaint: (DrawScope.(Float) -> Unit)? = null
+    private var standaloneMaterialEffect: ((Float) -> RenderEffect)? = null
+    private var standaloneNativeMaterial: GlassMaterialSource? = null
     private var standaloneUsesShadowLift = true
     private var standaloneUsesInnerShadows = true
     @Volatile
@@ -130,6 +136,12 @@ class GlasmioMenuAnchorState constructor() {
         private set
     /** Paint the source's ordered fill stack directly over the retained backdrop. */
     var sourceMaterialPaint by mutableStateOf<(DrawScope.(Float) -> Unit)?>(null)
+        private set
+    /** Apply the same sampled-pixel recipe when a retained source runs on older HWUI. */
+    var sourceMaterialEffect by mutableStateOf<((Float) -> RenderEffect)?>(null)
+        private set
+    /** A known native recipe is transferred explicitly, independently of custom callbacks. */
+    var sourceNativeMaterial by mutableStateOf<GlassMaterialSource?>(null)
         private set
     var sourceUsesShadowLift by mutableStateOf(true)
         private set
@@ -164,16 +176,22 @@ class GlasmioMenuAnchorState constructor() {
     internal fun bindStandaloneForeground(
         layer: GraphicsLayer,
         size: Size,
+        density: Float,
         material: NavigationGlassMaterial?,
         frostRadius: Dp?,
         materialPaint: DrawScope.(Float) -> Unit,
         usesShadowLift: Boolean,
         usesInnerShadows: Boolean,
+        materialEffect: ((Float) -> RenderEffect)? = null,
+        sourceNativeMaterial: GlassMaterialSource? = null,
     ) {
         if (!isStandaloneAnchor || size.isEmpty()) return
         standaloneMaterial = material
         standaloneFrostRadius = frostRadius
         standaloneMaterialPaint = materialPaint
+        standaloneMaterialEffect = materialEffect
+        val nativeMaterial = sourceNativeMaterial?.forSize(size.minDimension / density)
+        standaloneNativeMaterial = nativeMaterial
         standaloneUsesShadowLift = usesShadowLift
         standaloneUsesInnerShadows = usesInnerShadows
         val retained = standalonePortal
@@ -186,6 +204,8 @@ class GlasmioMenuAnchorState constructor() {
             sourceMaterial = material
             sourceFrostRadius = frostRadius
             sourceMaterialPaint = materialPaint
+            sourceMaterialEffect = materialEffect
+            this.sourceNativeMaterial = nativeMaterial
             sourceUsesShadowLift = usesShadowLift
             sourceUsesInnerShadows = usesInnerShadows
         }
@@ -203,6 +223,8 @@ class GlasmioMenuAnchorState constructor() {
             sourceMaterial = standaloneMaterial.takeIf { sourceHasGlassBackground }
             sourceFrostRadius = standaloneFrostRadius.takeIf { sourceHasGlassBackground }
             sourceMaterialPaint = standaloneMaterialPaint.takeIf { sourceHasGlassBackground }
+            sourceMaterialEffect = standaloneMaterialEffect.takeIf { sourceHasGlassBackground }
+            sourceNativeMaterial = standaloneNativeMaterial.takeIf { sourceHasGlassBackground }
             sourceUsesShadowLift = standaloneUsesShadowLift
             sourceUsesInnerShadows = standaloneUsesInnerShadows
         }
@@ -214,6 +236,9 @@ class GlasmioMenuAnchorState constructor() {
             standaloneMaterial = null
             standaloneFrostRadius = null
             standaloneMaterialPaint = null
+            standaloneMaterialEffect = null
+            standaloneNativeMaterial = null
+            if (isAcquired && acquiredGroup == null) sourceNativeMaterial = null
             standaloneUsesShadowLift = true
             standaloneUsesInnerShadows = true
         }
@@ -244,6 +269,18 @@ class GlasmioMenuAnchorState constructor() {
         val groupedNavigationMaterial = acquiredGroup?.let { group ->
             run.first().material.let { it.color == null && it.sampleBackdrop && group.appearance.usesBackdrop }
         }
+        sourceMaterialEffect = if (groupedNavigationMaterial == true) {
+            val sourceMaterial = run.first().material
+            val sourceGroup = requireNotNull(acquiredGroup)
+            sourceGroup.materialEffect?.let { effect ->
+                { alpha: Float -> requireNotNull(effect(sourceMaterial, alpha)) }
+            }
+        } else standaloneMaterialEffect.takeIf { acquiredGroup == null && standalonePortal != null }
+        sourceNativeMaterial = if (groupedNavigationMaterial == true) {
+            acquiredGroup?.let { group ->
+                group.nativeMaterialSource?.forSize(group.bounds(run).size.minDimension / group.density.density)
+            }
+        } else standaloneNativeMaterial.takeIf { acquiredGroup == null && standalonePortal != null }
         sourceUsesShadowLift = groupedNavigationMaterial ?: standaloneUsesShadowLift
         sourceUsesInnerShadows = groupedNavigationMaterial?.let {
             it && acquiredGroup?.appearance?.reduceTransparency != true
@@ -263,6 +300,8 @@ class GlasmioMenuAnchorState constructor() {
         sourceMaterial = null
         sourceFrostRadius = null
         sourceMaterialPaint = null
+        sourceMaterialEffect = null
+        sourceNativeMaterial = null
         sourceUsesShadowLift = true
         sourceUsesInnerShadows = true
         acquiredBounds = null
@@ -315,6 +354,8 @@ internal fun rememberMenuAnchorForeground(
     materialPaint: DrawScope.(Float) -> Unit,
     usesShadowLift: Boolean,
     usesInnerShadows: Boolean,
+    materialEffect: ((Float) -> RenderEffect)? = null,
+    sourceNativeMaterial: GlassMaterialSource? = null,
 ): Modifier {
     var anchor by remember { mutableStateOf<GlasmioMenuAnchorState?>(null) }
     val foreground = if (anchor?.isStandaloneAnchor == true) rememberGraphicsLayer() else null
@@ -329,7 +370,8 @@ internal fun rememberMenuAnchorForeground(
         .then(if (foreground != null) Modifier.drawWithContent {
             foreground.record { this@drawWithContent.drawContent() }
             anchor?.bindStandaloneForeground(
-                foreground, size, material, frostRadius, materialPaint, usesShadowLift, usesInnerShadows,
+                foreground, size, density, material, frostRadius, materialPaint, usesShadowLift, usesInnerShadows, materialEffect,
+                sourceNativeMaterial,
             )
             drawLayer(foreground)
         } else Modifier)
@@ -358,12 +400,16 @@ fun GlasmioToolbarActionHost(
     presentationTransform: (() -> ToolbarActionTransform)? = null,
     content: @Composable () -> Unit,
 ) {
+    val appearance = LocalGlassAppearance.current
     val styleProgress by animateFloatAsState(
         targetValue = if (style == GlasmioToolbarActionStyle.Separated) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.86f, stiffness = 380f),
+        // UIKit's .toolbar transaction override: Spring(duration: .416, bounce: .25).
+        animationSpec = spring(dampingRatio = .75f, stiffness = 228.125102f),
+        visibilityThreshold = .0005f,
         label = "ToolbarActionSeparation",
     )
-    val progress = rememberUpdatedState((separationProgress ?: styleProgress).coerceIn(0f, 1f))
+    // Keep the spring's velocity and small geometric overshoot on interrupted retargets.
+    val progress = rememberUpdatedState(separationProgress?.coerceIn(0f, 1f) ?: styleProgress)
     val density = LocalDensity.current
     val foregroundLayer = rememberGraphicsLayer()
     val group = remember(density, foregroundLayer) {
@@ -371,16 +417,41 @@ fun GlasmioToolbarActionHost(
     }
     group.presentationBounds = presentationBounds
     group.presentationTransform = presentationTransform
-    val colors = LocalGlassColors.current
-    val appearance = LocalGlassAppearance.current
+    val materialContext = rememberGlassMaterialContext()
+    val colors = materialContext.environmentColors
     group.appearance = appearance
-    group.materialPaint = remember(colors, appearance) {
+    val backdrop = LocalGlassBackdrop.current
+    val runs = group.sharedRuns()
+    val luminance = materialContext.probe
+    val materialDark = materialContext.isDark
+    val darkFraction = materialContext.darkFraction
+    val sampleMaster = materialContext.luminanceState != null && runs.isNotEmpty()
+    val probeModifier = remember(backdrop, luminance, sampleMaster, group) {
+        if (sampleMaster) Modifier.sampleBackdropLuminance(
+            backdrop = backdrop, luminanceState = luminance,
+            sampleBounds = { group.luminanceBounds() },
+        ) else Modifier
+    }
+    val materialRenderer = remember(group) { NavigationMaterialRenderer() }
+    val materialRecipe = remember(darkFraction) { NavigationMaterialRecipe.resolve(darkFraction, null) }
+    group.nativeMaterialSource = remember(materialRecipe, appearance.reduceTransparency) {
+        if (appearance.reduceTransparency) null else GlassMaterialSource(materialRecipe)
+    }
+    group.materialEffect = remember(materialRenderer, materialRecipe, appearance) {
+        { material, alpha ->
+            if (material.color == null && material.sampleBackdrop && appearance.usesBackdrop) materialRenderer.effect(materialRecipe, alpha)
+            else null
+        }
+    }
+    group.materialPaint = remember(colors, appearance, materialDark, materialRecipe) {
         { material, alpha ->
             val containerColor = material.color ?: colors.container
             when {
                 appearance.reduceTransparency -> drawRect(containerColor.copy(alpha = 1f), alpha = alpha)
-                material.color == null && material.sampleBackdrop && appearance.usesBackdrop ->
-                    drawNavigationGlassMaterial(containerColor, colors.isDark, material.alphaMultiplier, alpha = alpha)
+                material.color == null && material.sampleBackdrop && appearance.usesBackdrop -> {
+                    if (!materialRenderer.draw(this, materialRecipe, alpha))
+                        drawNavigationGlassMaterial(containerColor, materialDark, material.alphaMultiplier, alpha = alpha)
+                }
                 else -> drawRect(
                     containerColor.copy(alpha = containerColor.alpha * material.alphaMultiplier.coerceAtLeast(0f)),
                     alpha = alpha,
@@ -388,9 +459,7 @@ fun GlasmioToolbarActionHost(
             }
         }
     }
-    val backdrop = LocalGlassBackdrop.current
-    val runs = group.sharedRuns()
-    Box(modifier.onGloballyPositioned(group::updateCoordinates)) {
+    Box(modifier.onGloballyPositioned(group::updateCoordinates).then(probeModifier)) {
         runs.forEach { run -> key(if (presentationBounds != null && progress.value == 0f) group else run.first() to run.last()) {
             val material = run.first().material
             val navigationMaterial = material.color == null && material.sampleBackdrop && appearance.usesBackdrop
@@ -402,19 +471,21 @@ fun GlasmioToolbarActionHost(
             val press = remember(group, run) {
                 derivedStateOf { run.maxOfOrNull { it.highlight.pressProgress } ?: 0f }
             }
-            val background = remember(backdrop, shape, colors, appearance, innerShadows, material, run) {
-                Modifier.navigationGlassBackground(
+            val background = remember(backdrop, shape, colors, appearance, innerShadows, material, run, materialDark, darkFraction) {
+                Modifier.navigationGlassBackgroundResolved(
                     backdrop = backdrop,
                     shape = shape,
                     containerColor = material.color ?: colors.container,
                     navigationMaterial = navigationMaterial,
                     innerShadows = innerShadows,
-                    isDark = colors.isDark,
+                    isDark = materialDark,
+                    darkFraction = darkFraction,
                     containerAlphaMultiplier = material.alphaMultiplier,
                     materialTint = material.color,
                     sampleBackdrop = material.sampleBackdrop,
                     pressProgressState = press,
                     pressOverlay = { group.drawPressHighlight(this, run) },
+                    sampledPressHighlight = { group.sampledPressHighlight(run) },
                     layerBlock = {
                         group.applyTransform(this, group.bounds(run), group.pressTransform(run.first()))
                         alpha = if (group.isMenuSourceHidden(run)) 0f else 1f
@@ -435,23 +506,25 @@ fun GlasmioToolbarActionHost(
                 }
             }.then(background))
         } }
-        CompositionLocalProvider(LocalIosToolbarActionGroup provides group) {
-            Box(
-                modifier = Modifier.drawWithContent {
-                    if (size.width <= 0f || size.height <= 0f) {
-                        drawContent()
-                        return@drawWithContent
-                    }
-                    // Child layers retain their opacity for the outgoing portal. Suppress
-                    // the original glyphs only in this final draw, after recording them.
-                    foregroundLayer.record { this@drawWithContent.drawContent() }
-                    group.markForegroundRecorded()
-                    val hidden = group.foregroundOcclusionPath()
-                    if (hidden == null) drawLayer(foregroundLayer)
-                    else clipPath(hidden, clipOp = ClipOp.Difference) { drawLayer(foregroundLayer) }
-                },
-                content = { content() },
-            )
+        ProvideGlassMaterialContext(materialContext) {
+            CompositionLocalProvider(LocalIosToolbarActionGroup provides group) {
+                Box(
+                    modifier = Modifier.drawWithContent {
+                        if (size.width <= 0f || size.height <= 0f) {
+                            drawContent()
+                            return@drawWithContent
+                        }
+                        // Child layers retain their opacity for the outgoing portal. Suppress
+                        // the original glyphs only in this final draw, after recording them.
+                        foregroundLayer.record { this@drawWithContent.drawContent() }
+                        group.markForegroundRecorded()
+                        val hidden = group.foregroundOcclusionPath()
+                        if (hidden == null) drawLayer(foregroundLayer)
+                        else clipPath(hidden, clipOp = ClipOp.Difference) { drawLayer(foregroundLayer) }
+                    },
+                    content = { content() },
+                )
+            }
         }
     }
 }
@@ -569,9 +642,12 @@ class ToolbarActionGroup(
         presentationTransform?.invoke() ?: ToolbarActionTransform()
     }
     internal var materialPaint: (DrawScope.(ToolbarActionMaterial, Float) -> Unit)? = null
+    internal var materialEffect: ((ToolbarActionMaterial, Float) -> RenderEffect?)? = null
+    internal var nativeMaterialSource: GlassMaterialSource? = null
     internal var appearance = GlassAppearance()
     private val pressScope = GraphicsLayerBlockScope()
     private val pressRenderer = PressHighlightRenderer()
+    private val refractionField = NavigationContactField()
 
     val members = mutableStateListOf<ToolbarActionMember>()
     var coordinates: LayoutCoordinates? = null
@@ -623,9 +699,16 @@ class ToolbarActionGroup(
         return result
     }
 
-    private fun connection(left: ToolbarActionMember, right: ToolbarActionMember): Float =
-        1f - neckProgress(maxOf(separationProgress.value, left.separation.value?.invoke() ?: 0f,
-            right.separation.value?.invoke() ?: 0f))
+    private fun connection(left: ToolbarActionMember, right: ToolbarActionMember): Float {
+        val leftSeparation = left.separation.value?.invoke() ?: 0f
+        val rightSeparation = right.separation.value?.invoke() ?: 0f
+        if (leftSeparation == 0f && rightSeparation == 0f) {
+            // The shared CASDF field can contain several disconnected skins. Retain its
+            // owner throughout the spring, then restore independent controls at rest.
+            return if (separationProgress.value == 1f) 0f else 1f
+        }
+        return 1f - neckProgress(maxOf(separationProgress.value, leftSeparation, rightSeparation))
+    }
 
     private fun neckProgress(progress: Float) = (progress / ToolbarDetachProgress).coerceIn(0f, 1f)
 
@@ -704,6 +787,18 @@ class ToolbarActionGroup(
         return Rect(transform.map(bounds.topLeft), transform.map(bounds.bottomRight))
     }
 
+    internal fun luminanceBounds(): Rect {
+        var result: Rect? = null
+        sharedRuns().forEach { run ->
+            val bounds = visualBoundsInGroup(run)
+            if (!bounds.isEmpty) result = result?.let {
+                Rect(minOf(it.left, bounds.left), minOf(it.top, bounds.top),
+                    maxOf(it.right, bounds.right), maxOf(it.bottom, bounds.bottom))
+            } ?: bounds
+        }
+        return result ?: Rect.Zero
+    }
+
     fun hideMenuSource(owner: GlasmioMenuAnchorState, run: List<ToolbarActionMember>) {
         menuSources = menuSources + (owner to run)
     }
@@ -717,7 +812,7 @@ class ToolbarActionGroup(
 
     private fun transform(bounds: Rect, highlight: InteractiveHighlight): ToolbarActionTransform {
         pressScope.reset(density, bounds.size)
-        pressScope.applyGlassDragScale(highlight.pressProgress, highlight.offset)
+        pressScope.applyGlassDragScale(highlight.pressProgress, highlight.offset, nativeButtonLift = true)
         return ToolbarActionTransform(
             pressScope.scaleX, pressScope.scaleY,
             bounds.center.x * (1f - pressScope.scaleX) + pressScope.translationX,
@@ -728,25 +823,9 @@ class ToolbarActionGroup(
     fun pressTransform(member: ToolbarActionMember): ToolbarActionTransform {
         val base = member.bounds ?: return ToolbarActionTransform()
         val run = connectedRun(member)
-        val active = run.maxBy { it.highlight.pressProgress }
-        val pressed = transform(if (run.size > 1 || hasPresentationBounds) bounds(run) else base, active.highlight)
+        val active = run.maxBy { it.highlight.glowProgress }
+        return transform(if (run.size > 1 || hasPresentationBounds) bounds(run) else base, active.highlight)
             .followedBy(resolvedPresentationTransform.value)
-        val family = runs().firstOrNull { member in it } ?: return pressed
-        if (family.size < 2) return pressed
-        val progress = maxOf(separationProgress.value,
-            family.maxOf { it.separation.value?.invoke() ?: 0f }).coerceIn(0f, 1f)
-        // A small outward stretch gives the neck a visible pull. It continues to recoil
-        // after the connection breaks, returning every icon to its original final slot.
-        val wave = sin(PI * progress).toFloat()
-        val tension = wave * wave
-        val bounds = bounds(family)
-        val stretchX = 1f + with(density) { 12.dp.toPx() } / bounds.width.coerceAtLeast(1f) * tension
-        val stretchY = 1f - 0.035f * tension
-        return pressed.followedBy(ToolbarActionTransform(
-            stretchX, stretchY,
-            bounds.center.x * (1f - stretchX),
-            bounds.center.y * (1f - stretchY),
-        ))
     }
 
     fun applyTransform(scope: GraphicsLayerScope, bounds: Rect, transform: ToolbarActionTransform) {
@@ -778,12 +857,27 @@ class ToolbarActionGroup(
 
     fun sharedRuns(): List<List<ToolbarActionMember>> = sharedRunsState.value
 
+    internal fun sampledPressHighlight(run: List<ToolbarActionMember>): SampledPressHighlight? {
+        val active = run.maxByOrNull { it.highlight.glowProgress } ?: return null
+        val base = active.bounds ?: return null
+        val position = active.highlight.highlightPosition(base.size)
+        return SampledPressHighlight(GlassPressHighlight(active.highlight.pressProgress,
+            Offset(position.x / base.width.coerceAtLeast(1f), position.y / base.height.coerceAtLeast(1f)),
+            active.highlight.glowProgress, active.highlight.dissipationProgress),
+            base.translate(-bounds(run).topLeft))
+    }
+
     fun drawPressHighlight(scope: DrawScope, run: List<ToolbarActionMember>) = with(scope) {
-        val active = run.maxBy { it.highlight.pressProgress }
+        val active = run.maxBy { it.highlight.glowProgress }
         val base = active.bounds ?: return@with
         val position = base.topLeft - bounds(run).topLeft + active.highlight.highlightPosition(base.size)
         // navigationGlassBackground already clips this pass to the full run outline.
-        pressRenderer.draw(this, active.highlight.pressProgress, position)
+        pressRenderer.draw(this, active.highlight.glowProgress, position,
+            sourceBounds = base.translate(-bounds(run).topLeft),
+            isDark = active.highlight.materialIsDark,
+            tint = active.highlight.materialTint,
+            clear = active.highlight.materialClear,
+            dissipationProgress = active.highlight.dissipationProgress)
     }
 
     fun shape(run: List<ToolbarActionMember>, separation: Float): Shape {
@@ -791,16 +885,19 @@ class ToolbarActionGroup(
             return if (run.size == 1) CircleShape else ToolbarContinuousShape
         }
         val origin = bounds(run).topLeft
+        val individualSeparation = run.any { (it.separation.value?.invoke() ?: 0f) != 0f }
         return ToolbarActionShape(listOf(run.map { member ->
             member.bounds?.let { bounds ->
                 ToolbarActionOutline(bounds.translate(-origin),
                     neckProgress(member.separation.value?.invoke() ?: 0f))
             }
-        }), neckProgress(separation))
+        }), if (individualSeparation) neckProgress(separation) else separation,
+            opticalField = refractionField,
+            nativeSmoothness = if (individualSeparation) 0f else with(density) { 12.dp.toPx() })
     }
 }
 
-private data class ToolbarActionOutline(val bounds: Rect, val separation: Float)
+internal data class ToolbarActionOutline(val bounds: Rect, val separation: Float)
 
 private val ToolbarContinuousShape = ContinuousRoundedRectangle(50)
 
@@ -842,6 +939,16 @@ data class LiquidContactShape(
         NavigationContactContour(baseGeometry.value.path.asAndroidPath().approximate(0.25f))
     }
     private var opticalField: NavigationContactField? = null
+    internal var nativeUnion: NavigationNativeUnion? = null
+        private set
+    internal fun withNativeUnion(value: NavigationNativeUnion): LiquidContactShape = apply {
+        nativeUnion = value
+        baseGeometry = lazy(LazyThreadSafetyMode.NONE) { ContactGeometry(value.path, true) }
+        opticalContour = lazy(LazyThreadSafetyMode.NONE) {
+            NavigationContactContour(baseGeometry.value.path.asAndroidPath().approximate(.125f))
+        }
+        cachedOutline = null
+    }
     internal var refractionBand: Float = 0f
         private set
     internal fun refractionContour(): NavigationContactContour = opticalContour.value
@@ -851,7 +958,7 @@ data class LiquidContactShape(
         refractionBand = band
     }
     private var cachedOutline: Outline? = null
-    val isConnected: Boolean get() = !(second.bounds.left - first.bounds.right >= contactDistance ||
+    val isConnected: Boolean get() = nativeUnion?.isConnected ?: !(second.bounds.left - first.bounds.right >= contactDistance ||
         min(first.bounds.bottom, second.bounds.bottom) <= maxOf(first.bounds.top, second.bounds.top))
     var hasConsistentWinding: Boolean = false
         private set
@@ -863,6 +970,7 @@ data class LiquidContactShape(
                 it.opticalContour = opticalContour
                 it.opticalField = opticalField
                 it.refractionBand = refractionBand
+                it.nativeUnion = nativeUnion
             }
 
     fun withOutlineTransform(scale: Offset, translation: Offset): LiquidContactShape =
@@ -871,6 +979,7 @@ data class LiquidContactShape(
             it.opticalContour = opticalContour
             it.opticalField = opticalField
             it.refractionBand = refractionBand
+            it.nativeUnion = nativeUnion
         }
 
     override fun createOutline(
@@ -1245,15 +1354,44 @@ private fun contactSpline(start: CurveJet, end: CurveJet, startSpeed: Double, en
 }
 
 /** Library G2 capsule segments connected by a curvature-matched cubic B-spline. */
-private data class ToolbarActionShape(
+internal data class ToolbarActionShape(
     val runs: List<List<ToolbarActionOutline?>>,
     val separation: Float,
     private val lensTopStart: CornerSize = CornerSize(50),
     private val lensTopEnd: CornerSize = CornerSize(50),
     private val lensBottomEnd: CornerSize = CornerSize(50),
     private val lensBottomStart: CornerSize = CornerSize(50),
+    private val opticalField: NavigationContactField = NavigationContactField(),
+    private val nativeSmoothness: Float = 0f,
 ) : CornerBasedShape(lensTopStart, lensTopEnd, lensBottomEnd, lensBottomStart) {
-    private var cachedOutline: Outline? = null
+    private var cachedOutline: Outline.Generic? = null
+    private val opticalContour by lazy(LazyThreadSafetyMode.NONE) {
+        NavigationContactContour(outline().path.asAndroidPath().approximate(.25f))
+    }
+
+    internal fun refractionContour(): NavigationContactContour = opticalContour
+    internal fun refractionField(): NavigationContactField = opticalField
+    internal val nativeUnion: NavigationNativeUnion? by lazy(LazyThreadSafetyMode.NONE) {
+        if (nativeSmoothness <= 0f || runs.size != 1 || runs.single().any { it == null }) null
+        else {
+            val actions = runs.single().filterNotNull()
+            val merged = Rect(actions.minOf { it.bounds.left }, actions.minOf { it.bounds.top },
+                actions.maxOf { it.bounds.right }, actions.maxOf { it.bounds.bottom })
+            // Android keeps action hit slots stable. Animate each backing rectangle
+            // from the shared platter to its own slot; UIKit owns the spring and union.
+            val capsules = actions.map { action ->
+                val target = action.bounds
+                val rect = Rect(
+                    merged.left + (target.left - merged.left) * separation,
+                    merged.top + (target.top - merged.top) * separation,
+                    merged.right + (target.right - merged.right) * separation,
+                    merged.bottom + (target.bottom - merged.bottom) * separation,
+                )
+                LiquidContactCapsule(rect.size, rect)
+            }
+            NavigationNativeUnion.create(capsules, nativeSmoothness)
+        }
+    }
 
     // Backdrop's lens requires corner metadata even when the clipping outline is a path.
     // Retain its capsule refraction while the precise liquid outline clips all passes.
@@ -1262,7 +1400,8 @@ private data class ToolbarActionShape(
         topEnd: CornerSize,
         bottomEnd: CornerSize,
         bottomStart: CornerSize,
-    ): CornerBasedShape = ToolbarActionShape(runs, separation, topStart, topEnd, bottomEnd, bottomStart)
+    ): CornerBasedShape = ToolbarActionShape(runs, separation, topStart, topEnd, bottomEnd, bottomStart,
+        opticalField, nativeSmoothness)
 
     override fun createOutline(
         size: Size,
@@ -1271,10 +1410,13 @@ private data class ToolbarActionShape(
         bottomEnd: Float,
         bottomStart: Float,
         layoutDirection: LayoutDirection,
-    ): Outline {
+    ): Outline = outline()
+
+    private fun outline(): Outline.Generic {
         // Geometry is immutable and already expressed in local pixels. The shadow,
         // backdrop clip and highlights can therefore reuse the same exact path.
         cachedOutline?.let { return it }
+        nativeUnion?.let { return Outline.Generic(it.path).also { cachedOutline = it } }
         val path = Path()
         runs.forEach { run ->
             val connected = mutableListOf<ToolbarActionOutline>()

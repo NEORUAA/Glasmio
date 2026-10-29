@@ -4,17 +4,16 @@ import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
 
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RenderEffect
 import android.graphics.RenderNode
+import android.graphics.RuntimeShader
 import android.graphics.Shader
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode as ComposeBlendMode
-import androidx.compose.ui.graphics.Canvas as ComposeCanvas
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Outline
@@ -22,7 +21,7 @@ import androidx.compose.ui.graphics.Paint as ComposePaint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asAndroidPath
-import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.nativeCanvas
@@ -34,14 +33,37 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
+import kotlin.math.abs
+import io.github.neoruaa.glasmio.glass.render.highlight.NativeGlassEdgeFunctions
+import io.github.neoruaa.glasmio.glass.render.optics.GlassSdfShader
+import io.github.neoruaa.glasmio.glass.render.optics.glassCornerRadii
 
-/** Figma's exterior-only 0/8/15/0 black 2% navigation shadow. */
+internal data class NativeNavigationShadowProfile(val radius: Float, val opacity: Float)
+
+/** Calibration through the captured 50, 150 and 200 pt native surfaces. */
+internal fun navigationNativeShadowProfile(minimumDimension: Float, material: NavigationGlassMaterial?): NativeNavigationShadowProfile {
+    if (material == NavigationGlassMaterial.Clear) return NativeNavigationShadowProfile(0f, 0f)
+    val t = when (material) {
+        NavigationGlassMaterial.RegularSmall -> 0f
+        NavigationGlassMaterial.RegularMedium, NavigationGlassMaterial.RegularLarge -> 1f
+        else -> ((minimumDimension.takeIf { it.isFinite() } ?: 50f) - 64f).div(96f).coerceIn(0f, 1f)
+    }
+    return NativeNavigationShadowProfile(4f + 20f * t, .04f + .56f * t)
+}
+
+/** Exterior-only shadow with a retained GPU mask and native material profile support. */
 class NavigationDropShadowRenderer(
     private val renderScale: Float = 1f,
     private val cacheBlurResult: Boolean = false,
-    private val shadowRadius: Dp = 15.dp,
+    private val shadowRadius: Dp = 4.dp,
     private val shadowOffsetY: Dp = 8.dp,
-    private val shadowAlpha: Float = 0.02f,
+    private val shadowAlpha: Float = 0.04f,
+    private val shadowOffsetX: Dp = 0.dp,
+    private val shadowColor: ComposeColor = ComposeColor.Black,
+    private val shadowBlendMode: ComposeBlendMode = ComposeBlendMode.SrcOver,
+    private val useNativeProfile: Boolean = false,
+    private val nativeMaterial: NavigationGlassMaterial? = null,
+    private val gaussianRadiusIsSigma: Boolean = false,
 ) {
     init {
         require(renderScale.isFinite() && renderScale > 0f)
@@ -51,12 +73,18 @@ class NavigationDropShadowRenderer(
     private var blurResult: RenderNode? = null
     private var blurResultDirty = true
     private var transformNode: RenderNode? = null
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = shadowColor.copy(alpha = 1f).toArgb() }
+    private val compositingPaint = ComposePaint().apply { blendMode = shadowBlendMode }
+    private val nativeShaders = mutableMapOf<String?, RuntimeShader>()
+    private val nativePaint = if (useNativeProfile) Paint(Paint.ANTI_ALIAS_FLAG) else null
     private var outlinePath = android.graphics.Path()
     private var key: GeometryKey? = null
     private var blurDensity = Float.NaN
+    private var activeRadius = Float.NaN
+    private var activeAlpha = shadowAlpha
     private var padding = 0f
     private var verticalOffset = 0f
+    private var horizontalOffset = 0f
     private var maskWidth = 0
     private var maskHeight = 0
     private val maskClipBounds = android.graphics.Rect()
@@ -68,12 +96,22 @@ class NavigationDropShadowRenderer(
         shape: Shape,
         bounds: Rect = Rect(Offset.Zero, scope.size),
         alpha: Float = 1f,
+    ) = draw(scope, shape, bounds, alpha, null)
+
+    internal fun draw(
+        scope: DrawScope,
+        shape: Shape,
+        bounds: Rect,
+        alpha: Float,
+        field: NativeGlassFilterField?,
     ) {
         val canvas = scope.drawContext.canvas.nativeCanvas
         if (!canvas.isHardwareAccelerated || bounds.isEmpty || alpha <= 0f) return
-        prepare(scope, shape, bounds.size)
+        prepare(scope, shape, bounds.size, field)
+        if (activeAlpha <= 0f) return
         val shadow = prepareShadowNode()
-        shadow.alpha = shadowAlpha * alpha.coerceIn(0f, 1f)
+        shadow.setUseCompositingLayer(true, compositingPaint.asFrameworkPaint())
+        shadow.alpha = activeAlpha * alpha.coerceIn(0f, 1f)
         val save = canvas.save()
         try {
             canvas.translate(bounds.left, bounds.top)
@@ -98,8 +136,10 @@ class NavigationDropShadowRenderer(
         val canvas = scope.drawContext.canvas.nativeCanvas
         if (!canvas.isHardwareAccelerated || scope.size.minDimension <= 0f || transform.alpha <= 0f) return
         prepare(scope, shape, scope.size)
+        if (activeAlpha <= 0f) return
         val shadow = prepareShadowNode()
-        shadow.alpha = shadowAlpha
+        shadow.setUseCompositingLayer(true, compositingPaint.asFrameworkPaint())
+        shadow.alpha = activeAlpha
         val node = transformNode ?: RenderNode("Navigation drop shadow transform").also {
             it.setClipToBounds(false)
             transformNode = it
@@ -140,8 +180,9 @@ class NavigationDropShadowRenderer(
         }
     }
 
-    private fun prepare(scope: DrawScope, shape: Shape, size: Size) {
-        val nextKey = GeometryKey(shape, size, scope.layoutDirection, scope.density, scope.fontScale)
+    private fun prepare(scope: DrawScope, shape: Shape, size: Size, fieldOverride: NativeGlassFilterField? = null) {
+        val nextKey = GeometryKey(shape, size, scope.layoutDirection, scope.density, scope.fontScale,
+            fieldOverride?.shaderFunctions)
         if (nextKey == key && mask.hasDisplayList()) return
         val outline = shape.createOutline(size, scope.layoutDirection, scope)
         outlinePath = Path().apply {
@@ -151,15 +192,34 @@ class NavigationDropShadowRenderer(
                 is Outline.Generic -> addPath(outline.path)
             }
         }.asAndroidPath()
-        if (blurDensity != scope.density) {
-            // Figma blur 15 is Gaussian sigma 7.5. Android's public radius maps to
-            // sigma = radius * 0.57735 + 0.5, so invert after reducing mask pixels.
-            val sigma = (shadowRadius.value * 0.5f) * scope.density
+        val profile = if (useNativeProfile) navigationNativeShadowProfile(size.minDimension / scope.density, nativeMaterial) else null
+        val radiusPoints = profile?.radius ?: shadowRadius.value
+        activeAlpha = if (profile != null) profile.opacity * 0.3f else shadowAlpha
+        if (blurDensity != scope.density || activeRadius != radiusPoints) {
+            // SDF profiles retain native inverse-radius packing; ordinary CALayer sigma is opt-in.
+            val sigma = (radiusPoints * if (useNativeProfile || gaussianRadiusIsSigma) 1f else 0.5f).coerceAtLeast(0f) * scope.density
             val radius = ((sigma * renderScale - 0.5f) / 0.57735f).coerceAtLeast(0.001f)
-            mask.setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
-            padding = ceil(3f * sigma)
+            mask.setRenderEffect(if (useNativeProfile) null else RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
             verticalOffset = shadowOffsetY.value * scope.density
+            horizontalOffset = shadowOffsetX.value * scope.density
+            padding = ceil(3f * sigma + maxOf(abs(horizontalOffset), abs(verticalOffset)))
             blurDensity = scope.density
+            activeRadius = radiusPoints
+        }
+        if (nativePaint != null) {
+            val field = fieldOverride ?: (shape as? LiquidContactShape)?.let { navigationContainerGlassField(it, minimumBand = padding) }
+            val shader = nativeShaders.getOrPut(field?.shaderFunctions) {
+                val source = field?.shaderFunctions?.let { it + "\nfloat nativeShadowDistance(float2 p) { return navigationGlassField(p).x; }\n" }
+                    ?: (GlassSdfShader + "\nfloat nativeShadowDistance(float2 p) { return glassDistance(p); }\n")
+                RuntimeShader(source + NativeGlassEdgeFunctions + NativeExteriorShadowMain)
+            }
+            if (field == null) {
+                shader.setFloatUniform("size", size.width, size.height)
+                shader.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, scope.layoutDirection, scope))
+            } else field.configure(shader)
+            shader.setFloatUniform("shadowOffset", horizontalOffset, verticalOffset)
+            shader.setFloatUniform("shadowInvRadius", if (radiusPoints > 0f) 1f / (radiusPoints * scope.density) else 0f)
+            nativePaint.shader = shader
         }
         val requiredWidth = ceil((size.width + padding * 2f) * renderScale).toInt()
         val requiredHeight = ceil((size.height + padding * 2f) * renderScale).toInt()
@@ -175,7 +235,9 @@ class NavigationDropShadowRenderer(
         try {
             recording.scale(renderScale, renderScale)
             recording.translate(padding, padding)
-            recording.drawPath(outlinePath, fill)
+            if (nativePaint != null) {
+                recording.drawRect(-padding, -padding, size.width + padding, size.height + padding, nativePaint)
+            } else recording.drawPath(outlinePath, fill)
         } finally {
             mask.endRecording()
         }
@@ -212,7 +274,11 @@ class NavigationDropShadowRenderer(
             // the source interior before filtering would leak shadow back inside
             // translucent glass; scaling this cut would soften the real outline.
             canvas.clipOutPath(outlinePath)
-            canvas.translate(-padding, verticalOffset - padding)
+            // The native SDF already includes the physical offset in shadowOffset.
+            canvas.translate(
+                (if (useNativeProfile) 0f else horizontalOffset) - padding,
+                (if (useNativeProfile) 0f else verticalOffset) - padding,
+            )
             canvas.scale(1f / renderScale, 1f / renderScale)
             // Preserve the original RenderNode's exact output bounds even when its
             // retained allocation is larger than this frame's mask.
@@ -232,6 +298,8 @@ class NavigationDropShadowRenderer(
         maskWidth = 0
         maskHeight = 0
         maskClipBounds.setEmpty()
+        nativeShaders.clear()
+        nativePaint?.shader = null
         transformWidth = 0
         transformHeight = 0
     }
@@ -242,19 +310,32 @@ class NavigationDropShadowRenderer(
         val layoutDirection: LayoutDirection,
         val density: Float,
         val fontScale: Float,
+        val fieldFunctions: String?,
     )
 
 }
+
+private const val NativeExteriorShadowMain = """
+uniform float2 shadowOffset;
+uniform float shadowInvRadius;
+half4 main(float2 p) {
+    float d = nativeShadowDistance(p - shadowOffset);
+    float coverage = shadowInvRadius > 0.0 ? nativeGaussianTail(d * shadowInvRadius) : 0.0;
+    return half4(0.0, 0.0, 0.0, coverage);
+}
+"""
 
 /** Draws outside the backdrop clip while sharing only its live press transform. */
 fun Modifier.navigationGlassDropShadow(
     shape: () -> Shape,
     layerBlock: (GraphicsLayerScope.() -> Unit)? = null,
     cacheBlurResult: Boolean = false,
-    shadowRadius: Dp = 15.dp,
+    shadowRadius: Dp = 4.dp,
     shadowOffsetY: Dp = 8.dp,
-    shadowAlpha: Float = 0.02f,
-): Modifier = then(NavigationGlassDropShadowElement(shape, layerBlock, cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha))
+    shadowAlpha: Float = 0.04f,
+    useNativeProfile: Boolean = false,
+    nativeMaterial: NavigationGlassMaterial? = null,
+): Modifier = then(NavigationGlassDropShadowElement(shape, layerBlock, cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha, useNativeProfile, nativeMaterial))
 
 private data class NavigationGlassDropShadowElement(
     val shape: () -> Shape,
@@ -263,13 +344,15 @@ private data class NavigationGlassDropShadowElement(
     val shadowRadius: Dp,
     val shadowOffsetY: Dp,
     val shadowAlpha: Float,
+    val useNativeProfile: Boolean,
+    val nativeMaterial: NavigationGlassMaterial?,
 ) : ModifierNodeElement<NavigationGlassDropShadowNode>() {
-    override fun create() = NavigationGlassDropShadowNode(shape, layerBlock, cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha)
+    override fun create() = NavigationGlassDropShadowNode(shape, layerBlock, cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha, useNativeProfile, nativeMaterial)
 
     override fun update(node: NavigationGlassDropShadowNode) {
         node.shape = shape
         node.layerBlock = layerBlock
-        node.updateConfiguration(cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha)
+        node.updateConfiguration(cacheBlurResult, shadowRadius, shadowOffsetY, shadowAlpha, useNativeProfile, nativeMaterial)
         node.invalidateDraw()
     }
 
@@ -288,18 +371,22 @@ private class NavigationGlassDropShadowNode(
     private var shadowRadius: Dp,
     private var shadowOffsetY: Dp,
     private var shadowAlpha: Float,
+    private var useNativeProfile: Boolean,
+    private var nativeMaterial: NavigationGlassMaterial?,
 ) : DrawModifierNode, Modifier.Node() {
-    private var renderer = NavigationDropShadowRenderer(cacheBlurResult = cacheBlurResult, shadowRadius = shadowRadius, shadowOffsetY = shadowOffsetY, shadowAlpha = shadowAlpha)
+    private var renderer = NavigationDropShadowRenderer(cacheBlurResult = cacheBlurResult, shadowRadius = shadowRadius, shadowOffsetY = shadowOffsetY, shadowAlpha = shadowAlpha, useNativeProfile = useNativeProfile, nativeMaterial = nativeMaterial)
     private val layerScope = GraphicsLayerBlockScope()
 
-    fun updateConfiguration(enabled: Boolean, radius: Dp, offsetY: Dp, alpha: Float) {
-        if (cacheBlurResult == enabled && shadowRadius == radius && shadowOffsetY == offsetY && shadowAlpha == alpha) return
+    fun updateConfiguration(enabled: Boolean, radius: Dp, offsetY: Dp, alpha: Float, native: Boolean, material: NavigationGlassMaterial?) {
+        if (cacheBlurResult == enabled && shadowRadius == radius && shadowOffsetY == offsetY && shadowAlpha == alpha && useNativeProfile == native && nativeMaterial == material) return
         renderer.release()
         cacheBlurResult = enabled
         shadowRadius = radius
         shadowOffsetY = offsetY
         shadowAlpha = alpha
-        renderer = NavigationDropShadowRenderer(cacheBlurResult = enabled, shadowRadius = radius, shadowOffsetY = offsetY, shadowAlpha = alpha)
+        useNativeProfile = native
+        nativeMaterial = material
+        renderer = NavigationDropShadowRenderer(cacheBlurResult = enabled, shadowRadius = radius, shadowOffsetY = offsetY, shadowAlpha = alpha, useNativeProfile = native, nativeMaterial = material)
     }
 
     override fun ContentDrawScope.draw() {
@@ -319,93 +406,19 @@ private class NavigationGlassDropShadowNode(
     }
 }
 
-/** Kyant's default 24dp shadow, filtered on the GPU before clearing the original body. */
+/** The hidden sampling source uses the same native default shadow as visible glass. */
 private class NavigationLensSourceDropShadowRenderer {
-    private val mask = RenderNode("Navigation lens source shadow mask")
-    private val cut = RenderNode("Navigation lens source shadow cut").apply {
-        setUseCompositingLayer(true, null)
-    }
-    private val fill = ComposePaint().apply { color = ComposeColor.Black }
-    private val clear = ComposePaint().apply { blendMode = ComposeBlendMode.Clear }
-    private val shadowAlpha = ComposeColor.Black.copy(alpha = 0.1f).alpha
-    private var key: GeometryKey? = null
-    private var blurDensity = Float.NaN
-    private var radius = 0f
-    private var padding = 0f
-    private var offsetY = 0f
-    private var maskWidth = 0
-    private var maskHeight = 0
-
-    fun draw(scope: DrawScope, shape: Shape) {
-        val canvas = scope.drawContext.canvas.nativeCanvas
-        if (!canvas.isHardwareAccelerated || scope.size.minDimension <= 0f) return
-        prepare(scope, shape)
-        val save = canvas.save()
-        try {
-            canvas.translate(-padding, -padding)
-            canvas.drawRenderNode(cut)
-        } finally {
-            canvas.restoreToCount(save)
-        }
-    }
-
-    private fun prepare(scope: DrawScope, shape: Shape) {
-        val nextKey = GeometryKey(shape, scope.size, scope.layoutDirection, scope.density, scope.fontScale)
-        if (nextKey == key && mask.hasDisplayList() && cut.hasDisplayList()) return
-        val outline = shape.createOutline(scope.size, scope.layoutDirection, scope)
-        if (blurDensity != scope.density) {
-            radius = 24f * scope.density
-            padding = radius * 2f
-            offsetY = 4f * scope.density
-            // Both Android APIs map this public radius to sigma = radius * 0.57735 + 0.5.
-            // Blur opaque coverage first, then apply the reference paint's alpha before CLEAR.
-            mask.setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.DECAL))
-            mask.alpha = shadowAlpha
-            blurDensity = scope.density
-        }
-        val logicalWidth = ceil(scope.size.width + radius * 4f).toInt()
-        val logicalHeight = ceil(scope.size.height + radius * 4f + offsetY).toInt()
-        maskWidth = maxOf(maskWidth, (logicalWidth + 63) / 64 * 64)
-        maskHeight = maxOf(maskHeight, (logicalHeight + 63) / 64 * 64)
-        val width = maskWidth
-        val height = maskHeight
-        mask.setPosition(0, 0, width, height)
-        val maskCanvas = mask.beginRecording(width, height)
-        try {
-            maskCanvas.translate(padding, padding + offsetY)
-            ComposeCanvas(maskCanvas).drawOutline(outline, fill)
-        } finally {
-            mask.endRecording()
-        }
-        cut.setPosition(0, 0, width, height)
-        val cutCanvas = cut.beginRecording(width, height)
-        try {
-            // Keep the reference recording's crop even when the backing allocation grows.
-            cutCanvas.clipRect(0, 0, logicalWidth, logicalHeight)
-            cutCanvas.drawRenderNode(mask)
-            cutCanvas.translate(padding, padding)
-            ComposeCanvas(cutCanvas).drawOutline(outline, clear)
-        } finally {
-            cut.endRecording()
-        }
-        key = nextKey
-    }
-
-    fun release() {
-        mask.discardDisplayList()
-        cut.discardDisplayList()
-        key = null
-        maskWidth = 0
-        maskHeight = 0
-    }
-
-    private data class GeometryKey(
-        val shape: Shape,
-        val size: Size,
-        val layoutDirection: LayoutDirection,
-        val density: Float,
-        val fontScale: Float,
+    private val renderer = NavigationDropShadowRenderer(
+        cacheBlurResult = true,
+        shadowRadius = 4.dp,
+        shadowOffsetY = 8.dp,
+        shadowAlpha = 0.04f,
+        useNativeProfile = true,
     )
+
+    fun draw(scope: DrawScope, shape: Shape) = renderer.draw(scope, shape)
+
+    fun release() = renderer.release()
 }
 
 /** Draws the hidden lens source's default shadow with GPU filtering and the original body cut. */

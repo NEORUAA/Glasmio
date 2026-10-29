@@ -56,7 +56,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
-import com.kyant.backdrop.Backdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
 import kotlin.math.roundToInt
 
 /** Data adapter for the shared popup components; it does not own another menu style. */

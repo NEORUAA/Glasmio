@@ -21,7 +21,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import com.kyant.backdrop.Backdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
 
 internal enum class IosSheetTextRole { Primary, Secondary }
 

@@ -505,7 +505,7 @@ class LiquidMenuGaussianField {
 }
 
 /** CASDF continuous-corner sampler, evaluated in its isotropic layer coordinate space. */
-private class RoundedMenuField(bounds: Rect, radii: Offset) {
+internal class RoundedMenuField(bounds: Rect, radii: Offset, private val normalMix: Float = .5f) {
     private val centerX = bounds.center.x
     private val centerY = bounds.center.y
     private val radiusX = radii.x.coerceAtLeast(0.01f)
@@ -581,9 +581,15 @@ private class RoundedMenuField(bounds: Rect, radii: Offset) {
             ovalX = nx
             ovalY = ny
         }
-        // LiquidMorph sets gradientOvalization to 0.5 before tracking its element layers.
-        nx += ovalX
-        ny += ovalY
+        // LiquidMorph uses .5; the tab platter's two existing SDF elements use zero.
+        // Retain the original .5 arithmetic for the menu's native/Java field oracle.
+        if (normalMix == .5f) {
+            nx += ovalX
+            ny += ovalY
+        } else {
+            nx += (ovalX - nx) * normalMix
+            ny += (ovalY - ny) * normalMix
+        }
         val length = sqrt(nx * nx + ny * ny)
         if (length <= 0.000001f) return Offset.Zero
         // CASDF applies the inverse affine normal transform after normalization. Its

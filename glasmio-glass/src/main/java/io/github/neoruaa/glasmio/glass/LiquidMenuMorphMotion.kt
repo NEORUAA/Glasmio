@@ -10,6 +10,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -54,9 +57,11 @@ class LiquidMenuMorphMotion {
         private set
 
     private var source = Rect.Zero
+    internal val sourceBounds: Rect get() = source
     private var through = Rect.Zero
     private var destination = Rect.Zero
     private var destinationRadius = 0f
+    private var portalZoomReferenceHeight = 0f
     private var density = 1f
     private var expanded = false
     private var elapsed = 0f
@@ -67,6 +72,8 @@ class LiquidMenuMorphMotion {
     private var sourceKickReleased = false
     private var portalBlurReleased = false
     private var request = 0
+    private var runningRequest: Int? = null
+    private var runningJob: Job? = null
 
     private val x = LiquidMenuSpring()
     private val y = LiquidMenuSpring()
@@ -101,6 +108,7 @@ class LiquidMenuMorphMotion {
         this.through = through
         destination = target
         destinationRadius = targetRadius.coerceAtMost(target.size.minDimension / 2f)
+        portalZoomReferenceHeight = target.height
         this.density = density
         val diameter = initialIncomingDiameter()
         val incomingCenter = initialIncomingCenter()
@@ -148,14 +156,45 @@ class LiquidMenuMorphMotion {
 
     suspend fun animateTo(expanded: Boolean) {
         if (!initialized) return
-        val currentRequest = ++request
         retarget(expanded)
-        var previousFrame = withFrameNanos { it }
-        while (currentRequest == request) {
-            val currentFrame = withFrameNanos { it }
-            val seconds = ((currentFrame - previousFrame) / 1_000_000_000.0).toFloat()
-            previousFrame = currentFrame
-            if (advanceBy(seconds)) return
+        animateCurrentTargets()
+    }
+
+    /** Resize the destination without replaying the eject, blur or lens actions. */
+    fun updateTarget(target: Rect, targetRadius: Float): Boolean {
+        if (!initialized || !target.isFiniteAndPositive() || !targetRadius.isFinite() || targetRadius < 0f) return false
+        val radius = targetRadius.coerceAtMost(target.size.minDimension / 2f)
+        if (destination == target && destinationRadius == radius) return false
+        destination = target
+        destinationRadius = radius
+        if (expanded) configureExpansionGeometry() else configureCollapse()
+        publish()
+        return true
+    }
+
+    /** Continue an active opening, or start its geometry clock again after it has settled. */
+    suspend fun animateToTarget(target: Rect, targetRadius: Float) {
+        if (!updateTarget(target, targetRadius) || runningRequest == request && runningJob?.isActive == true) return
+        animateCurrentTargets()
+    }
+
+    private suspend fun animateCurrentTargets() {
+        val currentRequest = ++request
+        runningRequest = currentRequest
+        runningJob = currentCoroutineContext().job
+        try {
+            var previousFrame = withFrameNanos { it }
+            while (currentRequest == request) {
+                val currentFrame = withFrameNanos { it }
+                val seconds = ((currentFrame - previousFrame) / 1_000_000_000.0).toFloat()
+                previousFrame = currentFrame
+                if (advanceBy(seconds)) return
+            }
+        } finally {
+            if (runningRequest == currentRequest) {
+                runningRequest = null
+                runningJob = null
+            }
         }
     }
 
@@ -163,6 +202,7 @@ class LiquidMenuMorphMotion {
     fun retarget(expanded: Boolean) {
         if (!initialized) return
         this.expanded = expanded
+        portalZoomReferenceHeight = destination.height
         elapsed = 0f
         correctionApplied = false
         smoothingReleased = false
@@ -173,30 +213,32 @@ class LiquidMenuMorphMotion {
         portalBlur.target(1f, BlurInSpring)
         lens.target(1f, LensOnSpring)
         if (expanded) {
-            val pivot = collapsedPivot()
-            sourceX.target(pivot.x, EjectSpring)
-            sourceY.target(pivot.y, EjectSpring)
-            sourceWidth.target(source.size.minDimension, CollapseSpring)
-            sourceHeight.target(source.size.minDimension, CollapseSpring)
-            // The later zero-delay Eject action owns position/transform/progress; bounds retain
-            // their explicit critically damped collapse behavior.
-            sourceScale.target(0.25f, EjectSpring)
-            x.target(destination.center.x, EjectSpring)
-            y.target(destination.center.y, EjectSpring)
-            width.target(destination.width, EjectSpring)
-            height.target(destination.height, EjectSpring)
+            configureExpansionGeometry()
             incomingScale.target(1f, EjectSpring)
-            // Native Eject first drives all four raw corner radii to the full menu width.
-            // Fully expanded later corrects them, retaining that overrounding velocity.
-            radiusX.target(destination.width, EjectSpring)
-            radiusY.target(destination.width, EjectSpring)
-            kick.target(kickAmount(-80f), KickSpring)
             sourceKick.target(0f, KickSpring)
             sourceContent.target(0f, EjectSpring)
             content.target(1f, EjectSpring)
             smoothing.target(20f * density, CollapseSpring)
         } else configureCollapse()
         publish()
+    }
+
+    private fun configureExpansionGeometry() {
+        val pivot = collapsedPivot()
+        sourceX.target(pivot.x, EjectSpring)
+        sourceY.target(pivot.y, EjectSpring)
+        sourceWidth.target(source.size.minDimension, CollapseSpring)
+        sourceHeight.target(source.size.minDimension, CollapseSpring)
+        // Native bounds keep their collapse spring while their transform follows Eject.
+        sourceScale.target(0.25f, EjectSpring)
+        x.target(destination.center.x, EjectSpring)
+        y.target(destination.center.y, EjectSpring)
+        width.target(destination.width, EjectSpring)
+        height.target(destination.height, EjectSpring)
+        // A late resize must retain the correction action that has already occurred.
+        radiusX.target(if (correctionApplied) destinationRadius else destination.width, EjectSpring)
+        radiusY.target(if (correctionApplied) destinationRadius else destination.width, EjectSpring)
+        kick.target(if (correctionApplied) 0f else kickAmount(-80f), KickSpring)
     }
 
     /** Advance the exact second-order solutions, splitting at timeline action boundaries. */
@@ -407,7 +449,9 @@ class LiquidMenuMorphMotion {
     private fun opticalReleaseDelay(): Float = if (expanded) EjectOpticalReleaseDelay else AbsorbOpticalReleaseDelay
 
     private fun portalZoomScale(): Float {
-        val heightFactor = ((destination.height / density - 215f) / 305f).coerceIn(0f, 1f)
+        // Optical actions belong to the current opening/closing transaction. Content resizing
+        // only retargets geometry, avoiding an instantaneous portal zoom change mid-flight.
+        val heightFactor = ((portalZoomReferenceHeight / density - 215f) / 305f).coerceIn(0f, 1f)
         return 1.65f + (1.2f - 1.65f) * heightFactor
     }
 

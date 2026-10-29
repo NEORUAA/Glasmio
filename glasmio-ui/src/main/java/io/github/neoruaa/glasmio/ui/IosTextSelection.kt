@@ -76,7 +76,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.kyant.backdrop.Backdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import io.github.neoruaa.glasmio.core.IosTypography
 import io.github.neoruaa.glasmio.core.GlasmioTheme

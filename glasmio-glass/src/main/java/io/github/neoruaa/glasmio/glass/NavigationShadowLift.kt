@@ -5,8 +5,8 @@ import io.github.neoruaa.glasmio.icons.*
 
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
-import com.kyant.backdrop.BackdropEffectScope
-import com.kyant.backdrop.effects.runtimeShaderEffect
+import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
+import io.github.neoruaa.glasmio.glass.render.effects.runtimeShaderEffect
 
 /** Lifts only the sampled shadows, before the navigation material is composited. */
 fun BackdropEffectScope.liftNavigationShadows() {

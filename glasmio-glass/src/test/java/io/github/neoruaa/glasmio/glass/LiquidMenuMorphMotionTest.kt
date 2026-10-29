@@ -62,6 +62,58 @@ class LiquidMenuMorphMotionTest {
     }
 
     @Test
+    fun contentResizingRetargetsLiveAndSettledMenusWithoutReplayingOptics() {
+        for (opensAbove in listOf(false, true)) {
+            for (elapsed in listOf(0.04f, 0.15f, 0.4f, 3f)) {
+                val motion = motion()
+                val control = motion()
+                motion.retarget(true)
+                control.retarget(true)
+                motion.advanceBy(elapsed)
+                control.advanceBy(elapsed)
+                val shorter = if (opensAbove) Rect(destination.left + 60f, destination.bottom - 248f,
+                    destination.right, destination.bottom)
+                else Rect(destination.left + 60f, destination.top, destination.right, destination.top + 248f)
+                val before = motion.frame
+                assertTrue(motion.updateTarget(shorter, 102f))
+                assertEquals("A new content size retains every live presentation channel", before, motion.frame)
+                assertTrue("A repeated layout report is not a new retarget", !motion.updateTarget(shorter, 102f))
+                motion.advanceBy(0.025f)
+                control.advanceBy(0.025f)
+                assertEquals("Resizing must not replay the content reveal",
+                    control.frame.contentProgress, motion.frame.contentProgress, 0.00001f)
+                assertEquals("Resizing must retain the lens release timeline",
+                    control.frame.lensProgress, motion.frame.lensProgress, 0.00001f)
+                assertEquals("The opening transaction keeps its portal optics",
+                    control.frame.contentZoom, motion.frame.contentZoom, 0.00001f)
+                assertEquals(control.frame.portalBlur, motion.frame.portalBlur, 0.00001f)
+                motion.advanceBy(4f)
+                assertRectEquals(shorter, motion.frame.bounds)
+                assertEquals(102f, motion.frame.radiusY, 0.001f)
+
+                val taller = Rect(shorter.left - 36f, shorter.top - 44f, shorter.right + 12f, shorter.top + 660f)
+                val settled = motion.frame
+                assertTrue(motion.updateTarget(taller, 102f))
+                assertEquals("A settled menu also retains its presentation before resizing", settled, motion.frame)
+                motion.advanceBy(4f)
+                assertRectEquals(taller, motion.frame.bounds)
+                motion.retarget(false)
+                motion.advanceBy(4f)
+                assertRectEquals(source, requireNotNull(motion.frame.sourceLobe))
+            }
+        }
+
+        val moving = motion()
+        moving.retarget(true)
+        moving.advanceBy(.08f)
+        val before = moving.frame
+        moving.updateTarget(Rect(destination.left, destination.top, destination.right, destination.top + 180f), 90f)
+        moving.advanceBy(.001f)
+        assertTrue("A shorter target must not discard the menu's existing upward size velocity",
+            moving.frame.bounds.height > before.bounds.height)
+    }
+
+    @Test
     fun distanceFieldKeepsOneContinuousSkinThroughOpeningAndReversal() {
         val scenes = buildList {
             add(Triple(source, destination, source))

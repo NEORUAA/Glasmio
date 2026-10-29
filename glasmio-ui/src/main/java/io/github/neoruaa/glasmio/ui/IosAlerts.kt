@@ -2,6 +2,8 @@ package io.github.neoruaa.glasmio.ui
 
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.icons.*
 
 import androidx.compose.animation.core.Animatable
@@ -59,9 +61,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.window.DialogProperties
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.shadow.Shadow
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.shadow.Shadow
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -254,10 +256,11 @@ fun GlasmioAlertSurface(
     titleContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit = {},
 ) {
-    val colors = LocalGlassColors.current
+    val materialContext = rememberGlassMaterialContext(inheritLuminance = false)
+    val colors = materialContext.colors
     val appearance = LocalGlassAppearance.current
     val innerShadows = rememberNavigationInnerShadows(true)
-    val light = !colors.isDark
+    val light = !materialContext.isDark
     val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
     SideEffect {
         dialogWindow?.setDimAmount((dimAmount ?: if (light) 0.01f else 0.08f).coerceIn(0f, 1f))
@@ -293,6 +296,7 @@ fun GlasmioAlertSurface(
                     navigationMaterial = true,
                     innerShadows = innerShadows,
                     isDark = colors.isDark,
+                    materialContext = materialContext,
                     blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
                     appearance = appearance,
                     material = NavigationGlassMaterial.RegularMedium,
@@ -304,10 +308,7 @@ fun GlasmioAlertSurface(
                 .then(interactiveHighlight.gestureModifier)
                 .padding(14.dp),
         ) {
-            CompositionLocalProvider(
-                LocalContentColor provides colors.content,
-                LocalGlassContentColor provides colors.content,
-            ) {
+            ProvideGlassMaterialContext(materialContext) {
                 Column(
                     Modifier
                         .fillMaxWidth()

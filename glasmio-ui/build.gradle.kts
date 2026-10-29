@@ -19,3 +19,11 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+
+// Keep cross-module GPU fixtures in the rendering suite without publishing backend internals.
+val glassBackendBuildDirectory = project(":glasmio-glass").layout.buildDirectory
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    if (name == "compileDebugAndroidTestKotlin") {
+        friendPaths.from(libraries.filter { it.toPath().startsWith(glassBackendBuildDirectory.get().asFile.toPath()) })
+    }
+}

@@ -10,12 +10,12 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.BackdropEffectScope
-import com.kyant.backdrop.drawPlainBackdrop
-import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.runtimeShaderEffect
-import com.kyant.backdrop.isRuntimeShaderSupported
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
+import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
+import io.github.neoruaa.glasmio.glass.render.effects.blur
+import io.github.neoruaa.glasmio.glass.render.effects.runtimeShaderEffect
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 
 private val HorizontalProgressiveBlurShader = progressiveBlurPassShader(isVertical = false)
 private val VerticalProgressiveBlurShader = progressiveBlurPassShader(isVertical = true)
@@ -215,4 +215,3 @@ fun Modifier.scrollEdgeContentFade(
         }
     }
 }
-

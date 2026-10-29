@@ -46,7 +46,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.kyant.backdrop.Backdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
 import com.kyant.shapes.Capsule
 
 private const val GlassSearchTransitionMillis = 300

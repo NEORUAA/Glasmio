@@ -11,7 +11,6 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     api(project(":glasmio-core"))
     api(project(":glasmio-icons"))
-    api("io.github.kyant0:backdrop:2.0.1")
     api("io.github.kyant0:shapes:1.2.1")
 }
 

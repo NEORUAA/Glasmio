@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.progressSemantics
@@ -48,7 +47,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp as colorLerp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -68,38 +66,56 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberBackdrop
-import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.lens
-import com.kyant.backdrop.effects.vibrancy
-import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.shadow.InnerShadow
-import com.kyant.backdrop.shadow.Shadow
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.DampedDragAnimation
-import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 
 internal val LocalMergedGlassCards = staticCompositionLocalOf { false }
 
+/** Resize the rendered lens while retaining its resting layout and input bounds. */
+internal fun Modifier.nativeControlLensGeometry(
+    style: NativeControlLensStyle,
+    horizontalProgress: () -> Float,
+    verticalProgress: () -> Float = horizontalProgress,
+): Modifier = layout { measurable, constraints ->
+    val restingWidth = constraints.maxWidth
+    val restingHeight = constraints.maxHeight
+    val horizontal = horizontalProgress()
+    val vertical = verticalProgress()
+    val width = when (style) {
+        NativeControlLensStyle.SwitchThumb -> restingWidth * (1f + (58f / 37f - 1f) * horizontal)
+        NativeControlLensStyle.SliderThumb -> restingWidth * (1f + .55f * horizontal)
+        NativeControlLensStyle.SegmentedIndicator -> restingWidth + 24.dp.toPx() * horizontal
+        NativeControlLensStyle.TabBarIndicator -> restingWidth + 16.dp.toPx() * horizontal
+    }.fastRoundToInt().coerceAtLeast(1)
+    val height = when (style) {
+        NativeControlLensStyle.SwitchThumb -> restingHeight * (1f + (38.333333f / 24f - 1f) * vertical)
+        NativeControlLensStyle.SliderThumb -> restingHeight * (1f + .55f * vertical)
+        NativeControlLensStyle.SegmentedIndicator,
+        NativeControlLensStyle.TabBarIndicator -> restingHeight + 16.dp.toPx() * vertical
+    }.fastRoundToInt().coerceAtLeast(1)
+    val placeable = measurable.measure(Constraints.fixed(width, height))
+    layout(restingWidth, restingHeight) {
+        placeable.place((restingWidth - width) / 2, (restingHeight - height) / 2)
+    }
+}
+
 /**
- * iOS 27 switch: 64 x 28 dp track and 38 x 24 dp elastic liquid thumb.
+ * iOS 27 switch: 63 x 28 dp track and 37 x 24 dp elastic liquid thumb.
  * The checked track defaults to system green; [onTintColor] provides an explicit override.
  */
 @Composable
@@ -165,6 +181,7 @@ fun GlasmioSwitch(
                 fraction = if (currentChecked) 1f else 0f
                 updateValue(fraction)
             },
+            lensStyle = NativeControlLensStyle.SwitchThumb,
         )
     }
     LaunchedEffect(checked, enabled, animation) {
@@ -178,53 +195,29 @@ fun GlasmioSwitch(
     }
 
     val trackBackdrop = rememberLayerBackdrop()
-    val transformedTrackBackdrop = rememberBackdrop(
-        backdrop = trackBackdrop,
-        onDraw = remember(animation) {
-            { draw ->
-                val p = animation.pressProgress
-                scale(lerp(2f / 3f, 0.75f, p), lerp(0f, 0.75f, p)) { draw() }
-            }
-        },
-    )
-    val thumbBackdrop = rememberCombinedBackdrop(backdrop, transformedTrackBackdrop)
-    val thumbGlassModifier = remember(thumbBackdrop, animation, appearance) {
-        Modifier.drawBackdrop(
+    val thumbBackdrop = rememberCombinedBackdrop(backdrop, trackBackdrop)
+    val thumbGlassModifier = remember(thumbBackdrop, animation, appearance, colors.isDark, onColor) {
+        Modifier.drawPlainBackdrop(
             backdrop = if (appearance.usesBackdrop) thumbBackdrop else emptyBackdrop(),
             shape = { Capsule() },
             effects = {
                 if (appearance.usesBackdrop) {
-                    val p = animation.pressProgress
-                    blur(8.dp.toPx() * if (appearance.usesRefraction) 1f - p else 1f)
-                    if (appearance.usesRefraction) {
-                        lens(5.dp.toPx() * p, 10.dp.toPx() * p, chromaticAberration = true)
-                    }
+                    nativeControlLens(
+                        style = NativeControlLensStyle.SwitchThumb,
+                        liftProgress = if (appearance.usesRefraction) animation.pressProgress else 0f,
+                        isDark = colors.isDark,
+                        tint = onColor,
+                    )
                 }
             },
-            highlight = {
-                Highlight.Ambient.copy(
-                    width = Highlight.Ambient.width / 1.5f,
-                    blurRadius = Highlight.Ambient.blurRadius / 1.5f,
-                    alpha = animation.pressProgress,
-                )
-            },
-            shadow = { Shadow(radius = 4.dp, color = Color.Black.copy(alpha = 0.05f)) },
-            innerShadow = {
-                InnerShadow(
-                    radius = 4.dp * animation.pressProgress,
-                    alpha = animation.pressProgress,
-                )
-            },
             layerBlock = {
-                scaleX = animation.scaleX
-                scaleY = animation.scaleY
+                // Velocity deformation is independent of the native lens's measured lift.
                 val velocity = animation.velocity / 50f
-                scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
-                scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
+                scaleX = 1f / (1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f))
+                scaleY = 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
             },
             onDrawSurface = {
-                val alpha = if (appearance.reduceTransparency) 1f else 1f - animation.pressProgress
-                drawRect(Color.White.copy(alpha = alpha))
+                if (appearance.reduceTransparency) drawRect(Color.White)
             },
         )
     }
@@ -232,7 +225,7 @@ fun GlasmioSwitch(
         modifier = modifier
             .swipeBackExcluded(enabled)
             .alpha(if (enabled) 1f else 0.5f)
-            .size(width = 64.dp, height = 28.dp)
+            .size(width = 63.dp, height = 28.dp)
             .semantics(mergeDescendants = true) {
                 role = Role.Switch
                 toggleableState = if (checked) ToggleableState.On else ToggleableState.Off
@@ -250,7 +243,7 @@ fun GlasmioSwitch(
                 .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop) else Modifier)
                 .clip(Capsule())
                 .drawBehind { drawRect(colorLerp(track, onColor, animation.value)) }
-                .size(width = 64.dp, height = 28.dp),
+                .size(width = 63.dp, height = 28.dp),
         )
         Box(
             Modifier
@@ -259,8 +252,12 @@ fun GlasmioSwitch(
                     translationX = if (ltr) lerp(padding, padding + travelPx, animation.value)
                     else lerp(-padding, -(padding + travelPx), animation.value)
                 }
-                .then(thumbGlassModifier)
-                .size(width = 38.dp, height = 24.dp),
+                .size(width = 37.dp, height = 24.dp)
+                .nativeControlLensGeometry(
+                    NativeControlLensStyle.SwitchThumb,
+                    horizontalProgress = { if (appearance.usesRefraction) animation.pressProgress else 0f },
+                )
+                .then(thumbGlassModifier),
         )
     }
 }
@@ -321,7 +318,6 @@ fun GlasmioSlider(
             .swipeBackExcluded(enabled)
             .fillMaxWidth()
             .height(40.dp)
-            .offset(y = 6.dp)
             .progressSemantics(displayedValue, valueRange)
             .semantics {
                 if (!enabled) disabled()
@@ -343,8 +339,10 @@ fun GlasmioSlider(
         contentAlignment = Alignment.CenterStart,
     ) {
         val trackWidth = constraints.maxWidth
+        val thumbWidthPx = with(LocalDensity.current) { 37.dp.toPx() }
         val ltr = LocalLayoutDirection.current == LayoutDirection.Ltr
         val currentTrackWidth by rememberUpdatedState(trackWidth)
+        val currentThumbWidth by rememberUpdatedState(thumbWidthPx)
         val currentLtr by rememberUpdatedState(ltr)
         val scope = rememberCoroutineScope()
         val animation = remember(scope, valueRange, enabled) {
@@ -358,10 +356,12 @@ fun GlasmioSlider(
                 onDragStarted = {},
                 onDragStopped = {},
                 onDrag = { _, _ -> },
+                lensStyle = NativeControlLensStyle.SliderThumb,
             )
         }
         val updateFromPosition by rememberUpdatedState<(Float) -> Unit> { x ->
-            val fraction = (x / currentTrackWidth.coerceAtLeast(1)).coerceIn(0f, 1f)
+            val fraction = ((x - currentThumbWidth / 2f) /
+                (currentTrackWidth - currentThumbWidth).coerceAtLeast(1f)).coerceIn(0f, 1f)
             updateValue(
                 if (currentLtr) lerp(valueRange.start, valueRange.endInclusive, fraction)
                 else lerp(valueRange.endInclusive, valueRange.start, fraction),
@@ -372,50 +372,23 @@ fun GlasmioSlider(
             dragging = false
             animation.release()
         }
-        val transformedTrackBackdrop = rememberBackdrop(
-            backdrop = trackBackdrop,
-            onDraw = remember(animation) {
-                { draw ->
-                    val p = animation.pressProgress
-                    scale(lerp(2f / 3f, 1f, p), lerp(0f, 1f, p)) { draw() }
-                }
-            },
-        )
-        val thumbBackdrop = rememberCombinedBackdrop(backdrop, transformedTrackBackdrop)
-        val thumbGlassModifier = remember(thumbBackdrop, animation, appearance) {
-            Modifier.drawBackdrop(
+        val thumbBackdrop = rememberCombinedBackdrop(backdrop, trackBackdrop)
+        val thumbGlassModifier = remember(thumbBackdrop, animation, appearance, colors.isDark, accent) {
+            Modifier.drawPlainBackdrop(
                 backdrop = if (appearance.usesBackdrop) thumbBackdrop else emptyBackdrop(),
                 shape = { Capsule() },
                 effects = {
                     if (appearance.usesBackdrop) {
-                        val p = animation.pressProgress
-                        blur(8.dp.toPx() * if (appearance.usesRefraction) 1f - p else 1f)
-                        if (appearance.usesRefraction) {
-                            lens(10.dp.toPx() * p, 14.dp.toPx() * p, chromaticAberration = true)
-                        }
+                        nativeControlLens(
+                            style = NativeControlLensStyle.SliderThumb,
+                            liftProgress = if (appearance.usesRefraction) animation.pressProgress else 0f,
+                            isDark = colors.isDark,
+                            tint = accent,
+                        )
                     }
                 },
-                highlight = {
-                    Highlight.Ambient.copy(
-                        width = Highlight.Ambient.width / 1.5f,
-                        blurRadius = Highlight.Ambient.blurRadius / 1.5f,
-                        alpha = animation.pressProgress,
-                    )
-                },
-                shadow = { Shadow(radius = 6.dp, color = Color.Black.copy(alpha = 0.15f)) },
-                innerShadow = {
-                    InnerShadow(
-                        radius = 4.dp * animation.pressProgress,
-                        alpha = animation.pressProgress,
-                    )
-                },
-                layerBlock = {
-                    scaleX = animation.scaleX
-                    scaleY = animation.scaleY
-                },
                 onDrawSurface = {
-                    val alpha = if (appearance.reduceTransparency) 1f else 1f - animation.pressProgress
-                    drawRect(Color.White.copy(alpha = alpha))
+                    if (appearance.reduceTransparency) drawRect(Color.White)
                 },
             )
         }
@@ -446,12 +419,15 @@ fun GlasmioSlider(
             Modifier
                 .graphicsLayer {
                     // Position follows the pointer directly; springs only deform the glass.
-                    translationX = (-size.width / 2f + trackWidth * progress())
-                        .fastCoerceIn(-size.width / 4f, trackWidth - size.width * 3f / 4f) * if (ltr) 1f else -1f
+                    translationX = (trackWidth - size.width).coerceAtLeast(0f) * progress() * if (ltr) 1f else -1f
                     alpha = if (enabled) 1f else 0.45f
                 }
-                .then(thumbGlassModifier)
-                .size(width = 40.dp, height = 24.dp),
+                .size(width = 37.dp, height = 24.dp)
+                .nativeControlLensGeometry(
+                    NativeControlLensStyle.SliderThumb,
+                    horizontalProgress = { if (appearance.usesRefraction) animation.pressProgress else 0f },
+                )
+                .then(thumbGlassModifier),
         )
         // Use a stationary input surface. Measuring deltas in the translated thumb's
         // coordinates subtracts its own movement and makes dragging feel damped.
@@ -574,43 +550,27 @@ fun <T> GlasmioSegmentedControl(
     val currentOnSelected by rememberUpdatedState(onSelected)
     val scope = rememberCoroutineScope()
     val tabsBackdrop = rememberLayerBackdrop()
-    val indicatorBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
+    val trackBackdrop = rememberLayerBackdrop()
+    val indicatorBackdrop = rememberCombinedBackdrop(backdrop, trackBackdrop)
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     val trackColor = colors.segmentedControlBackground.let {
         if (appearance.reduceTransparency) it.compositeOver(colors.elevatedBackground) else it
     }
     val indicatorHeight = height - 4.dp
+    val indicatorColor = if (isLight) Color.White else Color(0xFF636366)
 
-    // Same three-layer structure as LiquidBottomTabs:
-    // visible tabs -> invisible exported tabs with content -> movable combined-backdrop lens.
+    // The native background and lifted label planes have independent recordings.
     val dragCoordinateSpace = remember { mutableStateOf<LayoutCoordinates?>(null) }
     BoxWithConstraints(
         modifier.swipeBackExcluded(enabled).height(height).selectableGroup().alpha(if (enabled) 1f else 0.45f)
             .onGloballyPositioned { dragCoordinateSpace.value = it },
     ) {
         val density = LocalDensity.current
-        val contentWidthPx = (constraints.maxWidth - with(density) { 4.dp.roundToPx() })
-            .coerceAtLeast(items.size)
-            .toFloat()
+        val contentWidthPx = constraints.maxWidth.coerceAtLeast(items.size).toFloat()
         val tabWidthPx = contentWidthPx / items.size
+        val indicatorWidthPx = (tabWidthPx - with(density) { 4.dp.toPx() }).coerceAtLeast(1f)
         val currentTabWidthPx by rememberUpdatedState(tabWidthPx)
         val trackPaddingPx = with(density) { 2.dp.toPx() }
-        val textMeasurer = rememberTextMeasurer()
-        val labelStyle = IosTypography.caption
-        val labelLayouts = remember(textMeasurer, items, selectedIndex, labelStyle, colors.content, tabWidthPx, itemContent) {
-            if (itemContent != null) emptyList() else items.mapIndexed { index, item ->
-                textMeasurer.measure(
-                    text = AnnotatedString(item.second),
-                    style = labelStyle.copy(
-                        color = colors.content,
-                        fontWeight = if (index == selectedIndex) FontWeight.SemiBold else FontWeight.Medium,
-                    ),
-                    maxLines = 1,
-                    constraints = Constraints(maxWidth = tabWidthPx.fastRoundToInt().coerceAtLeast(1)),
-                )
-            }
-        }
-        val interactiveHighlight = remember(scope, isLtr) { InteractiveHighlight(scope) }
         val animation = remember(scope, items.size, isLtr, positionAnimation) {
             DampedDragAnimation(
                 animationScope = scope,
@@ -622,16 +582,14 @@ fun <T> GlasmioSegmentedControl(
                 dragCoordinateSpace = { dragCoordinateSpace.value },
                 sharedValueAnimation = positionAnimation,
                 horizontalDragOnly = true,
-                onDragStarted = { if (currentEnabled) interactiveHighlight.startPress(it) },
+                onDragStarted = {},
                 onDragStopped = {
-                    interactiveHighlight.endPress()
                     val target = targetValue.fastRoundToInt().fastCoerceIn(0, currentItems.lastIndex)
                     if (currentEnabled) currentOnSelected(currentItems[target].first)
                     val restingIndex = if (currentEnabled && !currentDeferSelection) target else currentSelectedIndex
                     if (restingIndex >= 0) animateToValue(restingIndex.toFloat())
                 },
                 onDragCancelled = {
-                    interactiveHighlight.endPress()
                     if (currentSelectedIndex >= 0) {
                         animateToValue(currentSelectedIndex.toFloat(), animatePress = false)
                     }
@@ -643,145 +601,92 @@ fun <T> GlasmioSegmentedControl(
                             .fastCoerceIn(0f, currentItems.lastIndex.toFloat()),
                     )
                 },
+                lensStyle = NativeControlLensStyle.SegmentedIndicator,
             )
         }
         LaunchedEffect(selectedIndex, enabled, animation) {
-            if (selectedIndex >= 0) animation.animateToValue(selectedIndex.toFloat(), animatePress = enabled)
-            if (!enabled) interactiveHighlight.endPress()
+            if (selectedIndex >= 0) animation.animateToValue(selectedIndex.toFloat(), animatePress = false)
         }
-        val segmentedHighlightModifier = remember(interactiveHighlight, animation, isLtr, trackPaddingPx) {
-            interactiveHighlight.highlightModifier(
-                positionProvider = { size ->
-                    Offset(
-                        x = if (isLtr) {
-                            trackPaddingPx + (animation.value + 0.5f) * currentTabWidthPx
-                        } else {
-                            size.width - trackPaddingPx - (animation.value + 0.5f) * currentTabWidthPx
-                        },
-                        y = size.height / 2f,
-                    )
-                },
-                horizontalRadiusProvider = { currentTabWidthPx * 0.65f },
-            )
+        val onUserSelected: (T) -> Unit = remember(animation) {
+            { value ->
+                if (currentEnabled) {
+                    animation.press()
+                    currentOnSelected(value)
+                    animation.release()
+                }
+            }
         }
-        val hiddenGlassModifier = remember(backdrop, animation, trackColor, appearance) {
-            Modifier.drawBackdrop(
-                backdrop = if (appearance.usesBackdrop) backdrop else emptyBackdrop(),
-                shape = { Capsule() },
-                effects = {
-                    if (appearance.usesBackdrop) {
-                        val press = animation.pressProgress
-                        vibrancy()
-                        blur(2.dp.toPx())
-                        if (appearance.usesRefraction) {
-                            lens(
-                                8.dp.toPx() * press,
-                                16.dp.toPx() * press,
-                                depthEffect = press > 0.01f,
-                                chromaticAberration = true,
-                            )
-                        }
-                    }
-                },
-                highlight = { Highlight.Default.copy(alpha = animation.pressProgress) },
-                onDrawSurface = { drawRect(trackColor) },
-            )
-        }
-        val indicatorGlassModifier = remember(indicatorBackdrop, animation, appearance, isLight, labelLayouts) {
-            if (!appearance.usesBackdrop) Modifier else Modifier.drawBackdrop(
+        val indicatorGlassModifier = remember(indicatorBackdrop, tabsBackdrop, animation, appearance, isLight, indicatorColor) {
+            if (!appearance.usesBackdrop) Modifier else Modifier.drawPlainBackdrop(
                 backdrop = indicatorBackdrop,
                 shape = { Capsule() },
                 effects = {
-                    if (appearance.usesRefraction) {
-                        val press = animation.pressProgress
-                        lens(
-                            SegmentedIndicatorRefractionHeight.toPx() * press,
-                            SegmentedIndicatorRefractionAmount.toPx() * press,
-                            chromaticAberration = true,
-                        )
-                    }
-                },
-                highlight = { Highlight.Default.copy(alpha = animation.pressProgress) },
-                shadow = { Shadow(alpha = 0.72f * animation.pressProgress) },
-                innerShadow = {
-                    InnerShadow(
-                        radius = 6.dp * animation.pressProgress,
-                        alpha = 0.72f * animation.pressProgress,
+                    nativeControlLens(
+                        style = NativeControlLensStyle.SegmentedIndicator,
+                        liftProgress = if (appearance.usesRefraction) animation.pressProgress else 0f,
+                        isDark = !isLight,
+                        liftedContent = tabsBackdrop,
+                        restingColor = indicatorColor,
                     )
                 },
-                onDrawSurface = {
-                    val press = animation.pressProgress
-                    // The resting fill belongs to this surface, never to its sampling source.
-                    drawRect((if (isLight) Color.White else Color(0xFF636366)).copy(alpha = 1f - press))
-                    drawRect(Color.White.copy(alpha = 0.10f * press))
-                    // Restore labels over the resting fill at their fixed track positions.
-                    // As the fill fades, the source's refracted labels take over.
-                    labelLayouts.forEachIndexed { index, label ->
-                        drawText(
-                            textLayoutResult = label,
-                            topLeft = Offset(
-                                size.width / 2f + (index - animation.value) * currentTabWidthPx *
-                                    (if (isLtr) 1f else -1f) - label.size.width / 2f,
-                                (size.height - label.size.height) / 2f,
-                            ),
-                            alpha = 1f - press,
-                        )
-                    }
+                layerBlock = {
+                    val velocity = animation.velocity / 10f
+                    scaleX = 1f / (1f - (velocity * .75f).fastCoerceIn(-.18f, .18f))
+                    scaleY = 1f - (velocity * .25f).fastCoerceIn(-.14f, .14f)
                 },
             )
         }
 
-        // 1. Visible gray track and labels. The exported duplicate mirrors its tap targets.
+        // 1. Record the actual track independently from both label planes.
+        Box(
+            Modifier.fillMaxSize()
+                .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop) else Modifier)
+                .clip(Capsule())
+                .background(trackColor),
+        )
         Row(
             Modifier
                 .fillMaxSize()
                 .clip(Capsule())
-                .background(trackColor)
                 .drawBehind {
                     if (appearance.reduceTransparency && selectedIndex >= 0) {
                         val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
                         val pillHeight = indicatorHeight.toPx()
                         drawRoundRect(
-                            color = if (isLight) Color.White else Color(0xFF636366),
+                            color = indicatorColor,
                             topLeft = Offset(trackPaddingPx + visualIndex * tabWidthPx, trackPaddingPx),
-                            size = Size(tabWidthPx.fastRoundToInt().toFloat(), pillHeight),
+                            size = Size(indicatorWidthPx, pillHeight),
                             cornerRadius = CornerRadius(pillHeight / 2f),
                         )
                     }
                 }
-                .then(segmentedHighlightModifier)
-                .padding(2.dp),
+                .padding(vertical = 2.dp),
         ) {
             SegmentedTabContent(
                 items = items,
                 selectedIndex = selectedIndex,
-                onSelected = onSelected,
+                onSelected = onUserSelected,
                 enabled = enabled,
                 itemContent = itemContent,
             )
         }
 
-        // 2. Keep the unscaled source at the inner height so the refractive band can
-        // cross its edge. Labels stay aligned with the visible row's 2dp padding.
+        // 2. Keep the original labels in a separate, unfiltered portal recording.
         if (appearance.usesBackdrop) Row(
             Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth()
-                .height(indicatorHeight)
+                .height(height)
                 .clearAndSetSemantics { }
                 .alpha(0f)
                 .layerBackdrop(tabsBackdrop)
-                .clip(Capsule())
-                .background(trackColor)
-                .then(hiddenGlassModifier)
-                .then(segmentedHighlightModifier)
-                .padding(horizontal = 2.dp),
+                .padding(vertical = 2.dp),
         ) {
             SegmentedTabContent(
                 items = items,
                 selectedIndex = selectedIndex,
-                onSelected = onSelected,
-                enabled = enabled,
+                onSelected = onUserSelected,
+                enabled = false,
                 itemContent = itemContent,
             )
         }
@@ -800,7 +705,7 @@ fun <T> GlasmioSegmentedControl(
                 .height(indicatorHeight)
                 .clearAndSetSemantics { }
                 .layout { measurable, constraints ->
-                    val width = tabWidthPx.fastRoundToInt()
+                    val width = indicatorWidthPx.fastRoundToInt()
                     val placeable = measurable.measure(
                         constraints.copy(minWidth = width, maxWidth = width),
                     )
@@ -810,53 +715,14 @@ fun <T> GlasmioSegmentedControl(
             Box(
                 Modifier
                     .fillMaxSize()
-                    .layout { measurable, constraints ->
-                        val restingSize = Size(constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat())
-                        val visualSize = if (appearance.usesBackdrop) {
-                            segmentedIndicatorSize(
-                                restingSize, animation.scaleX, animation.scaleY,
-                                animation.velocity / 10f, SegmentedIndicatorHorizontalExpansion.toPx(),
-                            )
-                        } else restingSize
-                        val width = visualSize.width.fastRoundToInt().coerceAtLeast(1)
-                        val height = visualSize.height.fastRoundToInt().coerceAtLeast(1)
-                        val placeable = measurable.measure(Constraints.fixed(width, height))
-                        layout(constraints.maxWidth, constraints.maxHeight) {
-                            placeable.place((constraints.maxWidth - width) / 2, (constraints.maxHeight - height) / 2)
-                        }
-                    }
+                    .nativeControlLensGeometry(
+                        NativeControlLensStyle.SegmentedIndicator,
+                        horizontalProgress = {
+                            if (appearance.usesRefraction) animation.pressProgress else 0f
+                        },
+                    )
                     .then(indicatorGlassModifier),
-            ) {
-                if (itemContent != null && appearance.usesBackdrop) {
-                    // The opaque resting fill covers its optical source. Restore the same
-                    // fixed-track content here, then yield to the source as refraction appears.
-                    Row(
-                        Modifier
-                            .fillMaxSize()
-                            .clip(Capsule())
-                            .graphicsLayer { alpha = 1f - animation.pressProgress }
-                            .layout { measurable, constraints ->
-                                val width = contentWidthPx.fastRoundToInt().coerceAtLeast(1)
-                                val placeable = measurable.measure(
-                                    constraints.copy(minWidth = width, maxWidth = width),
-                                )
-                                layout(constraints.maxWidth, constraints.maxHeight) {
-                                    val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
-                                    val left = (constraints.maxWidth - tabWidthPx) / 2f - visualIndex * tabWidthPx
-                                    placeable.place(left.fastRoundToInt(), 0)
-                                }
-                            },
-                    ) {
-                        SegmentedTabContent(
-                            items = items,
-                            selectedIndex = selectedIndex,
-                            onSelected = {},
-                            enabled = false,
-                            itemContent = itemContent,
-                        )
-                    }
-                }
-            }
+            )
         }
     }
 }
@@ -890,9 +756,9 @@ private fun <T> androidx.compose.foundation.layout.RowScope.SegmentedTabContent(
         ) {
             if (itemContent == null) Text(
                 label,
-                style = IosTypography.caption,
+                style = IosTypography.caption.copy(fontSize = 13.sp, lineHeight = 15.513672.sp),
                 color = colors.content,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
                 maxLines = 1,
             ) else CompositionLocalProvider(
                 LocalContentColor provides colors.content,

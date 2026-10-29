@@ -10,12 +10,11 @@ import androidx.compose.ui.unit.dp
 internal data class NavigationGlassFill(val color: Color, val blendMode: BlendMode)
 
 /**
- * Ordered paint and spatial parameters from Apple's iOS 27 native GLASS materials.
+ * Semantic material names and measured iOS 27 optical defaults.
  *
- * The source effects use refraction 0.7, depth 30, light angle 0, dispersion 0.2 and splay 0.2.
- * Their native optical units are not mapped to Backdrop lens units here; the calibrated shared
- * Navigation lens remains 10/24 dp. Regular light intensity is 0.25; Clear uses 0.4.
- * Frost radii are spatial design units, converted to pixels by the rendering host's density.
+ * Runtime UIKit uses a 5 pt regular frost and a separate, much clearer 0.75 pt control recipe.
+ * Refraction follows the measured geometry profile unless a caller provides explicit values.
+ * The retained ordered fills below document the design fallback, not the native face pipeline.
  */
 enum class NavigationGlassMaterial(
     val frostRadius: Dp,
@@ -24,10 +23,10 @@ enum class NavigationGlassMaterial(
     val darkShadowAlpha: Float,
     val nativeLightIntensity: Float,
 ) {
-    RegularSmall(6.dp, 15.dp, 0.02f, 0.04f, 0.25f),
-    RegularMedium(16.dp, 48.dp, 0.25f, 0.45f, 0.25f),
-    RegularLarge(16.dp, 48.dp, 0.25f, 0.45f, 0.25f),
-    Clear(6.dp, 15.dp, 0.02f, 0.02f, 0.4f);
+    RegularSmall(5.dp, 4.dp, 0.04f, 0.04f, 0.25f),
+    RegularMedium(5.dp, 24.dp, 0.6f, 0.6f, 0.25f),
+    RegularLarge(5.dp, 24.dp, 0.6f, 0.6f, 0.25f),
+    Clear(.75.dp, 0.dp, 0f, 0f, 0.4f);
 
     val shadowOffsetY: Dp get() = 8.dp
 

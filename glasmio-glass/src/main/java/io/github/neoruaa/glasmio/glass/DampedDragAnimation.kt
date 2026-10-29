@@ -18,11 +18,15 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 class DampedDragAnimation(
     private val animationScope: CoroutineScope,
@@ -39,18 +43,39 @@ class DampedDragAnimation(
     private val dragCoordinateSpace: (() -> LayoutCoordinates?)? = null,
     sharedValueAnimation: Animatable<Float, AnimationVector1D>? = null,
     horizontalDragOnly: Boolean = false,
+    private val lensStyle: NativeControlLensStyle? = null,
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) {
 
     private val valueAnimationSpec =
         spring(1f, 1000f, visibilityThreshold)
     private val velocityAnimationSpec =
         spring(0.5f, 300f, visibilityThreshold * 10f)
-    private val pressProgressAnimationSpec =
-        spring(1f, 1000f, 0.001f)
+    // UIKit's lens spec supplies distinct lift/unlift springs for its small variant.
+    private val nativeLiftSpec = lensStyle?.let {
+        when (it) {
+            NativeControlLensStyle.SwitchThumb, NativeControlLensStyle.SliderThumb ->
+                spring(.625f, 541.54208f, .001f)
+            NativeControlLensStyle.SegmentedIndicator, NativeControlLensStyle.TabBarIndicator ->
+                spring(1f, 631.65468f, .001f)
+        }
+    }
+    private val nativeUnliftSpec = lensStyle?.let {
+        when (it) {
+            NativeControlLensStyle.SwitchThumb, NativeControlLensStyle.SliderThumb ->
+                spring(.7f, 157.91367f, .001f)
+            NativeControlLensStyle.SegmentedIndicator, NativeControlLensStyle.TabBarIndicator ->
+                spring(1f, 631.65468f, .001f)
+        }
+    }
+    private val pressProgressAnimationSpec = nativeLiftSpec ?: spring(1f, 1000f, 0.001f)
+    private val releaseProgressAnimationSpec = nativeUnliftSpec ?: pressProgressAnimationSpec
     private val scaleXAnimationSpec =
-        spring(0.6f, 250f, 0.001f)
+        nativeLiftSpec ?: spring(0.6f, 250f, 0.001f)
     private val scaleYAnimationSpec =
-        spring(0.7f, 250f, 0.001f)
+        nativeLiftSpec ?: spring(0.7f, 250f, 0.001f)
+    private val releaseScaleXAnimationSpec = nativeUnliftSpec ?: scaleXAnimationSpec
+    private val releaseScaleYAnimationSpec = nativeUnliftSpec ?: scaleYAnimationSpec
 
     private val valueAnimation =
         sharedValueAnimation ?: Animatable(initialValue, visibilityThreshold)
@@ -67,6 +92,9 @@ class DampedDragAnimation(
         Animatable(initialScale, 0.001f)
 
     private val mutatorMutex = MutatorMutex()
+    private var nativeRelease: Job? = null
+    private var nativeLiftStarted: TimeMark? = null
+    private var nativeWantsLifted = false
 
     private val velocityTracker = VelocityTracker()
 
@@ -115,6 +143,12 @@ class DampedDragAnimation(
         }
 
     fun press() {
+        if (lensStyle != null) {
+            nativeRelease?.cancel()
+            nativeRelease = null
+            if (!nativeWantsLifted) nativeLiftStarted = timeSource.markNow()
+            nativeWantsLifted = true
+        }
         velocityTracker.resetTracking()
         animationScope.launch {
             launch { pressProgressAnimation.animateTo(1f, pressProgressAnimationSpec) }
@@ -124,18 +158,29 @@ class DampedDragAnimation(
     }
 
     fun release() {
-        animationScope.launch {
-            withFrameNanos { }
-            if (value != targetValue) {
-                val threshold = (valueRange.endInclusive - valueRange.start) * 0.025f
-                snapshotFlow { valueAnimation.value }
-                    .filter { abs(it - targetValue) < threshold }
-                    .first()
+        if (lensStyle != null) nativeRelease?.cancel()
+        val liftStarted = nativeLiftStarted
+        val operation = animationScope.launch {
+            if (lensStyle == null) {
+                withFrameNanos { }
+                if (value != targetValue) {
+                    val threshold = (valueRange.endInclusive - valueRange.start) * 0.025f
+                    snapshotFlow { valueAnimation.value }
+                        .filter { abs(it - targetValue) < threshold }
+                        .first()
+                }
+            } else {
+                // UIKit's hang time is a minimum lifted lifetime, not a post-up delay.
+                while (liftStarted != null && liftStarted.elapsedNow() < 220.milliseconds) {
+                    withFrameNanos { }
+                }
+                nativeWantsLifted = false
             }
-            launch { pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec) }
-            launch { scaleXAnimation.animateTo(initialScale, scaleXAnimationSpec) }
-            launch { scaleYAnimation.animateTo(initialScale, scaleYAnimationSpec) }
+            launch { pressProgressAnimation.animateTo(0f, releaseProgressAnimationSpec) }
+            launch { scaleXAnimation.animateTo(initialScale, releaseScaleXAnimationSpec) }
+            launch { scaleYAnimation.animateTo(initialScale, releaseScaleYAnimationSpec) }
         }
+        if (lensStyle != null) nativeRelease = operation
     }
 
     fun updateValue(value: Float) {

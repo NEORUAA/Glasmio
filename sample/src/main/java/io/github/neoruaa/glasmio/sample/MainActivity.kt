@@ -14,7 +14,6 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
@@ -24,6 +23,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -46,21 +46,25 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalFontFamilyResolver
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -77,11 +81,9 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.zIndex
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
 import androidx.core.view.WindowCompat
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.scene.Scene
@@ -93,8 +95,9 @@ import io.github.neoruaa.glasmio.scaffold.navigation.iosTransitionSpec
 import io.github.neoruaa.glasmio.scaffold.navigation.iosPopTransitionSpec
 import io.github.neoruaa.glasmio.scaffold.navigation.iosPredictivePopTransitionSpec
 import com.kyant.capsule.ContinuousRoundedRectangle
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
@@ -160,6 +163,10 @@ class MainActivity : ComponentActivity() {
             val systemDark = isSystemInDarkTheme()
             var dark by rememberSaveable { mutableStateOf(systemDark) }
             var reduceTransparency by rememberSaveable { mutableStateOf(false) }
+            LaunchedEffect(reduceTransparency) {
+                withFrameNanos { }
+                io.github.neoruaa.glasmio.glass.render.configureGlassDynamicRange(window, !reduceTransparency)
+            }
             var rtl by rememberSaveable { mutableStateOf(false) }
             val context = LocalContext.current.applicationContext
             val fontResolver = LocalFontFamilyResolver.current
@@ -307,25 +314,16 @@ private fun SampleNavigation(
     }
     var preferenceName by rememberSaveable { mutableStateOf("Glasmio") }
     var preferenceChoice by rememberSaveable { mutableStateOf("System") }
+    var detachTrailingItem by rememberSaveable { mutableStateOf(true) }
     var searchQuery by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
-    var navigationBarVisible by rememberSaveable { mutableStateOf(true) }
+    var searchSourceBounds by remember { mutableStateOf<Rect?>(null) }
     val currentRoute = rememberUpdatedState(backStack.lastOrNull()?.sampleRouteName())
     val searchTransition = rememberGlasmioSearchTransition(currentRoute.value == "Search")
-    val scrollConnection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (currentRoute.value !in topLevelRoutes) return Offset.Zero
-                if (available.y < -10f) navigationBarVisible = false
-                else if (available.y > 10f) navigationBarVisible = true
-                return Offset.Zero
-            }
-        }
-    }
-    val compactProgress = animateFloatAsState(
-        targetValue = if (navigationBarVisible) 0f else 1f,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "CompactBottomNavigation",
+    val navigationScrollState = rememberGlasmioNavigationScrollState(
+        listState = rootListStates[currentRoute.value] ?: homeListState,
+        enabled = currentRoute.value in topLevelRoutes,
     )
+    val compactProgress = navigationScrollState.compactProgress
     val currentDark by rememberUpdatedState(dark)
     val currentOnDark by rememberUpdatedState(onDark)
     val currentReduceTransparency by rememberUpdatedState(reduceTransparency)
@@ -334,6 +332,7 @@ private fun SampleNavigation(
     val currentOnRtl by rememberUpdatedState(onRtl)
     val currentPreferenceName by rememberUpdatedState(preferenceName)
     val currentPreferenceChoice by rememberUpdatedState(preferenceChoice)
+    val currentDetachTrailingItem by rememberUpdatedState(detachTrailingItem)
     val navigate: (String) -> Unit = { route ->
         if (backStack.lastOrNull()?.sampleRouteName() != route) {
             backStack.add(sampleEntryKey(route))
@@ -387,9 +386,10 @@ private fun SampleNavigation(
             cancelLabel = "Cancel",
             backdrop = navigationBackdrop,
             transition = searchTransition,
+            sourceBoundsInWindow = searchSourceBounds,
             results = { padding -> SearchResults(searchQuery.text, padding, navigate) },
         ) {
-            Box(Modifier.fillMaxSize().nestedScroll(scrollConnection)) {
+            Box(Modifier.fillMaxSize().nestedScroll(navigationScrollState.nestedScrollConnection)) {
                 GlasmioNavigationScaffold(
                     motion = headerMotion,
                     header = { entryKey ->
@@ -402,7 +402,7 @@ private fun SampleNavigation(
                             onClick = { currentOnDark(!currentDark) },
                         ) { SfIcon(if (dark) "sun.max" else "moon", null) }
                         GlasmioHeaderSpec(
-                            title = when (route) { "Home" -> "Glasmio"; "MaterialTab" -> "材质"; "SettingsTab" -> "Settings"; "About" -> "关于"; else -> route },
+                            title = when (route) { "Home" -> "Glasmio"; "MaterialTab" -> "Materials"; "SettingsTab" -> "Settings"; "About" -> "About"; else -> route },
                             leading = if (route in topLevelRoutes) emptyList() else listOf(GlasmioHeaderGroup("navigation", listOf(
                                 GlasmioHeaderAction("navigation.back", "chevron.backward", "Back", navigateBack) { SfIcon(SfSymbol.ChevronBack, null, mirrored = true) },
                             ))),
@@ -438,7 +438,9 @@ private fun SampleNavigation(
                                 val wallpaper = route in wallpaperRoutes
                                 GlasmioBackdropHost(
                                     modifier = Modifier.fillMaxSize(),
-                                    sampledContent = { SampleBackdrop(wallpaper) },
+                                    sampledContent = {
+                                        if (route == "Adaptive Glass") AdaptiveGlassBackdrop() else SampleBackdrop(wallpaper)
+                                    },
                                     overlayContent = {
                                         val isTopLevel = route in topLevelRoutes
                                         val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -447,16 +449,18 @@ private fun SampleNavigation(
                                         CompositionLocalProvider(LocalBlurBackdrop provides pageBackdrop) {
                                             Box(Modifier.fillMaxSize()) {
                                                 Box(Modifier.fillMaxSize().glassBackdropSource(pageBackdrop).trackBackdropPosition(pageBackdrop)) {
-                                                    if (route == "Lists") {
+                                                    if (route == "Adaptive Glass") {
+                                                        AdaptiveGlassDemo(bottomPadding)
+                                                    } else if (route == "Lists") {
                                                         ListDemo()
                                                     } else if (route == "Menus") {
                                                         MenusDemo(bottomPadding, currentDark, currentOnDark)
                                                     } else {
                                                         val title = when (route) {
                                                             "Home" -> "Glasmio"
-                                                            "MaterialTab" -> "材质"
+                                                            "MaterialTab" -> "Materials"
                                                             "SettingsTab" -> "Settings"
-                                                            "About" -> "关于"
+                                                            "About" -> "About"
                                                             else -> route
                                                         }
                                                         SamplePinnedPage(
@@ -471,12 +475,13 @@ private fun SampleNavigation(
                                                         ) { layout ->
                                                             when (route) {
                                                                 "Home" -> Catalog(layout, navigate)
-                                                                "MaterialTab", "Materials" -> MaterialsDemo(layout)
+                                                                "MaterialTab", "Materials" -> MaterialsDemo(layout, navigate)
                                                                 "Controls" -> ControlsDemo(layout)
                                                                 "Navigation" -> NavigationDemo(layout)
                                                                 "Preferences", "SettingsTab" -> PreferencesDemo(
                                                                     layout, currentDark, currentOnDark, currentReduceTransparency,
                                                                     currentOnReduceTransparency, currentRtl, currentOnRtl,
+                                                                    currentDetachTrailingItem, { detachTrailingItem = it },
                                                                     currentPreferenceName, { preferenceName = it },
                                                                     currentPreferenceChoice, { preferenceChoice = it },
                                                                 )
@@ -511,17 +516,23 @@ private fun SampleNavigation(
                             selected = activeRoute,
                             onSelected = selectTab,
                             onSearch = { navigate("Search") },
+                            detachTrailingItem = detachTrailingItem,
+                            onItemBoundsChanged = { key, bounds -> if (key == "Search") searchSourceBounds = bounds },
                             modifier = Modifier.align(Alignment.BottomCenter)
                                 .graphicsLayer {
                                     alpha = 1f - searchMorph
                                     val scale = 1f - 0.08f * searchMorph
                                     scaleX = scale
                                     scaleY = scale
-                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 1f)
+                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                                        if (layoutDirection == LayoutDirection.Rtl) 0f else 1f,
+                                        1f,
+                                    )
                                 },
                             backdrop = bottomBackdrop,
                             compactProgress = compactProgress,
-                            onExpand = { navigationBarVisible = true },
+                            scrollHintProgress = navigationScrollState.scrollHintProgress,
+                            onExpand = navigationScrollState::expand,
                         )
                     }
                 }
@@ -636,43 +647,37 @@ private fun SampleBottomBar(
     onSearch: () -> Unit,
     backdrop: Backdrop,
     compactProgress: State<Float>,
+    scrollHintProgress: State<Float>,
     onExpand: () -> Unit,
+    detachTrailingItem: Boolean,
     modifier: Modifier = Modifier,
+    onItemBoundsChanged: ((String, Rect) -> Unit)? = null,
 ) {
     val items = remember(selected) {
         listOf(
-            GlasmioTabItem("Home", "主页", if (selected == "Home") SfSymbol.HouseFilled else SfSymbol.House),
-            GlasmioTabItem("MaterialTab", "材质", SfSymbol.Layers),
-            GlasmioTabItem("SettingsTab", "设置", SfSymbol.Gearshape),
-            GlasmioTabItem("About", "关于", SfSymbol.InfoCircle),
+            GlasmioTabItem("Home", "Home", if (selected == "Home") SfSymbol.HouseFilled else SfSymbol.House),
+            GlasmioTabItem("MaterialTab", "Materials", SfSymbol.Layers),
+            GlasmioTabItem("SettingsTab", "Settings", SfSymbol.Gearshape),
+            GlasmioTabItem("About", "About", SfSymbol.InfoCircle),
         )
     }
-    BottomNavigationContact(
+    GlasmioNavigationBarWithTrailingItem(
+        items = items,
+        trailingItem = GlasmioTabItem("Search", "Search", SfSymbol.Search),
+        selectedKey = selected,
+        onSelected = { key -> if (key == "Search") onSearch() else onSelected(key) },
+        onExpand = onExpand,
+        compactProgress = compactProgress,
+        compactSize = CompactBottomControlSize,
+        detachTrailingItem = detachTrailingItem,
         backdrop = backdrop,
+        onItemBoundsChanged = onItemBoundsChanged,
         modifier = modifier.fillMaxWidth()
             .padding(horizontal = 20.dp)
-            .navigationBarsPadding()
             .padding(bottom = 8.dp)
-            .offset { IntOffset(0, (8.dp * compactProgress.value).roundToPx()) },
-    ) {
-        GlasmioNavigationBar(
-            items = items,
-            selectedKey = selected,
-            onSelected = onSelected,
-            onExpand = onExpand,
-            compactProgress = compactProgress,
-            compactSize = 44.dp,
-            backdrop = backdrop,
-            modifier = Modifier.weight(1f).zIndex(1f),
-        )
-        Spacer(Modifier.size(width = 8.dp, height = 1.dp))
-        GlasmioFloatingSearchButton(
-            compactProgress = compactProgress,
-            onClick = onSearch,
-            contentDescription = "搜索",
-            backdrop = backdrop,
-        )
-    }
+            .glasmioNavigationScrollHint(scrollHintProgress)
+            .navigationBarsPadding(),
+    )
 }
 
 @Composable
@@ -732,11 +737,20 @@ private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) 
 }
 
 @Composable
-private fun MaterialsDemo(layout: SamplePageLayout) {
+private fun MaterialsDemo(layout: SamplePageLayout, onOpen: (String) -> Unit) {
     var separated by rememberSaveable { mutableStateOf(false) }
     var favorite by rememberSaveable { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     DemoList(layout) {
+        item(key = "adaptive-glass") {
+            GlasmioGroupedList {
+                GlasmioListRow(
+                    "Adaptive Glass",
+                    onClick = { onOpen("Adaptive Glass") },
+                    showTopSeparator = false,
+                )
+            }
+        }
         items(NavigationGlassMaterial.entries, key = { it.name }) { material ->
             GlassSurface(
                 modifier = Modifier.fillMaxWidth().height(148.dp),
@@ -763,9 +777,21 @@ private fun MaterialsDemo(layout: SamplePageLayout) {
             }
         }
         item {
+            val switchBackdrop = rememberLayerBackdrop()
+            val switchMaterialBackdrop = rememberCombinedBackdrop(LocalGlassBackdrop.current, switchBackdrop)
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                GlasmioGroupedList {
-                    GlasmioListRow("Separate Actions", showTopSeparator = false, trailing = { GlasmioSwitch(separated, { separated = it }) })
+                Box(Modifier.fillMaxWidth()) {
+                    // Sample the cell material without recording the switch into its own lens.
+                    Box(
+                        Modifier.matchParentSize()
+                            .glassBackdropSource(switchBackdrop)
+                            .glasmioGroupedListBackground(),
+                    )
+                    GlasmioGroupedList(framed = false) {
+                        GlasmioListRow("Separate Actions", showTopSeparator = false, trailing = {
+                            GlasmioSwitch(separated, { separated = it }, backdrop = switchMaterialBackdrop)
+                        })
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     GlasmioToolbarActionGroup(style = if (separated) GlasmioToolbarActionStyle.Separated else GlasmioToolbarActionStyle.Merged) {
@@ -790,6 +816,83 @@ private fun MaterialsDemo(layout: SamplePageLayout) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveGlassBackdrop() {
+    val assets = LocalSampleAssets.current
+    Box(Modifier.fillMaxSize()) {
+        listOf(assets.lightWallpaper, assets.darkWallpaper).forEachIndexed { index, wallpaper ->
+            Image(
+                bitmap = wallpaper,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize().drawWithContent {
+                    val middle = (size.height * .5f).roundToInt().toFloat()
+                    clipRect(
+                        top = if (index == 0) 0f else middle,
+                        bottom = if (index == 0) middle else size.height,
+                    ) { this@drawWithContent.drawContent() }
+                },
+                contentScale = ContentScale.Crop,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveGlassDemo(bottomPadding: Dp) {
+    val entry = LocalSampleHeaderEntry.current
+    val headerScroll = remember { GlasmioHeaderScrollState({ 1f }) }
+    SideEffect { entry.scroll = headerScroll }
+    var horizontalPosition by rememberSaveable { mutableFloatStateOf(.5f) }
+    var verticalPosition by rememberSaveable { mutableFloatStateOf(.5f) }
+    val headerPadding = LocalSampleBodyPadding.current
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .padding(
+                start = IosPageHorizontalPadding,
+                top = headerPadding.calculateTopPadding(),
+                end = IosPageHorizontalPadding,
+                bottom = bottomPadding + 20.dp,
+            ),
+        contentAlignment = AbsoluteAlignment.TopLeft,
+    ) {
+        val width = minOf(180.dp, maxWidth)
+        val height = minOf(132.dp, maxHeight)
+        val density = LocalDensity.current
+        val horizontalTravel = with(density) { (maxWidth - width).toPx().coerceAtLeast(0f) }
+        val verticalTravel = with(density) { (maxHeight - height).toPx().coerceAtLeast(0f) }
+        CompositionLocalProvider(
+            LocalGlassAppearance provides LocalGlassAppearance.current.copy(adaptiveColorScheme = true),
+        ) {
+        GlassSurface(
+            modifier = Modifier
+                .absoluteOffset {
+                    IntOffset(
+                        (horizontalPosition * horizontalTravel).roundToInt(),
+                        (verticalPosition * verticalTravel).roundToInt(),
+                    )
+                }
+                .size(width, height)
+                .testTag("adaptive-glass-block")
+                .swipeBackExcluded()
+                .pointerInput(horizontalTravel, verticalTravel) {
+                    detectDragGestures { change, amount ->
+                        change.consume()
+                        if (horizontalTravel > 0f) {
+                            horizontalPosition = (horizontalPosition + amount.x / horizontalTravel).coerceIn(0f, 1f)
+                        }
+                        if (verticalTravel > 0f) {
+                            verticalPosition = (verticalPosition + amount.y / verticalTravel).coerceIn(0f, 1f)
+                        }
+                    }
+                },
+            shape = ContinuousRoundedRectangle(32.dp),
+            material = NavigationGlassMaterial.RegularMedium,
+        ) {}
         }
     }
 }
@@ -877,7 +980,7 @@ private fun ControlsDemo(layout: SamplePageLayout) {
         item {
             Section("Adaptive Segmented Control") {
                 GlasmioSegmentedControl(
-                    items = listOf(1 to "关闭", 3 to "通透模式", 4 to "自适应", 2 to "降噪"),
+                    items = listOf(1 to "Off", 3 to "Transparency", 4 to "Adaptive", 2 to "Noise Cancellation"),
                     selected = adaptiveMode,
                     onSelected = { selected ->
                         if (selected == 4 && adaptiveMode != 4) groupedAdaptivePosition = .5f
@@ -890,7 +993,7 @@ private fun ControlsDemo(layout: SamplePageLayout) {
                     enabled = enabled,
                     hiddenItems = if (adaptiveMode == 4) setOf(1) else emptySet(),
                     showLabels = true,
-                    adaptiveLabels = listOf("较多噪声", "默认", "较少噪声"),
+                    adaptiveLabels = listOf("More Noise", "Default", "Less Noise"),
                     itemContent = { choice, _ ->
                         val colors = LocalGlassColors.current
                         val resource = when (choice) {
@@ -947,7 +1050,11 @@ private fun ControlsDemo(layout: SamplePageLayout) {
 private fun NavigationDemo(layout: SamplePageLayout) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
     var compact by rememberSaveable { mutableStateOf(false) }
-    val compactProgress = animateFloatAsState(if (compact) 1f else 0f, label = "Navigation compact progress")
+    val compactProgress = animateFloatAsState(
+        targetValue = if (compact) 1f else 0f,
+        animationSpec = spring(dampingRatio = .8f, stiffness = 438.64908f),
+        label = "Navigation compact progress",
+    )
     var style by rememberSaveable { mutableIntStateOf(0) }
     DemoList(layout) {
         item {
@@ -1200,6 +1307,8 @@ private fun PreferencesDemo(
     onReduceTransparency: (Boolean) -> Unit,
     rtl: Boolean,
     onRtl: (Boolean) -> Unit,
+    detachTrailingItem: Boolean,
+    onDetachTrailingItem: (Boolean) -> Unit,
     name: String,
     onNameChange: (String) -> Unit,
     choice: String,
@@ -1219,7 +1328,8 @@ private fun PreferencesDemo(
                 }
                 Section("Preferences") {
                     GlasmioGroupedList {
-                        GlasmioEditTextPreference(title = { Text("Name") }, value = name, onValueChange = onNameChange, showTopSeparator = false)
+                        GlasmioSwitchPreference(title = { Text("Separate Navigation Item") }, checked = detachTrailingItem, onCheckedChange = onDetachTrailingItem, showTopSeparator = false)
+                        GlasmioEditTextPreference(title = { Text("Name") }, value = name, onValueChange = onNameChange, showTopSeparator = true)
                         GlasmioListPreference(title = { Text("Appearance") }, selectedValue = choice, values = listOf("System", "Light", "Dark"), valueText = { it }, onValueSelected = onChoiceChange, showTopSeparator = true)
                         GlasmioSwitchPreference(title = { Text("Disabled Preference") }, checked = true, onCheckedChange = {}, isEnabled = false, showTopSeparator = true)
                     }

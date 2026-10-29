@@ -74,7 +74,10 @@ fun glasmioTypography(fontFamily: FontFamily = FontFamily.Default): Typography {
     )
 }
 
-fun glasmioColorScheme(isDark: Boolean, accent: Color = Color(0xFF0088FF)): ColorScheme {
+fun glasmioColorScheme(
+    isDark: Boolean,
+    accent: Color = if (isDark) Color(0xFF0091FF) else Color(0xFF0088FF),
+): ColorScheme {
     val colors = defaultGlassColors(isDark, accent)
     return if (isDark) darkColorScheme(
         primary = accent, onPrimary = Color.White, background = colors.groupedBackground,

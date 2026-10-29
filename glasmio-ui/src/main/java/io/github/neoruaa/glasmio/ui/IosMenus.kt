@@ -4,6 +4,8 @@ import kotlin.math.roundToInt
 
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.icons.*
 
 import androidx.compose.animation.core.Animatable
@@ -79,12 +81,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.shadow.Shadow
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.effects.blur
+import io.github.neoruaa.glasmio.glass.render.shadow.Shadow
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -131,10 +133,11 @@ private class IosPopupPositionProvider(
     private val visualHostWidthPx: Int,
     private val visualHostHeightPx: Int,
     private val anchorOvershootVerticalPx: Int,
+    initialOpensAbove: Boolean? = null,
     private val onAnchorOriginResolved: (Float) -> Unit,
     private val onDirectionResolved: (opensAbove: Boolean) -> Unit,
 ) : PopupPositionProvider {
-    private var opensAbove: Boolean? = null
+    private var opensAbove: Boolean? = initialOpensAbove
 
     override fun calculatePosition(
         anchorBounds: IntRect,
@@ -225,8 +228,10 @@ fun GlasmioContextMenu(
     morphSourceMaterial: NavigationGlassMaterial? = null,
     morphSourceFrostRadius: androidx.compose.ui.unit.Dp? = null,
     morphSourceMaterialPaint: (androidx.compose.ui.graphics.drawscope.DrawScope.(Float) -> Unit)? = null,
+    morphSourceMaterialEffect: ((Float) -> android.graphics.RenderEffect)? = null,
     morphSourceUsesShadowLift: Boolean = true,
     morphSourceUsesInnerShadows: Boolean = true,
+    morphSourceNativeMaterial: GlassMaterialSource? = null,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     if (!visible) return
@@ -271,8 +276,8 @@ fun GlasmioContextMenu(
     } else {
         emptyBackdrop()
     }
-    val colors = LocalGlassColors.current
-    val isLight = !colors.isDark
+    val materialContext = rememberGlassMaterialContext(inheritLuminance = false)
+    val colors = materialContext.colors
     val menuLayerBlock: GraphicsLayerScope.() -> Unit = {
         val resolvedMenuScale = menuScale()
         transformOrigin = startOrigin
@@ -362,8 +367,11 @@ fun GlasmioContextMenu(
                         sourceMaterial = morphSourceMaterial,
                         sourceFrostRadius = morphSourceFrostRadius,
                         sourceMaterialPaint = morphSourceMaterialPaint,
+                        sourceMaterialEffect = morphSourceMaterialEffect,
                         sourceUsesShadowLift = morphSourceUsesShadowLift,
                         sourceUsesInnerShadows = morphSourceUsesInnerShadows,
+                        sourceNativeMaterial = morphSourceNativeMaterial,
+                        materialContext = materialContext,
                         shaderPrograms = morphShaderPrograms,
                         menuScale = menuScale,
                         transformOrigin = startOrigin,
@@ -381,6 +389,7 @@ fun GlasmioContextMenu(
                             navigationMaterial = true,
                             innerShadows = innerShadows,
                             isDark = colors.isDark,
+                            materialContext = materialContext,
                             blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
                             appearance = appearance,
                             material = NavigationGlassMaterial.RegularMedium,
@@ -396,7 +405,9 @@ fun GlasmioContextMenu(
                         .padding(10.dp)
                         .graphicsLayer { alpha = contentAlpha.coerceIn(0f, 1f) },
                 ) {
-                    retainedContent(this, childBackdrop)
+                    ProvideGlassMaterialContext(materialContext) {
+                        retainedContent(this, childBackdrop)
+                    }
                 }
             }
         }
@@ -506,6 +517,8 @@ fun GlasmioMenu(
                     )
                 }
                 // Reopening during collapse retains the live contour and every velocity.
+                // Its content may have changed while the source lease remained acquired.
+                liquidMotion.updateTarget(requireNotNull(measuredMorphTarget), with(density) { 34.dp.toPx() })
             }
             coroutineScope {
                 if (morphSourceBounds != null) launch {
@@ -565,6 +578,16 @@ fun GlasmioMenu(
                         )
                     }
                 }
+        }
+    }
+
+    // The live content can change its measured destination while the opening is still running.
+    // Geometry follows that size without restarting the native optical timeline or source lease.
+    LaunchedEffect(measuredMorphTarget, popupAlive, usesMorph, expanded) {
+        if (popupAlive && usesMorph && expanded && liquidMotion.initialized) {
+            measuredMorphTarget?.let { target ->
+                liquidMotion.animateToTarget(target, with(density) { 34.dp.toPx() })
+            }
         }
     }
 
@@ -663,6 +686,8 @@ fun GlasmioMenu(
                     anchorOvershootVerticalPx = with(density) {
                         PopupMenuOvershootMarginVertical.roundToPx()
                     },
+                    // Resizing an open menu changes its target without changing its opening edge.
+                    initialOpensAbove = opensAbove.takeIf { surfaceReady },
                     onAnchorOriginResolved = { anchorFractionX = it },
                 ) { resolved ->
                     opensAbove = resolved
@@ -761,11 +786,13 @@ fun GlasmioMenu(
                             morphSourceMaterial = sourceAnchor.sourceMaterial,
                             morphSourceFrostRadius = sourceAnchor.sourceFrostRadius,
                             morphSourceMaterialPaint = sourceAnchor.sourceMaterialPaint,
+                            morphSourceMaterialEffect = sourceAnchor.sourceMaterialEffect,
                             morphSourceUsesShadowLift = sourceAnchor.sourceUsesShadowLift,
                             morphSourceUsesInnerShadows = sourceAnchor.sourceUsesInnerShadows,
+                            morphSourceNativeMaterial = sourceAnchor.sourceNativeMaterial,
                             morphShaderPrograms = sourceAnchor.shaderPrograms,
                             onMorphReady = { target ->
-                                if (usesMorph && !surfaceReady) measuredMorphTarget = target
+                                if (usesMorph) measuredMorphTarget = target
                                 surfaceReady = true
                             },
                         ) { childBackdrop ->

@@ -15,6 +15,8 @@ import androidx.compose.ui.text.font.FontFamily
 data class GlassAppearance(
     val liquidGlassEnabled: Boolean = true,
     val reduceTransparency: Boolean = false,
+    /** Resolve an individual glass surface from its sampled backdrop, with hysteresis. */
+    val adaptiveColorScheme: Boolean = false,
 ) {
     val usesRefraction: Boolean
         get() = liquidGlassEnabled && !reduceTransparency

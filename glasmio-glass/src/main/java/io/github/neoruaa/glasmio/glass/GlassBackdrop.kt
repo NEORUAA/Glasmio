@@ -35,10 +35,10 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import java.util.WeakHashMap
 import kotlin.math.ceil
 
@@ -130,6 +130,8 @@ class CrossWindowBackdrop(
 
     override val isCoordinatesDependent: Boolean get() = true
 
+    override fun observeSourceChanges(observer: () -> Unit): () -> Unit = source.observeSourceChanges(observer)
+
     override fun DrawScope.drawBackdrop(
         density: Density,
         coordinates: LayoutCoordinates?,
@@ -214,6 +216,8 @@ private class StationaryBackdrop(
     private val inverseLayer = Matrix()
 
     override val isCoordinatesDependent: Boolean get() = true
+
+    override fun observeSourceChanges(observer: () -> Unit): () -> Unit = source.observeSourceChanges(observer)
 
     override fun DrawScope.drawBackdrop(
         density: Density,
@@ -306,6 +310,13 @@ private class SharedGlassBackdrop(
         captureHeight = BottomCaptureHeight)
 
     override val isCoordinatesDependent: Boolean get() = true
+
+    override fun observeSourceChanges(observer: () -> Unit): () -> Unit {
+        if (base === source) return source.observeSourceChanges(observer)
+        val baseObservation = base.observeSourceChanges(observer)
+        val sourceObservation = source.observeSourceChanges(observer)
+        return { baseObservation(); sourceObservation() }
+    }
 
     private fun sample(density: Density, coordinates: LayoutCoordinates?, top: Float): Backdrop {
         val recorded = backdropSourcePositions[source]

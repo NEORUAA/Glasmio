@@ -4,6 +4,7 @@ import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
 
 import android.graphics.RenderEffect
+import android.os.Build
 import android.graphics.RuntimeShader
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
@@ -46,10 +47,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.ceil
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.GlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 
 /** Draw the moving contour at its physical dimensions, with one material and one portal. */
@@ -70,24 +75,36 @@ fun LiquidMenuMorphSurface(
     sourceMaterialPaint: (DrawScope.(Float) -> Unit)? = null,
     sourceUsesShadowLift: Boolean = true,
     sourceUsesInnerShadows: Boolean = true,
+    sourceMaterialEffect: ((Float) -> RenderEffect)? = null,
+    materialContext: GlassMaterialContext? = null,
+    sourceNativeMaterial: GlassMaterialSource? = null,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     val localDensity = LocalDensity.current
-    val colors = LocalGlassColors.current
+    val context = materialContext ?: rememberGlassMaterialContext()
+    val colors = context.colors
     val appearance = LocalGlassAppearance.current
+    val standardSourceMaterial = remember(sourceHasGlassBackground, sourceMaterial, sourceMaterialPaint,
+        sourceMaterialEffect, context.darkFraction) {
+        if (sourceHasGlassBackground && sourceMaterialPaint == null && sourceMaterialEffect == null)
+            GlassMaterialSource(NavigationMaterialRecipe.resolve(context.darkFraction, sourceMaterial)) else null
+    }
     val source = rememberCrossWindowBackdrop(backdrop)
     val renderer = rememberGlassMorphRenderer(
         source, active = true, blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
-        programs = shaderPrograms, materialPreset = NavigationGlassMaterial.RegularMedium, isDark = colors.isDark,
+        programs = shaderPrograms, materialPreset = NavigationGlassMaterial.RegularMedium, isDark = context.isDark,
+        darkFraction = context.darkFraction,
     )
-    val sourceShadow = remember(sourceMaterial, colors.isDark) {
+    val sourceShadow = remember(sourceMaterial, context.isDark) {
         NavigationDropShadowRenderer(
             renderScale = 1f,
             shadowRadius = sourceMaterial?.shadowRadius ?: 15.dp,
             shadowOffsetY = sourceMaterial?.shadowOffsetY ?: 8.dp,
             shadowAlpha = sourceMaterial?.let {
-                if (colors.isDark) it.darkShadowAlpha else it.lightShadowAlpha
+                if (context.isDark) it.darkShadowAlpha else it.lightShadowAlpha
             } ?: 0.02f,
+            useNativeProfile = true,
+            nativeMaterial = sourceMaterial,
         )
     }
     DisposableEffect(sourceShadow) {
@@ -109,6 +126,21 @@ fun LiquidMenuMorphSurface(
     val sourceContents = rememberGraphicsLayer()
     val materialOpacity = rememberGraphicsLayer()
     val drawCache = remember(motion) { LiquidMenuDrawCache() }
+    val luminanceModifier = remember(source, context.luminanceState, motion, screenOrigin, sourceHasGlassBackground) {
+        val luminance = context.luminanceState
+        if (luminance != null) Modifier.sampleBackdropLuminance(
+            backdrop = source, luminanceState = luminance,
+            sampleBounds = {
+                val frame = motion.frame
+                val outgoing = frame.sourceLobe?.takeIf { sourceHasGlassBackground }
+                val bounds = outgoing?.let {
+                    Rect(minOf(frame.bounds.left, it.left), minOf(frame.bounds.top, it.top),
+                        maxOf(frame.bounds.right, it.right), maxOf(frame.bounds.bottom, it.bottom))
+                } ?: frame.bounds
+                bounds.translate(-screenOrigin)
+            },
+        ) else Modifier
+    }
     val menuLayerBlock: GraphicsLayerScope.() -> Unit = {
         this.transformOrigin = transformOrigin
         applyGlassDragScale(highlight.pressProgress, highlight.offset)
@@ -146,15 +178,19 @@ fun LiquidMenuMorphSurface(
     Box(
         Modifier.fillMaxSize()
             .onGloballyPositioned { coordinates = it }
+            .then(luminanceModifier)
             .graphicsLayer(menuLayerBlock)
             .then(highlight.gestureModifier)
             .then(if (exportChildBackdrop) Modifier.layerBackdrop(childBackdrop).trackBackdropPosition(childBackdrop) else Modifier)
             .drawWithContent {
                 val host = coordinates ?: return@drawWithContent
                 val frame = motion.frame
+                val sourceExtent = motion.sourceBounds.size.minDimension
+                val knownSourceMaterial = sourceNativeMaterial ?: standardSourceMaterial?.takeIf { sourceExtent > 0f }
+                    ?.forSize(sourceExtent / density)
                 renderer.updateBlurRadius(
                     if (sourceHasGlassBackground) {
-                        val sourceFrost = sourceFrostRadius ?: sourceMaterial?.frostRadius ?: 2.dp
+                        val sourceFrost = sourceFrostRadius ?: sourceMaterial?.frostRadius ?: 5.dp
                         sourceFrost + (NavigationGlassMaterial.RegularMedium.frostRadius - sourceFrost) * frame.contentProgress
                     } else NavigationGlassMaterial.RegularMedium.frostRadius,
                 )
@@ -211,10 +247,19 @@ fun LiquidMenuMorphSurface(
                     maxOf(required.right, previousCapture.right), maxOf(required.bottom, previousCapture.bottom),
                 ) else previousCapture
                 drawCache.viewport = capture
-                if (sourceHasGlassBackground && frame.contentProgress < 1f) {
-                    sourceShadow.draw(this, shape, bounds, alpha = 1f - frame.contentProgress)
+                if (sourceHasGlassBackground && knownSourceMaterial == null && frame.contentProgress < 1f && outgoing != null) {
+                    val sourceShape = LiquidMenuContour(Rect(Offset.Zero, outgoing.size),
+                        Offset(frame.sourceRadiusX, frame.sourceRadiusY), null, Offset.Zero, 0f)
+                    sourceShadow.draw(this, sourceShape, outgoing, alpha = 1f - frame.contentProgress)
                 }
                 fun DrawScope.drawMaterial() {
+                    val glowPosition = highlight.highlightPosition(size)
+                    val retainedMaterialEffect = if (knownSourceMaterial == null && Build.VERSION.SDK_INT < 36 && sourceHasGlassBackground &&
+                        sourceMaterialEffect != null && appearance.usesBackdrop) {
+                        val sourceEffect = sourceMaterialEffect(1f - frame.contentProgress)
+                        val targetEffect = renderer.materialEffect(context.isDark, frame.contentProgress)
+                        RenderEffect.createChainEffect(targetEffect, sourceEffect)
+                    } else null
                     renderer.draw(
                         scope = this,
                         coordinates = host,
@@ -231,14 +276,30 @@ fun LiquidMenuMorphSurface(
                         shape = shape,
                         outlinePath = path,
                         tint = colors.container,
-                        highlightAlpha = 0.5f * (0.54f + 0.38f * highlight.pressProgress),
+                        highlightAlpha = 1f,
                         refractionHeight = frame.lensHeight.toDp(),
                         refractionAmount = (-frame.lensAmount).toDp(),
+                        additionalOptics = true,
                         navigationMaterial = true,
                         shadowLiftProgress = if (sourceHasGlassBackground && !sourceUsesShadowLift) frame.contentProgress else 1f,
                         innerShadowProgress = if (sourceHasGlassBackground && !sourceUsesInnerShadows) frame.contentProgress else 1f,
-                        dropShadowAlpha = if (sourceHasGlassBackground) frame.contentProgress else 1f,
-                        materialPaint = if (sourceHasGlassBackground) {
+                        sourceFilterMaterial = sourceMaterial,
+                        sourceFilterProgress = frame.contentProgress.takeIf { sourceHasGlassBackground },
+                        sourceNativeMaterial = knownSourceMaterial.takeIf { sourceHasGlassBackground },
+                        pressHighlight = GlassPressHighlight(
+                            highlight.pressProgress,
+                            Offset((glowPosition.x - incoming.left) / incoming.width,
+                                (glowPosition.y - incoming.top) / incoming.height),
+                            highlight.glowProgress, highlight.dissipationProgress,
+                        ),
+                        pressHighlightBounds = incoming,
+                        pressTint = highlight.materialTint,
+                        pressClear = highlight.materialClear,
+                        pressIsDark = context.isDark,
+                        dropShadowAlpha = if (sourceHasGlassBackground) frame.contentProgress
+                            else if (frame.contentProgress < 1f) 0f else 1f,
+                        materialEffect = retainedMaterialEffect,
+                        materialPaint = if (retainedMaterialEffect != null) null else if (sourceHasGlassBackground) {
                             {
                                 // Weight each original fill on the same sampled backing so
                                 // non-SrcOver blend modes retain their native destination.
@@ -246,10 +307,7 @@ fun LiquidMenuMorphSurface(
                                 if (sourceAlpha > 0f) {
                                     if (sourceMaterialPaint != null) sourceMaterialPaint(sourceAlpha)
                                     else if (appearance.usesBackdrop) {
-                                        drawNavigationGlassMaterial(
-                                            colors.container, colors.isDark,
-                                            material = sourceMaterial, alpha = sourceAlpha,
-                                        )
+                                        renderer.paintMaterial(this, context.isDark, sourceMaterial, sourceAlpha)
                                     } else {
                                         drawRect(
                                             colors.container.copy(alpha = if (appearance.reduceTransparency) 1f
@@ -260,10 +318,7 @@ fun LiquidMenuMorphSurface(
                                 }
                                 if (frame.contentProgress > 0f) {
                                     if (appearance.usesBackdrop) {
-                                        drawNavigationGlassMaterial(
-                                            colors.container, colors.isDark,
-                                            material = NavigationGlassMaterial.RegularMedium, alpha = frame.contentProgress,
-                                        )
+                                        renderer.paintMaterial(this, context.isDark, NavigationGlassMaterial.RegularMedium, frame.contentProgress)
                                     } else {
                                         drawRect(
                                             colors.container.copy(alpha = if (appearance.reduceTransparency) 1f
@@ -274,13 +329,14 @@ fun LiquidMenuMorphSurface(
                                 }
                             }
                         } else null,
-                        isDark = colors.isDark,
+                        isDark = context.isDark,
                         sampleScale = sampleScale,
                     )
                 }
                 if (!sourceHasGlassBackground && frame.contentProgress < 1f) {
-                    // A saveLayer on the menu-sized RenderNode inherits its recording clip.
-                    // Give native material opacity its complete moving shadow domain instead.
+                    // Fade the plain menu as one material group; opaque completion owns
+                    // its final shadow without retaining an extra full-opacity layer.
+                    renderer.drawDropShadow(this, shape, bounds, frame.contentProgress)
                     val preset = NavigationGlassMaterial.RegularMedium
                     val shadowPadding = ceil(preset.shadowRadius.toPx() * 1.5f) + 1.dp.toPx()
                     val shadowOffset = preset.shadowOffsetY.toPx()
@@ -401,7 +457,9 @@ fun LiquidMenuMorphSurface(
                         .asComposeRenderEffect()
                 } else null
             }.padding(10.dp),
-        ) { content(childBackdrop) }
+        ) {
+            ProvideGlassMaterialContext(context) { content(childBackdrop) }
+        }
     }
 }
 

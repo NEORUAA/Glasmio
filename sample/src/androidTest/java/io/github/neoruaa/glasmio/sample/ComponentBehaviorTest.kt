@@ -8,6 +8,7 @@ import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -53,6 +54,8 @@ import io.github.neoruaa.glasmio.glass.GlassEmphasis
 import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
 import io.github.neoruaa.glasmio.scaffold.rememberGlasmioHeaderScrollEdge
+import io.github.neoruaa.glasmio.scaffold.GlasmioNavigationBarWithTrailingItem
+import io.github.neoruaa.glasmio.icons.SfSymbol
 import io.github.neoruaa.glasmio.ui.*
 import io.github.neoruaa.glasmio.preference.GlasmioEditTextPreference
 import io.github.neoruaa.glasmio.preference.GlasmioListPreference
@@ -152,6 +155,88 @@ class ComponentBehaviorTest {
         val copy = editingAction("Copy", android.R.string.copy)
         rule.waitUntil(10_000) { rule.onAllNodes(copy).fetchSemanticsNodes().isNotEmpty() }
         return layouts.single()
+    }
+
+    @Test fun arbitraryTrailingNavigationKeepsSelectionAcrossStylesAndCompactStates() {
+        var selected by mutableStateOf("home")
+        var detached by mutableStateOf(true)
+        var direction by mutableStateOf(LayoutDirection.Ltr)
+        val compact = mutableFloatStateOf(0f)
+        var selections = 0
+        val items = listOf(
+            GlasmioTabItem("home", "Home", SfSymbol.House),
+            GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList),
+            GlasmioTabItem("favorites", "Favorites", SfSymbol.Heart),
+            GlasmioTabItem("settings", "Settings", SfSymbol.Gearshape),
+        )
+        // A normal page item exercises the generic contract independently of search.
+        val about = GlasmioTabItem("about", "About", SfSymbol.Heart)
+        content {
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                Text("page:$selected")
+                GlasmioNavigationBarWithTrailingItem(
+                    items = items,
+                    trailingItem = about,
+                    selectedKey = selected,
+                    onSelected = { selected = it; selections++ },
+                    onExpand = { compact.floatValue = 0f },
+                    compactProgress = compact,
+                    detachTrailingItem = detached,
+                    modifier = Modifier.fillMaxWidth().testTag("generic-navigation"),
+                )
+            }
+        }
+        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        for (layoutDirection in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+            rule.runOnIdle {
+                direction = layoutDirection
+                detached = true
+                compact.floatValue = 0f
+                selected = "home"
+                selections = 0
+            }
+            rule.onAllNodesWithText("About").assertCountEquals(0)
+            rule.onNode(tab and hasContentDescription("About")).assertIsNotSelected().performClick()
+            rule.onNodeWithText("page:about").assertIsDisplayed()
+            rule.onNode(tab and hasContentDescription("About")).assertIsSelected()
+            rule.onNode(tab and hasContentDescription("Home")).assertIsNotSelected()
+            rule.runOnIdle { assertEquals(1, selections) }
+
+            for (separate in listOf(false, true)) {
+                rule.runOnIdle { detached = separate }
+                rule.onNode(tab and hasContentDescription("About")).assertIsSelected()
+                rule.onNode(tab and hasContentDescription("Home")).assertIsNotSelected()
+                rule.onNodeWithText("page:about").assertIsDisplayed()
+                if (separate) rule.onAllNodesWithText("About").assertCountEquals(0)
+                else {
+                    val labels = rule.onAllNodesWithText("About").fetchSemanticsNodes()
+                    assertEquals("Integrated navigation must expose one label:\n" +
+                        rule.onRoot(useUnmergedTree = true).printToString(maxDepth = 12), 1, labels.size)
+                    rule.onNodeWithText("About").assertIsDisplayed()
+                }
+                rule.runOnIdle { assertEquals("Changing style must not select another route", 1, selections) }
+
+                rule.runOnIdle { compact.floatValue = 1f }
+                val expansionAnchor = if (separate) "Home" else "About"
+                rule.onNode(tab and hasContentDescription(expansionAnchor)).performClick()
+                rule.runOnIdle {
+                    assertEquals(0f, compact.floatValue, 0f)
+                    assertEquals("about", selected)
+                    assertEquals("Expanding navigation must keep the current page", 1, selections)
+                }
+            }
+
+            // Main-item pointer input must remain reachable beneath the decorative lens source.
+            rule.onNode(tab and hasContentDescription("Home")).performClick()
+            rule.onNodeWithText("page:home").assertIsDisplayed()
+            rule.onNode(tab and hasContentDescription("Home")).assertIsSelected()
+            rule.runOnIdle { assertEquals(2, selections) }
+            rule.onNode(tab and hasContentDescription("Library")).performClick()
+            rule.onNodeWithText("page:library").assertIsDisplayed()
+            rule.onNode(tab and hasContentDescription("Library")).assertIsSelected()
+            rule.onNode(tab and hasContentDescription("Home")).assertIsNotSelected()
+            rule.runOnIdle { assertEquals(3, selections) }
+        }
     }
 
     @Test fun selectionMenuCopiesCutsAndPastesThroughTheRealClipboard() {
@@ -922,6 +1007,109 @@ class ComponentBehaviorTest {
         rule.runOnIdle { assertEquals(1, commits) }
     }
 
+    @Test fun popupContentChangesKeepTheSameInkAsAFreshMenu() {
+        var expanded by mutableStateOf(false)
+        var entries by mutableStateOf((1..6).map { "Entry $it" })
+        var measuredMenu: androidx.compose.ui.geometry.Rect? = null
+        content {
+            GlasmioTheme(isDark = false, appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioMenu(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = it },
+                    itemCount = entries.size,
+                    forceBelowAnchor = true,
+                    alignToAnchorStart = true,
+                    menuWidth = 180.dp,
+                    exportChildBackdrop = false,
+                    onMenuBoundsChanged = { measuredMenu = it },
+                    anchor = { open ->
+                        Text("Dynamic menu", color = LocalGlassColors.current.accent,
+                            modifier = Modifier.height(44.dp).clickable(onClick = open))
+                    },
+                ) { backdrop, close ->
+                    entries.forEach { entry -> GlasmioMenuItem(entry, close, backdrop = backdrop) }
+                }
+            }
+        }
+        data class Ink(val bounds: androidx.compose.ui.geometry.Rect, val rows: List<IntRange>, val pixels: Int)
+        fun ink(): Ink {
+            val image = rule.onNode(isPopup()).captureToImage().toPixelMap()
+            var left = image.width
+            var top = image.height
+            var right = -1
+            var bottom = -1
+            var total = 0
+            val rows = ArrayList<IntRange>()
+            var rowStart = -1
+            for (y in 0 until image.height) {
+                var count = 0
+                for (x in 0 until image.width) {
+                    val color = image[x, y]
+                    if (color.alpha > .8f && maxOf(color.red, color.green, color.blue) < .25f) {
+                        left = minOf(left, x); right = maxOf(right, x)
+                        top = minOf(top, y); bottom = maxOf(bottom, y)
+                        count++
+                    }
+                }
+                total += count
+                if (count > 0 && rowStart < 0) rowStart = y
+                if (count == 0 && rowStart >= 0) {
+                    rows += rowStart until y
+                    rowStart = -1
+                }
+            }
+            if (rowStart >= 0) rows += rowStart until image.height
+            assertTrue("The Popup capture must contain actual menu text", total > 0)
+            return Ink(androidx.compose.ui.geometry.Rect(left.toFloat(), top.toFloat(),
+                (right + 1).toFloat(), (bottom + 1).toFloat()), rows, total)
+        }
+        fun open(settled: Boolean) {
+            rule.runOnIdle { measuredMenu = null; expanded = true }
+            rule.waitUntil(10_000) {
+                rule.mainClock.advanceTimeByFrame()
+                measuredMenu != null && rule.onAllNodes(isPopup()).fetchSemanticsNodes().size == 1
+            }
+            rule.mainClock.advanceTimeBy(if (settled) 3_500 else 64)
+            rule.waitForIdle()
+        }
+        fun close() {
+            rule.runOnIdle { expanded = false }
+            rule.mainClock.advanceTimeBy(3_500)
+            rule.waitUntil(10_000) { rule.onAllNodes(isPopup()).fetchSemanticsNodes().isEmpty() }
+        }
+        rule.mainClock.autoAdvance = false
+        try {
+            for (duringOpening in listOf(true, false)) for ((before, after) in listOf(6 to 2, 2 to 6)) {
+                rule.runOnIdle { entries = (1..before).map { "Entry $it" } }
+                open(settled = !duringOpening)
+                rule.runOnIdle { entries = (1..after).map { "Entry $it" } }
+                rule.mainClock.advanceTimeBy(3_500)
+                rule.waitForIdle()
+                val changed = ink()
+                close()
+                open(settled = true)
+                val fresh = ink()
+                val scenario = "$before->$after, duringOpening=$duringOpening"
+                assertEquals("$scenario: each label must retain one rendered ink band", fresh.rows.size, changed.rows.size)
+                assertEquals("$scenario: the menu must render all current labels", after, changed.rows.size)
+                assertEquals("$scenario: rendered menu width", fresh.bounds.width, changed.bounds.width, 2f)
+                assertEquals("$scenario: rendered menu height", fresh.bounds.height, changed.bounds.height, 2f)
+                fresh.rows.zip(changed.rows).forEachIndexed { index, (expected, actual) ->
+                    assertEquals("$scenario: label $index must retain its actual raster height",
+                        (expected.last - expected.first).toFloat(), (actual.last - actual.first).toFloat(), 2f)
+                    assertEquals("$scenario: label $index must retain its physical row spacing",
+                        (expected.first - fresh.rows.first().first).toFloat(),
+                        (actual.first - changed.rows.first().first).toFloat(), 2f)
+                }
+                assertEquals("$scenario: text cannot stretch or compress while its layout remains unchanged",
+                    fresh.pixels.toFloat(), changed.pixels.toFloat(), fresh.pixels * .08f)
+                close()
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
     @Test fun popUpButtonInheritsHostTypographyChanges() {
         var updatedTypography by mutableStateOf(false)
         content {
@@ -1104,7 +1292,8 @@ class ComponentBehaviorTest {
         var density = 1f
         var headerHeightPx = 0f
         var canvas = Color.Unspecified
-        val bodyColor = Color(0xFF004488)
+        var bodyColor by mutableStateOf(Color(0xFF004488))
+        var actionClicks = 0
         rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         rule.runOnUiThread { rule.activity.enableEdgeToEdge() }
         rule.setContent {
@@ -1126,7 +1315,10 @@ class ComponentBehaviorTest {
                             topBarBlurProgress = rememberGlasmioHeaderScrollEdge(list),
                             contentBackground = { Box(Modifier.fillMaxSize().background(bodyColor)) },
                             topBar = {
-                                GlasmioSheetTopToolbar("Pinned", Modifier.testTag("sheet-chrome-header"))
+                                GlasmioSheetTopToolbar("Pinned", Modifier.testTag("sheet-chrome-header"), actions = {
+                                    GlasmioSheetToolbarButton(onClick = { actionClicks++ },
+                                        modifier = Modifier.testTag("sheet-chrome-action")) {}
+                                })
                             },
                         ) {
                             canvas = LocalGlassColors.current.groupedBackground
@@ -1180,6 +1372,10 @@ class ComponentBehaviorTest {
             bodyColor.blue + (1f - bodyColor.blue) * alpha,
         )
         val restingPixels = rule.onNode(isDialog()).captureToImage().toPixelMap()
+        val actionBounds = rule.onNodeWithTag("sheet-chrome-action").fetchSemanticsNode().boundsInRoot
+        fun actionColor(image: androidx.compose.ui.graphics.PixelMap) =
+            image[actionBounds.center.x.toInt(), actionBounds.center.y.toInt()]
+        val blueAction = actionColor(restingPixels)
         assertColor(bodyColor, pixel(restingPixels, backgroundX, upperY))
         assertColor(Color.White, pixel(restingPixels, 80f, bodyY))
         rule.runOnIdle { scope.launch { list.scrollToItem(0, (28f * density).toInt()) } }
@@ -1223,6 +1419,14 @@ class ComponentBehaviorTest {
         val returned = rule.onNode(isDialog()).captureToImage().toPixelMap()
         assertColor(bodyColor, pixel(returned, backgroundX, upperY))
         assertColor(Color.White, pixel(returned, 80f, bodyY))
+        rule.runOnIdle { reduceTransparency = false; bodyColor = Color(0xFFAA2211) }
+        rule.waitForIdle()
+        val redAction = actionColor(rule.onNode(isDialog()).captureToImage().toPixelMap())
+        assertTrue("Sheet actions must sample the sheet body while the outside scene remains white: " +
+            "blue=$blueAction, red=$redAction", maxOf(kotlin.math.abs(blueAction.red - redAction.red),
+            kotlin.math.abs(blueAction.blue - redAction.blue)) > .08f)
+        rule.onNodeWithTag("sheet-chrome-action").performClick()
+        rule.runOnIdle { assertEquals("The sampling plane must not intercept sheet actions", 1, actionClicks) }
     }
 
     @Test fun sheetMaterialRendersOverTheNativeReferenceGradient() {
@@ -1385,22 +1589,44 @@ class ComponentBehaviorTest {
 class SampleNavigationBehaviorTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
-    @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
-        rule.waitUntil(30_000) {
-            rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+    private val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+
+    private fun awaitSampleHome() {
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        try {
+            rule.waitUntil(30_000) {
+                rule.onAllNodes(tab and hasContentDescription("Home") and isSelected())
+                    .fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1 &&
+                    rule.onAllNodes(hasText("Controls") and hasClickAction())
+                        .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+            }
+        } catch (error: ComposeTimeoutException) {
+            throw AssertionError("The sample's Home navigation did not become ready.\n" +
+                searchNavigationDiagnostics("sample launch"), error)
         }
-        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
-        rule.onNode(tab and hasContentDescription("材质")).performClick()
-        rule.onNodeWithText("Regular Small").assertIsDisplayed()
-        rule.onNode(tab and hasContentDescription("关于")).performClick().assertIsSelected()
-        rule.onNodeWithText("Apache License 2.0").assertIsDisplayed()
+    }
+
+    private fun awaitDisplayed(matcher: SemanticsMatcher): SemanticsNodeInteraction {
+        rule.waitUntil(10_000) {
+            rule.onAllNodes(matcher).fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1 &&
+                rule.onNode(matcher).isDisplayed()
+        }
+        return rule.onNode(matcher).assertIsDisplayed()
+    }
+
+    @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
+        awaitSampleHome()
+        rule.onNode(tab and hasContentDescription("Materials")).performClick()
+        awaitDisplayed(hasText("Regular Small"))
+        rule.onNode(tab and hasContentDescription("About")).performClick().assertIsSelected()
+        awaitDisplayed(hasText("Apache License 2.0"))
         rule.activityRule.scenario.recreate()
         rule.waitUntil(30_000) {
             rule.onAllNodesWithText("Apache License 2.0").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
         }
-        rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
-        rule.onNodeWithContentDescription("搜索").performClick()
-        rule.onNodeWithText("Search Components").assertIsDisplayed()
+        rule.onNode(tab and hasContentDescription("About")).assertIsSelected()
+        rule.onNodeWithContentDescription("Search").performClick()
+        awaitDisplayed(hasText("Search Components"))
         rule.waitUntil(10_000) {
             var focused = false
             rule.activityRule.scenario.onActivity { focused = it.hasWindowFocus() }
@@ -1418,7 +1644,7 @@ class SampleNavigationBehaviorTest {
         // The IME can still consume legacy Back keys after its inset disappears.
         // Exercise the Activity's navigation callback, as the predictive Back fixture does.
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
-        val selectedAboutTab = tab and hasContentDescription("关于") and isSelected()
+        val selectedAboutTab = tab and hasContentDescription("About") and isSelected()
         try {
             rule.waitUntil(10_000) {
                 rule.onAllNodes(selectedAboutTab).fetchSemanticsNodes().size == 1 &&
@@ -1429,7 +1655,7 @@ class SampleNavigationBehaviorTest {
             android.util.Log.e("GlasmioDeviceTest", afterBack)
             throw AssertionError("Back did not restore the About page.\n$beforeBack\n$afterBack", error)
         }
-        rule.onNode(tab and hasContentDescription("关于")).assertIsSelected()
+        rule.onNode(tab and hasContentDescription("About")).assertIsSelected()
         rule.onNodeWithText("Search Components").assertDoesNotExist()
         rule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)).assertDoesNotExist()
     }
@@ -1458,25 +1684,28 @@ class SampleNavigationBehaviorTest {
     }
 
     @Test fun floatingSearchFiltersCancelsAndStartsEmptyOnReentry() {
-        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
-        rule.onNodeWithContentDescription("搜索").performClick()
+        awaitSampleHome()
+        rule.onNodeWithContentDescription("Search").performClick()
         val editor = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
-        val input = rule.onNode(editor).assertIsDisplayed()
+        val input = awaitDisplayed(editor)
         val screen = rule.onRoot().fetchSemanticsNode().boundsInRoot
         val inputBounds = input.fetchSemanticsNode().boundsInRoot
         assertTrue("Search must float in the lower half of the screen", inputBounds.top > screen.height * 0.4f)
         input.performTextInput("Controls")
-        rule.onNode(hasText("Controls") and hasClickAction() and !editor).assertIsDisplayed()
+        awaitDisplayed(hasText("Controls") and hasClickAction() and !editor)
         rule.onNodeWithContentDescription("Cancel").performClick()
-        rule.waitUntil(10_000) { rule.onAllNodesWithContentDescription("搜索").fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(10_000) {
+            rule.onAllNodesWithContentDescription("Search").fetchSemanticsNodes().isNotEmpty() &&
+                rule.onAllNodes(editor).fetchSemanticsNodes().isEmpty()
+        }
         rule.onNode(editor).assertDoesNotExist()
-        rule.onNodeWithContentDescription("搜索").performClick()
-        rule.onNode(editor).assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+        rule.onNodeWithContentDescription("Search").performClick()
+        awaitDisplayed(editor).assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
         rule.onNodeWithContentDescription("Cancel").performClick()
     }
 
     @Test fun dynamicTypePickerChangesTheRenderedSemanticStyle() {
-        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+        awaitSampleHome()
         rule.onNodeWithText("Text Styles and Dynamic Type").performScrollTo().performClick()
         val initialHeight = rule.onAllNodesWithText("Large Title")[0]
             .fetchSemanticsNode().boundsInRoot.height
@@ -1495,28 +1724,31 @@ class SampleNavigationBehaviorTest {
     }
 
     @Test fun rootNavigationCompactsOnScrollAndExpandsWithoutChangingTheTab() {
-        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
-        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
-        rule.onAllNodes(tab).assertCountEquals(4)
+        awaitSampleHome()
+        rule.onAllNodes(tab).assertCountEquals(5)
         rule.onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performTouchInput {
             swipeUp(startY = height * 0.75f, endY = height * 0.3f, durationMillis = 400)
         }
-        rule.waitUntil(10_000) { rule.onAllNodes(tab).fetchSemanticsNodes().size == 1 }
-        rule.onNode(tab and hasContentDescription("主页")).assertIsSelected()
+        rule.waitUntil(10_000) { rule.onAllNodes(tab).fetchSemanticsNodes().size == 2 }
+        rule.onNode(tab and hasContentDescription("Home")).assertIsSelected()
+        // A short interior reversal must retain UIKit's minimized state. Reveal the existing
+        // destinations through the compact control, without selecting a different route.
         rule.onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performTouchInput {
-            swipeDown(startY = height * 0.3f, endY = height * 0.75f, durationMillis = 400)
+            swipeDown(startY = height * 0.45f, endY = height * 0.55f, durationMillis = 1_000)
         }
-        rule.waitUntil(10_000) { rule.onAllNodes(tab).fetchSemanticsNodes().size == 4 }
-        rule.onNode(tab and hasContentDescription("主页")).assertIsSelected()
-        rule.onNode(tab and hasContentDescription("材质")).performClick().assertIsSelected()
-        rule.onNodeWithText("Regular Small").assertIsDisplayed()
-        rule.onAllNodes(tab).assertCountEquals(4)
+        rule.onAllNodes(tab).assertCountEquals(2)
+        rule.onNode(tab and hasContentDescription("Home")).assertIsSelected().performClick()
+        rule.waitUntil(10_000) { rule.onAllNodes(tab).fetchSemanticsNodes().size == 5 }
+        rule.onNode(tab and hasContentDescription("Home")).assertIsSelected()
+        rule.onNode(tab and hasContentDescription("Materials")).performClick().assertIsSelected()
+        awaitDisplayed(hasText("Regular Small"))
+        rule.onAllNodes(tab).assertCountEquals(5)
     }
 
     @Test fun toolbarMenuOpensAndClosesFromItsRealAnchor() {
-        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+        awaitSampleHome()
         rule.onNodeWithText("Menus").performScrollTo().performClick()
-        rule.onNodeWithContentDescription("Menu").assertIsDisplayed().performClick()
+        awaitDisplayed(hasContentDescription("Menu")).performClick()
         rule.onNodeWithText("Favorite").assertIsDisplayed()
         rule.onNodeWithText("Unavailable").assertIsNotEnabled()
         rule.onNodeWithText("Favorite").performClick()
@@ -1530,12 +1762,12 @@ class SampleNavigationBehaviorTest {
 
 
     @Test fun settingsScrollShowsTheCenteredTitleAndSurvivesRootTabSwitches() {
-        rule.waitUntil(30_000) { rule.onAllNodesWithText("Glasmio").fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
-        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
-        rule.onNode(tab and hasContentDescription("设置")).performClick().assertIsSelected()
+        awaitSampleHome()
+        rule.onNode(tab and hasContentDescription("Settings")).performClick().assertIsSelected()
         val scrollable = hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
         val titleInBody = hasText("Settings") and hasAnyAncestor(scrollable)
         val toolbarTitle = hasText("Settings") and !hasAnyAncestor(scrollable)
+        awaitDisplayed(titleInBody)
         val initialLarge = rule.onAllNodes(titleInBody).fetchSemanticsNodes().maxByOrNull { it.boundsInRoot.height }
             ?: error("Settings must initially show its large title")
         assertTrue(initialLarge.boundsInRoot.height > with(rule.density) { 28.dp.toPx() })
@@ -1555,9 +1787,10 @@ class SampleNavigationBehaviorTest {
         val toolbarBottom = titleBounds.bottom + with(rule.density) { 20.dp.toPx() }
         assertTrue("The large title must leave the body viewport", oldLarge.isEmpty() || oldLarge.all { it.boundsInRoot.bottom <= toolbarBottom })
 
-        rule.onNode(tab and hasContentDescription("关于")).performClick().assertIsSelected()
-        rule.onNode(tab and hasContentDescription("设置")).performClick().assertIsSelected()
-        rule.onAllNodes(tab).assertCountEquals(4)
+        rule.onNode(tab and hasContentDescription("About")).performClick().assertIsSelected()
+        rule.onNode(tab and hasContentDescription("Settings")).performClick().assertIsSelected()
+        rule.onAllNodes(tab).assertCountEquals(5)
+        awaitDisplayed(toolbarTitle)
         assertTrue("Returning to Settings must retain its scrolled title state", visibleContrast(rule.onNode(toolbarTitle)) > 0.25f)
     }
 

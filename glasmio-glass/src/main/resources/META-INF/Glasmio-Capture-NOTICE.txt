@@ -1,0 +1,7 @@
+# Capture infrastructure attribution
+
+Generic Compose layer recording, coordinate transforms, source composition, effect graph plumbing and the Android shader adapter are adapted from AndroidLiquidGlass 2.0.1, Copyright 2025 Kyant, under Apache License 2.0.
+
+Glasmio changes the package to `io.github.neoruaa.glasmio.glass.render`, uses an Android-only backend, owns capture/resource lifetimes and material integration, and replaces optical rendering with its iOS-derived material implementation. No upstream rounded-rectangle lens or highlight shader is included in this directory's infrastructure port.
+
+The full upstream license is in `Glasmio-Capture-LICENSE.txt`. The upstream source archive did not contain a separate NOTICE file. Individual adapted files retain attribution and change notices.

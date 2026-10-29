@@ -50,8 +50,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.effects.blur
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.effects.blur
 import com.kyant.shapes.Capsule
 import kotlinx.coroutines.flow.first
 
@@ -217,9 +217,7 @@ fun GlasmioTopBar(
 }
 
 /** Compact toolbar for the [GlasmioBottomSheet] topBar slot, which owns the progressive blur.
- * Sheet actions intentionally do not sample the
- * content behind the sheet; they use the same grouped-list tint/alpha with the shared highlight
- * and drag physics instead. */
+ * The sheet supplies its body-only backdrop to the native navigation action material. */
 @Composable
 fun GlasmioSheetTopToolbar(
     title: String,
@@ -243,23 +241,17 @@ fun GlasmioSheetToolbarButton(
     onLongClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    val colors = LocalGlassColors.current
-    val groupedListBackground = colors.elevatedBackground.copy(
-        alpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f),
-    )
     GlasmioIconButton(
         onClick = onClick,
         modifier = modifier,
         enabled = enabled,
-        navigationSurfaceColor = groupedListBackground,
-        navigationSurfaceAlphaMultiplier = 1f,
-        sampleBackdrop = false,
+        style = GlassSurfaceStyle.Navigation,
         onLongClick = onLongClick,
         content = content,
     )
 }
 
-/** Text actions share the sheet toolbar's tint, highlight, and press physics. */
+/** Text actions share the sheet toolbar's sampled regular material and press physics. */
 @Composable
 fun GlasmioSheetButton(
     onClick: () -> Unit,
@@ -267,16 +259,11 @@ fun GlasmioSheetButton(
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
-    val colors = LocalGlassColors.current
     GlasmioButton(
         onClick = onClick,
         modifier = modifier,
         enabled = enabled,
-        navigationSurfaceColor = colors.elevatedBackground.copy(
-            alpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f),
-        ),
-        navigationSurfaceAlphaMultiplier = 1f,
-        sampleBackdrop = false,
+        style = GlassSurfaceStyle.Navigation,
         content = content,
     )
 }

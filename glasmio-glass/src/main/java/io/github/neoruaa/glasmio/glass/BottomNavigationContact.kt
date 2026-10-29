@@ -42,12 +42,15 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.PressHighlightRenderer
+import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -68,14 +71,10 @@ fun BottomNavigationContact(
     val contact = remember(density) {
         BottomControlContact(with(density) { 4.dp.roundToPx().toFloat() }).apply {
             maximumRefractionHeight = with(density) { 24.dp.toPx() }
+            nativeSmoothness = with(density) { 6.dp.toPx() }
         }
     }
     val materialBackdrop = rememberLayerBackdrop()
-    val materialRecordingModifier = remember(materialBackdrop) {
-        Modifier.layerBackdrop(materialBackdrop).drawWithContent {
-            if (drawContext.graphicsLayer === materialBackdrop.graphicsLayer) drawContent()
-        }
-    }
     val neighborContentLayer = rememberGraphicsLayer()
     val drawNeighborContent: ContentDrawScope.() -> Unit = remember(contact, neighborContentLayer, renderedLensTransform) {
         {
@@ -93,33 +92,50 @@ fun BottomNavigationContact(
             .recordBottomControlBackdrop(neighborBackdrop, neighborContentLayer)
     }
     contact.bindSources(materialBackdrop, neighborBackdrop, neighborRecordingModifier)
-    val colors = LocalGlassColors.current
+    val materialContext = rememberGlassMaterialContext()
+    val colors = materialContext.environmentColors
     val appearance = LocalGlassAppearance.current
     val innerShadows = rememberNavigationInnerShadows(appearance.usesBackdrop, renderScale = 0.5f)
     val lensInnerShadows = rememberNavigationInnerShadows(appearance.usesRefraction, renderScale = 0.5f)
     val surfaceReady by remember(contact) { derivedStateOf { contact.surface.value != null } }
     val capturesLensSource by contact.capturesLensSource
-    Box(modifier.onGloballyPositioned(contact::updateCoordinates)) {
-        Box(Modifier.matchParentSize()) {
+    val luminance = materialContext.probe
+    val materialDark = materialContext.isDark
+    val darkFraction = materialContext.darkFraction
+    val sampleMaster = materialContext.luminanceState != null && surfaceReady
+    val probeModifier = remember(backdrop, luminance, sampleMaster, contact) {
+        if (sampleMaster) Modifier.sampleBackdropLuminance(
+            backdrop = backdrop, luminanceState = luminance,
+            sampleBounds = { contact.surface.value?.bounds ?: Rect.Zero },
+        ) else Modifier
+    }
+    Box(modifier.onGloballyPositioned(contact::updateCoordinates).then(probeModifier)) {
+        // Capture the actual shared material once, before foreground members are drawn.
+        // A selected UIKit lens samples this plane without the old optical source transform.
+        Box(Modifier.matchParentSize().layerBackdrop(materialBackdrop)) {
             if (surfaceReady) {
                 val shape = remember(renderedSurface) { { renderedSurface.value?.shape ?: Capsule() } }
                 val press = remember(contact) { derivedStateOf { contact.pressProgress() } }
-                val background = remember(contact, backdrop, shape, press, renderedSurface, colors, appearance, innerShadows) {
-                    Modifier.navigationGlassBackground(
+                val background = remember(contact, backdrop, shape, press, renderedSurface, colors, appearance, innerShadows, materialDark, darkFraction) {
+                    Modifier.navigationGlassBackgroundResolved(
                         backdrop = backdrop,
                         shape = shape,
                         containerColor = colors.container,
                         navigationMaterial = appearance.usesBackdrop,
                         innerShadows = innerShadows,
-                        isDark = colors.isDark,
+                        isDark = materialDark,
+                        darkFraction = darkFraction,
                         pressProgressState = press,
                         opticalCenter = {
                             contact.referenceCenter() - (renderedSurface.value?.bounds?.topLeft ?: Offset.Zero)
                         },
                         pressOverlay = {
-                            renderedSurface.value?.let { contact.drawPressHighlight(this, it.bounds.topLeft) }
+                            renderedSurface.value?.let { contact.drawPressHighlight(this, it.bounds.topLeft, isDark = materialDark) }
                         },
                         appearance = appearance,
+                        sampledPressHighlight = {
+                            renderedSurface.value?.let { contact.sampledPressHighlight(it.bounds.topLeft) }
+                        },
                     )
                 }
                 Box(Modifier.matchParentSize()
@@ -144,17 +160,31 @@ fun BottomNavigationContact(
             val background = remember(
                 contact, backdrop, shape, renderedSurface, renderedLensSurface, renderedLensTransform,
                 renderedLensPress, colors, appearance, lensInnerShadows,
+                materialDark,
             ) {
                 Modifier.navigationLensSourceBackground(
                     backdrop = backdrop,
                     shape = shape,
                     containerColor = colors.container,
-                    isDark = colors.isDark,
+                    isDark = materialDark,
                     appearance = appearance,
                     pressProgressState = renderedLensPress,
                     innerShadows = lensInnerShadows,
                     opticalCenter = {
                         contact.referenceCenter() - (renderedLensSurface.value?.bounds?.topLeft ?: Offset.Zero)
+                    },
+                    pressGlow = {
+                        val surface = renderedLensSurface.value
+                        val transform = renderedLensTransform.value
+                        if (surface != null && transform != null)
+                            contact.sampledPressHighlight(surface.bounds.topLeft, transform)?.highlight else null
+                    },
+                    pressGlowBounds = { size ->
+                        val surface = renderedLensSurface.value
+                        val transform = renderedLensTransform.value
+                        if (surface != null && transform != null)
+                            contact.sampledPressHighlight(surface.bounds.topLeft, transform)?.bounds ?: Rect(Offset.Zero, size)
+                        else Rect(Offset.Zero, size)
                     },
                     pressOverlay = {
                         if (contact.surface.value != null) {
@@ -167,6 +197,7 @@ fun BottomNavigationContact(
                                     origin = sampled.bounds.topLeft,
                                     sourceBounds = source.bounds,
                                     transform = transform,
+                                    isDark = materialDark,
                                 )
                             }
                         }
@@ -175,7 +206,7 @@ fun BottomNavigationContact(
             }
             // Re-render the complete source outline after its common affine transform.
             // Optical radii stay in pixels, and contact never replaces the source layer.
-            Box(Modifier.matchParentSize().alpha(0f).then(materialRecordingModifier)) {
+            Box(Modifier.matchParentSize().alpha(0f)) {
                 Box(Modifier.matchParentSize()
                     .layout { measurable, constraints ->
                         val surface = contact.lensSurface.value
@@ -193,8 +224,10 @@ fun BottomNavigationContact(
                     }.then(background))
             }
         }
-        CompositionLocalProvider(LocalBottomControlContact provides contact) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, content = content)
+        ProvideGlassMaterialContext(materialContext) {
+            CompositionLocalProvider(LocalBottomControlContact provides contact) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, content = content)
+            }
         }
     }
 }
@@ -321,9 +354,11 @@ class BottomControlContact(
     private val lensPressRenderer = PressHighlightRenderer()
     private val refractionField = NavigationContactField()
     internal var maximumRefractionHeight: Float = 0f
+    internal var nativeSmoothness: Float? = null
     private var cachedFirst: LiquidContactCapsule? = null
     private var cachedSecond: LiquidContactCapsule? = null
     private var cachedRefractionBand = Float.NaN
+    private var cachedNativeSmoothness: Float? = null
     private var cachedContactShape: LiquidContactShape? = null
     private var cachedSurface: BottomContactSurface? = null
     val capturesLensSource = derivedStateOf(structuralEqualityPolicy()) { members.any { it.needsLensSource() } }
@@ -357,27 +392,39 @@ class BottomControlContact(
             else return null
         }
         val firstCapsule = first ?: return null
-        val secondCapsule = second ?: return null
+        val secondCapsule = second
+        if (secondCapsule == null && nativeSmoothness == null) return null
         val bounds = Rect(
-            floor(minOf(firstCapsule.bounds.left, secondCapsule.bounds.left)),
-            floor(minOf(firstCapsule.bounds.top, secondCapsule.bounds.top)),
-            ceil(maxOf(firstCapsule.bounds.right, secondCapsule.bounds.right)),
-            ceil(maxOf(firstCapsule.bounds.bottom, secondCapsule.bounds.bottom)),
+            floor(minOf(firstCapsule.bounds.left, secondCapsule?.bounds?.left ?: firstCapsule.bounds.left)),
+            floor(minOf(firstCapsule.bounds.top, secondCapsule?.bounds?.top ?: firstCapsule.bounds.top)),
+            ceil(maxOf(firstCapsule.bounds.right, secondCapsule?.bounds?.right ?: firstCapsule.bounds.right)),
+            ceil(maxOf(firstCapsule.bounds.bottom, secondCapsule?.bounds?.bottom ?: firstCapsule.bounds.bottom)),
         )
         val localFirst = firstCapsule.copy(bounds = firstCapsule.bounds.translate(-bounds.topLeft))
-        val localSecond = secondCapsule.copy(bounds = secondCapsule.bounds.translate(-bounds.topLeft))
+        val localSecond = secondCapsule?.copy(bounds = secondCapsule.bounds.translate(-bounds.topLeft))
         // Both material passes share the exact same native contour and refraction field.
         // Callback rebinding or a common translation must not regenerate that contour.
         val scale = lensTransform.value?.scale ?: Offset(1f, 1f)
         val minimumScale = minOf(1f, scale.x, scale.y).coerceAtLeast(0.0001f)
         val band = maximumRefractionHeight / minimumScale
         val shape = cachedContactShape.takeIf {
-            localFirst == cachedFirst && localSecond == cachedSecond && band == cachedRefractionBand
-        } ?: (liquidContactShape(localFirst, localSecond, contactDistance, includeDisconnected = true)
-            as? LiquidContactShape)?.withRefractionField(refractionField, band)?.also {
+            localFirst == cachedFirst && localSecond == cachedSecond && band == cachedRefractionBand &&
+                nativeSmoothness == cachedNativeSmoothness
+        } ?: run {
+            // Refraction support changes with lens scale, but the immutable zero contour
+            // only depends on capsule geometry and smoothness. Retain its lazy path.
+            val native = cachedContactShape?.nativeUnion?.takeIf {
+                localFirst == cachedFirst && localSecond == cachedSecond && nativeSmoothness == cachedNativeSmoothness
+            } ?: nativeSmoothness?.let { NavigationNativeUnion.create(localFirst, localSecond, it) }
+            if (native != null) LiquidContactShape(native.first, native.second ?: native.first, native.smoothness)
+                .withNativeUnion(native)
+            else localSecond?.let { liquidContactShape(localFirst, it, contactDistance, includeDisconnected = true)
+                as? LiquidContactShape }
+        }?.withRefractionField(refractionField, band)?.also {
             cachedFirst = localFirst
             cachedSecond = localSecond
             cachedRefractionBand = band
+            cachedNativeSmoothness = nativeSmoothness
             cachedContactShape = it
         } ?: return null
         return cachedSurface?.takeIf { it.bounds == bounds && it.shape === shape }
@@ -426,23 +473,38 @@ class BottomControlContact(
         return direction * proximity * proximity * (3f - 2f * proximity)
     }
 
+    internal fun sampledPressHighlight(origin: Offset, transform: BottomContactLensTransform? = null): SampledPressHighlight? {
+        val active = members.maxByOrNull { it.pressHighlight().glowProgress } ?: return null
+        val press = active.pressHighlight()
+        val bounds = active.capsule()?.bounds ?: return null
+        val point = bounds.topLeft + Offset(bounds.width * press.position.x, bounds.height * press.position.y)
+        val projectedBounds = transform?.bounds(bounds) ?: bounds
+        val projectedPoint = transform?.point(point) ?: point
+        val local = projectedPoint - projectedBounds.topLeft
+        return SampledPressHighlight(press.copy(position = Offset(
+            local.x / projectedBounds.width.coerceAtLeast(1f), local.y / projectedBounds.height.coerceAtLeast(1f))),
+            projectedBounds.translate(-origin))
+    }
+
     fun drawPressHighlight(
         scope: DrawScope,
         origin: Offset,
         sourceBounds: Rect = Rect(origin, scope.size),
         transform: BottomContactLensTransform? = null,
+        isDark: Boolean = false,
     ) {
-        val active = members.maxByOrNull { it.pressHighlight().progress } ?: return
+        val active = members.maxByOrNull { it.pressHighlight().glowProgress } ?: return
         val press = active.pressHighlight()
         val bounds = active.capsule()?.bounds ?: return
         val sourcePosition = bounds.topLeft +
             Offset(bounds.width * press.position.x, bounds.height * press.position.y)
         val position = (transform?.point(sourcePosition) ?: sourcePosition) - origin
-        val localBounds = (transform?.bounds(sourceBounds) ?: sourceBounds).translate(-origin)
-        val horizontalRadius = transform?.let { sourceBounds.size.minDimension * 1.5f * it.scale.x }
+        val localBounds = (transform?.bounds(bounds) ?: bounds).translate(-origin)
+        val horizontalRadius = transform?.let { bounds.size.minDimension * .75f * it.scale.x }
         // Keep the press wash and radial light on the full sampled outline. Its vertical
         // radius follows the transformed source bounds; the horizontal radius follows scaleX.
         val renderer = if (transform == null) pressRenderer else lensPressRenderer
-        renderer.draw(scope, press.progress, position, sourceBounds = localBounds, horizontalRadius = horizontalRadius)
+        renderer.draw(scope, press.glowProgress, position, sourceBounds = localBounds,
+            horizontalRadius = horizontalRadius, isDark = isDark, dissipationProgress = press.dissipationProgress)
     }
 }

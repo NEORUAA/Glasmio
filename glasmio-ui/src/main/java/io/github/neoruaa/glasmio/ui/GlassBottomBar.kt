@@ -7,7 +7,6 @@ import io.github.neoruaa.glasmio.icons.*
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -40,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -58,7 +59,9 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
@@ -69,18 +72,19 @@ import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.util.fastCoerceIn
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
-import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.emptyBackdrop
-import com.kyant.backdrop.backdrops.layerBackdrop
-import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
-import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import com.kyant.backdrop.drawBackdrop
-import com.kyant.backdrop.highlight.Highlight
-import com.kyant.backdrop.highlight.HighlightStyle
-import com.kyant.backdrop.shadow.InnerShadow
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
+import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.DampedDragAnimation
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -89,7 +93,6 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.sign
-import kotlin.math.sin
 
 @androidx.compose.runtime.Immutable
 data class GlasmioTabItem<T>(
@@ -107,16 +110,16 @@ private data class StableGlassTabItems<T>(
 internal val LocalLiquidTabScale = staticCompositionLocalOf { { 1f } }
 
 /** Shared compact icon endpoint for the bottom navigation and its adjacent search control. */
-val CompactBottomControlIconSize = 22.dp
+val CompactBottomControlIconSize = 28.dp
 
 /** Compact touch surface shared by the navigation material and the search control. */
-val CompactBottomControlSize = 44.dp
+val CompactBottomControlSize = 48.dp
 
 /** Resting height of the navigation material, excluding system insets. */
-val NavigationBarSurfaceHeight = 64.dp
+val NavigationBarSurfaceHeight = 62.dp
 
 private val ExpandedNavigationIconSize = 28.dp
-private val ExpandedNavigationItemHeight = NavigationBarSurfaceHeight - 8.dp
+private val ExpandedNavigationItemHeight = 54.dp
 private val ExpandedNavigationItemMinWidth = 75.dp
 private val NavigationItemIconClearance = 4.dp
 
@@ -124,21 +127,47 @@ private data class NavigationTabGeometry(val widthPx: Float, val stepPx: Float) 
     fun center(index: Float): Float = widthPx / 2f + index * stepPx
 }
 
+/** UIKit's vertical phone allocation when every intrinsic item width is at most 42 pt. */
+internal fun nativeShortTabWidth(platterWidth: Float, itemCount: Int): Float {
+    require(itemCount in 4..5)
+    val inset = if (itemCount == 4) 24f else 15f
+    val available = platterWidth - 2f * inset
+    val gapCount = itemCount - 1
+    if ((available - itemCount * 54f) / gapCount < 14f) {
+        // The crowded allocation changes the content inset to 14, then outsets buttons
+        // by 14 - 4. Keep this native branch instead of interpolating across its threshold.
+        return (platterWidth - 28f) / itemCount + 20f
+    }
+    val contentOutset = inset - 4f
+    val allocation = maxOf(
+        minOf(54f, (available - 2f * gapCount) / itemCount),
+        available / itemCount - contentOutset,
+    )
+    return allocation + 2f * contentOutset
+}
+
+internal fun nativeFourShortTabWidth(platterWidth: Float): Float = nativeShortTabWidth(platterWidth, 4)
+
 private fun navigationTabGeometry(
     contentWidthPx: Float,
     itemCount: Int,
     minimumWidthPx: Float,
     protectedIconRadiusPx: Float,
+    nativeShortItemWidthPx: Float? = null,
 ): NavigationTabGeometry {
     val availableWidth = contentWidthPx.coerceAtLeast(1f)
-    // width / 2 + protectedIconRadius must not exceed the center-to-center step.
+    // The fallback keeps width / 2 + protectedIconRadius inside the center-to-center step.
     val maximumWidth = if (itemCount > 1) {
         (2f * (availableWidth - (itemCount - 1) * protectedIconRadiusPx) / (itemCount + 1))
             .coerceIn(1f, availableWidth)
     } else availableWidth
-    val width = (availableWidth / itemCount)
-        .coerceAtLeast(minimumWidthPx)
-        .coerceAtMost(maximumWidth)
+    val width = if (nativeShortItemWidthPx != null) {
+        nativeShortItemWidthPx.coerceIn(1f, availableWidth)
+    } else {
+        (availableWidth / itemCount)
+            .coerceAtLeast(minimumWidthPx)
+            .coerceAtMost(maximumWidth)
+    }
     // Keep the outer edges inside the capsule; narrow bars overlap adjacent items.
     val step = if (itemCount > 1) (availableWidth - width) / (itemCount - 1) else 0f
     return NavigationTabGeometry(width, step)
@@ -149,11 +178,42 @@ private val NavigationLabelStyle: TextStyle
     @ReadOnlyComposable
     get() = IosTypography.caption.copy(
         fontSize = 10.sp,
-        lineHeight = 13.sp,
+        lineHeight = 12.sp,
     )
-private const val CompactIndicatorFadeStart = 0.74f
-private const val CompactIndicatorFadeEnd = 0.98f
-private const val CompactTabContentScaleFloor = 0.82f
+
+@Composable
+private fun <T> hasNativeShortTabs(items: List<GlasmioTabItem<T>>): Boolean {
+    val symbolTypeface = LocalGlasmioSymbolTypeface.current
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    val labelStyle = NavigationLabelStyle.copy(fontWeight = FontWeight.Medium)
+    return remember(items, symbolTypeface, density, textMeasurer, labelStyle) {
+        if (items.size !in 4..5 || symbolTypeface == null) return@remember false
+        val maximumIntrinsicWidth = with(density) { 42.dp.toPx() }
+        val symbolPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = android.graphics.Typeface.create(symbolTypeface, FontWeight.Medium.weight, false)
+            textSize = with(density) { 18.sp.toPx() }
+            fontFeatureSettings = "'ss16' 1"
+        }
+        items.all { item ->
+            val titleWidth = textMeasurer.measure(
+                text = AnnotatedString(item.label),
+                style = labelStyle,
+                softWrap = false,
+                maxLines = 1,
+            ).multiParagraph.intrinsics.maxIntrinsicWidth
+            val glyph = String(Character.toChars(item.symbol.codePoint))
+            // The advance retains the symbol's side bearings, unlike its visible ink bounds.
+            maxOf(titleWidth, symbolPaint.measureText(glyph)) <= maximumIntrinsicWidth
+        }
+    }
+}
+
+private fun Modifier.navigationContentPadding(vertical: () -> Dp): Modifier = layout { measurable, constraints ->
+    val inset = vertical().roundToPx().coerceIn(0, constraints.maxHeight / 2)
+    val placeable = measurable.measure(constraints.offset(vertical = -2 * inset))
+    layout(placeable.width, constraints.maxHeight) { placeable.placeRelative(0, inset) }
+}
 
 private fun morphSurfaceWidthPx(
     fullWidthPx: Float,
@@ -162,17 +222,11 @@ private fun morphSurfaceWidthPx(
 ): Float = lerp(fullWidthPx, compactWidthPx, compactProgress.coerceIn(0f, 1f))
 
 private fun compactIndicatorVisibility(compactProgress: Float): Float {
-    if (compactProgress <= CompactIndicatorFadeStart) return 1f
-    val fadeProgress = ((compactProgress - CompactIndicatorFadeStart) /
-        (CompactIndicatorFadeEnd - CompactIndicatorFadeStart)).coerceIn(0f, 1f)
-    return 1f - FastOutSlowInEasing.transform(fadeProgress)
+    return (1f - compactProgress).coerceIn(0f, 1f)
 }
 
 internal fun compactIconLateProgress(compactProgress: Float): Float {
-    if (compactProgress <= CompactIndicatorFadeStart) return 0f
-    val morphProgress = ((compactProgress - CompactIndicatorFadeStart) /
-        (1f - CompactIndicatorFadeStart)).coerceIn(0f, 1f)
-    return FastOutSlowInEasing.transform(morphProgress)
+    return compactProgress.coerceIn(0f, 1f)
 }
 
 /** An opaque parent accent tint already supplies the selected source's RGB. */
@@ -183,11 +237,11 @@ internal fun navigationLensSourceColorFilter(
     if (colors.accent.alpha == 1f && colors.content.alpha == 1f) null else selectedFilter
 
 /**
- * iOS split-search tab bar backed by AndroidLiquidGlass' complete three-layer interaction.
+ * iOS split-search tab bar with a separate native selected-content portal.
  *
- * The outer glass keeps the capsule-to-circle navigation morph. The invisible source row and
- * the combined-backdrop indicator restore the original press, drag, lens, highlight and
- * velocity deformation from LiquidBottomTabs.
+ * The outer glass keeps the capsule-to-circle navigation morph. The indicator samples the
+ * actual material separately from the raw selected row, preserving each symbol's native metrics.
+ * [onItemBoundsChanged] reports each visible item's interactive bounds in window coordinates.
  */
 @Composable
 fun <T> GlasmioNavigationBar(
@@ -199,6 +253,7 @@ fun <T> GlasmioNavigationBar(
     compactSize: Dp,
     modifier: Modifier = Modifier,
     backdrop: Backdrop = LocalGlassBackdrop.current,
+    onItemBoundsChanged: ((T, Rect) -> Unit)? = null,
 ) {
     require(items.isNotEmpty())
     val compactState = remember(compactProgress) {
@@ -208,7 +263,7 @@ fun <T> GlasmioNavigationBar(
         derivedStateOf { compactProgress.value != 0f && compactProgress.value != 1f }
     }
     val compactMode by remember(compactState) {
-        derivedStateOf { compactState.value >= CompactIndicatorFadeStart }
+        derivedStateOf { compactState.value > 0f }
     }
     val onSelectedState = rememberUpdatedState(onSelected)
     val stableOnSelected: (T) -> Unit = remember {
@@ -216,24 +271,26 @@ fun <T> GlasmioNavigationBar(
     }
     val stableItems = remember(items) { StableGlassTabItems(items) }
     val tabItems = stableItems.values
-    val selectedIndex = tabItems.indexOfFirst { it.key == selectedKey }.takeIf { it >= 0 } ?: 0
+    val nativeShortItems = hasNativeShortTabs(tabItems)
+    val selectedItemIndex = tabItems.indexOfFirst { it.key == selectedKey }
+    val hasSelection = selectedItemIndex >= 0
+    val selectedIndex = selectedItemIndex.coerceAtLeast(0)
     val selectedItem = tabItems[selectedIndex]
-    val colors = LocalGlassColors.current
+    val materialContext = rememberGlassMaterialContext()
+    val colors = materialContext.colors
     val appearance = LocalGlassAppearance.current
-    val isLight = !colors.isDark
+    val isLight = !materialContext.isDark
     val navigationInnerShadows = rememberNavigationInnerShadows(appearance.usesBackdrop, renderScale = 0.5f)
-    val hiddenInnerShadows = rememberNavigationInnerShadows(appearance.usesRefraction, renderScale = 0.5f)
     val containerColor = colors.container
     val tabsBackdrop = rememberLayerBackdrop()
+    val ownBarBackdrop = rememberLayerBackdrop()
     val bottomContact = LocalBottomControlContact.current
-    val sourceBackdrop = if (bottomContact == null) backdrop else rememberCombinedBackdrop(
+    val sourceBackdrop = if (bottomContact == null) rememberCombinedBackdrop(backdrop, ownBarBackdrop)
+    else rememberCombinedBackdrop(
         backdrop,
         bottomContact.materialBackdrop,
-        bottomContact.neighborBackdrop,
     )
-    // Only the separate material/search recordings feed this source. Recording the whole
-    // navigation would feed the selection lens back into itself on the next draw.
-    val indicatorBackdrop = rememberCombinedBackdrop(sourceBackdrop, tabsBackdrop)
+    // Background and selected-content portals retain separate, unfiltered source planes.
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     val viewConfiguration = LocalViewConfiguration.current
     val navigationViewConfiguration = remember(viewConfiguration) {
@@ -251,6 +308,7 @@ fun <T> GlasmioNavigationBar(
     val tabItemsState = rememberUpdatedState(tabItems)
 
     val dragCoordinateSpace = remember { mutableStateOf<LayoutCoordinates?>(null) }
+    ProvideGlassMaterialContext(materialContext) {
     BoxWithConstraints(
         modifier.height(NavigationBarSurfaceHeight).onGloballyPositioned { dragCoordinateSpace.value = it },
         contentAlignment = Alignment.CenterStart,
@@ -258,8 +316,9 @@ fun <T> GlasmioNavigationBar(
         val density = LocalDensity.current
         val fullWidthPx = constraints.maxWidth.toFloat()
         val compactWidthPx = with(density) { compactSize.toPx() }
+        val compactInsetPx = with(density) { (NavigationBarSurfaceHeight - compactSize).toPx() / 2f }
         val indicatorSettled by remember(compactState) {
-            derivedStateOf { compactState.value >= CompactIndicatorFadeEnd }
+            derivedStateOf { compactState.value >= 1f }
         }
         // Geometry changes belong to measurement. Do not rebuild the tab/source/effect
         // compositions on every spring frame just to update their width and height.
@@ -277,7 +336,7 @@ fun <T> GlasmioNavigationBar(
             }
         }
         val paddingPx = with(density) { 4.dp.toPx() }
-        val expandedTabs = remember(fullWidthPx, paddingPx, density, tabItems.size) {
+        val expandedTabs = remember(fullWidthPx, paddingPx, density, tabItems.size, nativeShortItems) {
             navigationTabGeometry(
                 contentWidthPx = fullWidthPx - paddingPx * 2f,
                 itemCount = tabItems.size,
@@ -285,6 +344,9 @@ fun <T> GlasmioNavigationBar(
                 protectedIconRadiusPx = with(density) {
                     ExpandedNavigationIconSize.toPx() / 2f + NavigationItemIconClearance.toPx()
                 },
+                nativeShortItemWidthPx = if (nativeShortItems) {
+                    nativeShortTabWidth(fullWidthPx / density.density, tabItems.size) * density.density
+                } else null,
             )
         }
         val expandedTabWidthPx = expandedTabs.widthPx
@@ -298,7 +360,7 @@ fun <T> GlasmioNavigationBar(
         ) {
             Modifier.layout { measurable, constraints ->
                 val progress = compactState.value
-                val settled = progress >= CompactIndicatorFadeEnd
+                val settled = progress >= 1f
                 val width = constraints.constrainWidth((if (settled) compactWidthPx else
                     lerp(expandedTabWidthPx, compactInnerWidthPx, progress)).roundToInt())
                 val height = constraints.constrainHeight((if (settled) compactSize else
@@ -357,14 +419,23 @@ fun <T> GlasmioNavigationBar(
                     )
                     animationScope.launch { offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x) }
                 },
+                lensStyle = NativeControlLensStyle.TabBarIndicator,
             )
+        }
+        val onUserSelected: (T) -> Unit = remember(dragAnimation, compactState, stableOnSelected) {
+            { key ->
+                selectionPressOrigin.value = compactState.value == 0f
+                dragAnimation.press()
+                stableOnSelected(key)
+                dragAnimation.release()
+            }
         }
         LaunchedEffect(selectedIndex, dragAnimation) {
             // Route and preference updates only move the indicator. Navigation callbacks
             // belong to user input, including while the bar is fading out on a detail page.
             if (dragAnimation.targetValue != selectedIndex.toFloat()) {
                 selectionPressOrigin.value = compactState.value == 0f
-                dragAnimation.animateToValue(selectedIndex.toFloat())
+                dragAnimation.animateToValue(selectedIndex.toFloat(), animatePress = false)
             }
         }
         // Compact input keeps panel feedback without pressing the emerging selection.
@@ -404,17 +475,16 @@ fun <T> GlasmioNavigationBar(
                 },
             )
         }
-        val selectionHighlightModifier = remember(interactiveHighlight, selectionFeedbackEnabled) {
-            interactiveHighlight.highlightModifier(
-                progressProvider = { if (selectionFeedbackEnabled.value) interactiveHighlight.pressProgress else 0f },
-            )
-        }
-        val commonTransform = remember(density, fullWidthPx, compactWidthPx, isLtr) {
+        val commonTransform = remember(density, fullWidthPx, compactWidthPx, compactInsetPx, compactProgress, isLtr) {
             Modifier.graphicsLayer {
-                val progress = compactState.value
+                val progress = compactProgress.value
                 val fraction = (offsetAnimation.value / fullWidthPx).fastCoerceIn(-1f, 1f)
-                translationX = paddingPx * fraction.sign * EaseOut.transform(abs(fraction))
-                scaleY = 1f + 0.045f * sin(PI.toFloat() * progress)
+                val physicalWidth = lerp(fullWidthPx, compactWidthPx, progress).coerceAtLeast(1f)
+                val physicalHeight = lerp(NavigationBarSurfaceHeight.toPx(), compactSize.toPx(), progress).coerceAtLeast(1f)
+                translationX = compactInsetPx * progress * if (isLtr) 1f else -1f
+                translationX += paddingPx * fraction.sign * EaseOut.transform(abs(fraction))
+                scaleX = physicalWidth / size.width.coerceAtLeast(1f)
+                scaleY = physicalHeight / size.height.coerceAtLeast(1f)
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
                     if (isLtr) 0f else 1f,
                     0.5f,
@@ -422,9 +492,31 @@ fun <T> GlasmioNavigationBar(
             }
         }
         val tabContentAlpha = remember {
-            { (1f - compactState.value * 1.35f).coerceIn(0f, 1f) }
+            { (1f - compactState.value).coerceIn(0f, 1f) }
         }
         val pressProgressState = dragAnimation.pressProgressState
+        val platterPuff = remember { Animatable(0f, .001f) }
+        val flexWidth = if (compactMode) compactWidthPx else fullWidthPx
+        val flexHeight = with(density) { (if (compactMode) compactSize else NavigationBarSurfaceHeight).toPx() }
+        val flexShortDimension = minOf(flexWidth, flexHeight) / density.density
+        val flexLongDimension = maxOf(flexWidth, flexHeight) / density.density
+        val flexSizeProgress = if (flexLongDimension < 120f) 0f else ((flexShortDimension - 44f) / 116f).coerceIn(0f, 1f)
+        val flexSpringProgress = if (flexLongDimension < 120f) 0f else ((flexLongDimension - 44f) / 116f).coerceIn(0f, 1f)
+        val puffLiftPoints = 16f - 12f * flexSizeProgress
+        val puffPressSpring = remember(flexSpringProgress) {
+            val response = .262 + (.314 - .262) * flexSpringProgress
+            spring<Float>(.625f, (4.0 * PI * PI / (response * response)).toFloat(), .001f)
+        }
+        val puffReleaseSpring = remember(flexSpringProgress) {
+            val response = .4 + (.36 - .4) * flexSpringProgress
+            spring<Float>(lerp(.375f, .6f, flexSpringProgress),
+                (4.0 * PI * PI / (response * response)).toFloat(), .001f)
+        }
+        LaunchedEffect(interactiveHighlight.isPressed, puffPressSpring, puffReleaseSpring) {
+            val pressed = interactiveHighlight.isPressed
+            platterPuff.animateTo(if (pressed) 1f else 0f,
+                if (pressed) puffPressSpring else puffReleaseSpring)
+        }
         val selectedIconColorFilterState: State<ColorFilter> = remember(
             compactState,
             selectionPressProgressState,
@@ -455,37 +547,21 @@ fun <T> GlasmioNavigationBar(
         val lensSourceAccentModifier = remember(lensSourceAccentFilter) {
             Modifier.graphicsLayer(colorFilter = lensSourceAccentFilter)
         }
-        val visibleTabContentScale = remember(compactState) {
-            {
-                (1f - compactState.value).coerceAtLeast(CompactTabContentScaleFloor)
-            }
+        val visibleTabContentScale = remember {
+            { 1f }
         }
         val lensSourceTabContentScale = remember(selectionPressProgressState, compactState) {
             {
-                lerp(1f, 1.2f, selectionPressProgressState.value) *
-                    (1f - compactState.value).coerceAtLeast(CompactTabContentScaleFloor)
+                lerp(1f, 1.16f, selectionPressProgressState.value)
             }
         }
-        val selectedContentLateScaleProvider: () -> Float = remember(compactState) {
-            {
-                // Keep the icon geometry continuous through p = 0.98; only the settled
-                // transparent indicator/source composition uses CompactIndicatorFadeEnd.
-                val lateProgress = compactIconLateProgress(compactState.value)
-                lerp(
-                    1f,
-                    (CompactBottomControlIconSize.value / ExpandedNavigationIconSize.value) /
-                        CompactTabContentScaleFloor,
-                    lateProgress,
-                )
-            }
+        val selectedContentLateScaleProvider: () -> Float = remember {
+            { 1f }
         }
-        val panelPressScale = remember(pressProgressState, compactState, fullWidthPx, compactWidthPx, density) {
+        val panelPressScale = remember(platterPuff, puffLiftPoints, flexLongDimension) {
             derivedStateOf {
-                navigationPressScale(
-                    width = morphSurfaceWidthPx(fullWidthPx, compactWidthPx, compactState.value).roundToInt().toFloat(),
-                    expansion = with(density) { 16.dp.toPx() },
-                    press = pressProgressState.value,
-                )
+                // UIKit animates the platter's outermost layer independently from its lens.
+                1f + puffLiftPoints * platterPuff.value / flexLongDimension.coerceAtLeast(1f)
             }
         }
         val pressLayerBlock: GraphicsLayerScope.() -> Unit = remember(panelPressScale) {
@@ -494,29 +570,34 @@ fun <T> GlasmioNavigationBar(
                 scaleY = panelPressScale.value
             }
         }
+        val navigationSurfaceSize = remember { mutableStateOf(Size.Zero) }
+        val navigationVisualBounds: (Size) -> Rect = remember(
+            panelPressScale, compactProgress, fullWidthPx, compactWidthPx, density,
+            compactSize, compactInsetPx, isLtr, offsetAnimation, paddingPx,
+        ) {
+            { size ->
+                val scale = panelPressScale.value
+                val progress = compactProgress.value
+                val physicalWidth = lerp(fullWidthPx, compactWidthPx, progress).coerceAtLeast(1f)
+                val physicalHeight = with(density) {
+                    lerp(NavigationBarSurfaceHeight.toPx(), compactSize.toPx(), progress).coerceAtLeast(1f)
+                }
+                val fraction = (offsetAnimation.value / fullWidthPx).fastCoerceIn(-1f, 1f)
+                val inset = compactInsetPx * progress
+                val left = if (isLtr) inset else size.width - physicalWidth - inset
+                val offset = paddingPx * fraction.sign * EaseOut.transform(abs(fraction))
+                val centerX = left + physicalWidth / 2f + offset
+                Rect(
+                    centerX - physicalWidth * scale / 2f,
+                    (size.height - physicalHeight * scale) / 2f,
+                    centerX + physicalWidth * scale / 2f,
+                    (size.height + physicalHeight * scale) / 2f,
+                )
+            }
+        }
         val contactMember = rememberBottomControlContactMember(
             materialPressProgress = { pressProgressState.value },
-            lensSourceActive = { !indicatorSettled && appearance.usesRefraction },
-            lensSourceScale = { size ->
-                val scale = panelPressScale.value
-                Offset(
-                    1f / scale,
-                    navigationLensSourceHeight(size.height, paddingPx) / size.height.coerceAtLeast(1f) / scale,
-                )
-            },
-            lensSourcePressProgress = { selectionPressProgressState.value },
-            visualBounds = { size ->
-                val scale = panelPressScale.value
-                val verticalScale = scale * (1f + 0.045f * sin(PI.toFloat() * compactState.value))
-                val fraction = (offsetAnimation.value / fullWidthPx).fastCoerceIn(-1f, 1f)
-                val offset = paddingPx * fraction.sign * EaseOut.transform(abs(fraction))
-                Rect(
-                    size.width * (1f - scale) / 2f + offset,
-                    size.height * (1f - verticalScale) / 2f,
-                    size.width * (1f + scale) / 2f + offset,
-                    size.height * (1f + verticalScale) / 2f,
-                )
-            },
+            visualBounds = navigationVisualBounds,
             highlight = { size ->
                 val position = interactiveHighlight.highlightPosition(size)
                 GlassPressHighlight(
@@ -526,40 +607,22 @@ fun <T> GlasmioNavigationBar(
             },
         )
         val sharesContactSurface = contactMember?.sharesSurface == true
-        val lensAnchoring = if (appearance.usesRefraction) 1f else 0f
-        val tabPanelScale: (Int) -> Float = remember(dragAnimation, panelPressScale, lensAnchoring) {
-            { index ->
-                navigationTabPanelScale(index, dragAnimation.value, panelPressScale.value, lensAnchoring)
-            }
-        }
-        val indicatorPanelScale = remember(panelPressScale, lensAnchoring, selectionFeedbackEnabled) {
-            derivedStateOf {
-                if (selectionFeedbackEnabled.value) {
-                    navigationTabPanelScale(0, 0f, panelPressScale.value, lensAnchoring)
-                } else 1f
-            }
-        }
-        val selectedTabPanelScale: () -> Float = remember(tabPanelScale, selectedIndex) {
-            { tabPanelScale(selectedIndex) }
-        }
-        val tabPressCorrection: GraphicsLayerScope.(Int) -> Unit = remember(
-            compactState, fullWidthPx, compactWidthPx, paddingPx, expandedTabWidthPx,
-            compactInnerWidthPx, tabItems.size, isLtr, panelPressScale, tabPanelScale,
+        val morphLuminanceModifier = remember(
+            backdrop, materialContext.luminanceState, morphing, sharesContactSurface, navigationVisualBounds,
+            navigationSurfaceSize,
         ) {
-            { index ->
-                val progress = compactState.value
-                val contentWidth = morphSurfaceWidthPx(fullWidthPx, compactWidthPx, progress) - 2f * paddingPx
-                val itemWidth = lerp(expandedTabWidthPx, compactInnerWidthPx / tabItems.size, progress)
-                    .roundToInt().toFloat().coerceAtMost(contentWidth)
-                val step = if (tabItems.size > 1) (contentWidth - itemWidth) / (tabItems.size - 1) else 0f
-                val center = itemWidth / 2f + index * step
-                val physicalCenter = if (isLtr) center else contentWidth - center
-                val panelScale = panelPressScale.value
-                val tabScale = tabPanelScale(index)
-                translationX = navigationTabPressOffset(physicalCenter, contentWidth / 2f, panelScale, tabScale)
-                scaleX *= tabScale / panelScale
-                scaleY *= tabScale / panelScale
-            }
+            val luminance = materialContext.luminanceState
+            if (morphing && !sharesContactSurface && luminance != null) Modifier.sampleBackdropLuminance(
+                backdrop = backdrop, luminanceState = luminance,
+                sampleBounds = {
+                    val size = navigationSurfaceSize.value
+                    if (size.isEmpty()) Rect.Zero else navigationVisualBounds(size)
+                },
+            ) else Modifier
+        }
+        val indicatorPanelScale = panelPressScale
+        val selectedTabPanelScale: () -> Float = remember(panelPressScale) {
+            { panelPressScale.value }
         }
         val morphingNavigationGlass = rememberMorphingNavigationGlass(
             backdrop = backdrop,
@@ -567,7 +630,8 @@ fun <T> GlasmioNavigationBar(
             shape = Capsule(),
             tint = containerColor,
             navigationMaterial = appearance.usesBackdrop,
-            isDark = colors.isDark,
+            isDark = materialContext.isDark,
+            darkFraction = materialContext.darkFraction,
             pressProgress = { pressProgressState.value },
             layerBlock = pressLayerBlock,
         )
@@ -580,6 +644,7 @@ fun <T> GlasmioNavigationBar(
             pressProgressState,
             pressLayerBlock,
             appearance,
+            materialContext,
         ) {
             Modifier.navigationGlassBackground(
                 backdrop = backdrop,
@@ -587,7 +652,8 @@ fun <T> GlasmioNavigationBar(
                 containerColor = containerColor,
                 navigationMaterial = appearance.usesBackdrop,
                 innerShadows = navigationInnerShadows,
-                isDark = colors.isDark,
+                isDark = materialContext.isDark,
+                materialContext = materialContext,
                 pressProgressState = pressProgressState,
                 layerBlock = pressLayerBlock,
                 appearance = appearance,
@@ -606,49 +672,14 @@ fun <T> GlasmioNavigationBar(
                 val width = constraints.constrainWidth(
                     morphSurfaceWidthPx(fullWidthPx, compactWidthPx, progress).roundToInt(),
                 )
-                val height = constraints.constrainHeight(
-                    navigationLensSourceHeight(
-                        androidx.compose.ui.unit.lerp(NavigationBarSurfaceHeight, compactSize, progress).toPx(),
-                        paddingPx,
-                    ).roundToInt(),
-                )
+                val height = constraints.constrainHeight(lerp(
+                    62.dp.toPx(),
+                    compactSize.toPx(),
+                    progress,
+                ).roundToInt())
                 val placeable = measurable.measure(androidx.compose.ui.unit.Constraints.fixed(width, height))
                 layout(width, height) { placeable.placeRelative(0, 0) }
             }
-        }
-        val morphingHiddenGlass = rememberMorphingNavigationGlass(
-            backdrop = sourceBackdrop,
-            active = morphing && appearance.usesRefraction && bottomContact == null,
-            shape = Capsule(),
-            tint = containerColor,
-            navigationMaterial = appearance.usesBackdrop,
-            isDark = colors.isDark,
-            pressProgress = { selectionPressProgressState.value },
-            layerBlock = {},
-            tintMultiplier = 1f,
-            lensSource = true,
-        )
-        val hiddenBackdropModifier = if (bottomContact != null) Modifier
-        else if (morphing) morphingHiddenGlass else remember(
-            sourceBackdrop,
-            containerColor,
-            isLight,
-            hiddenInnerShadows,
-            appearance,
-            selectionPressProgressState,
-        ) {
-            Modifier.navigationLensSourceBackground(
-                backdrop = sourceBackdrop,
-                shape = { Capsule() },
-                containerColor = containerColor,
-                isDark = colors.isDark,
-                appearance = appearance,
-                pressProgressState = selectionPressProgressState,
-                innerShadows = hiddenInnerShadows,
-            )
-        }
-        val expandedIndicatorVisibilityState = remember(compactState) {
-            derivedStateOf { (1f - compactState.value * 1.5f).coerceIn(0f, 1f) }
         }
         val indicatorPositionLayerBlock: GraphicsLayerScope.() -> Unit = remember(
             compactState,
@@ -662,6 +693,8 @@ fun <T> GlasmioNavigationBar(
             expandedTabWidthPx,
             compactInnerWidthPx,
             expandedTabs,
+            compactInsetPx,
+            compactProgress,
         ) {
             {
                 // Follow the current tab center while the capsule shrinks, then converge to
@@ -674,14 +707,13 @@ fun <T> GlasmioNavigationBar(
                 } else {
                     fullWidthPx - paddingPx - expandedTabCenter
                 }
-                val indicatorWidth = if (progress >= CompactIndicatorFadeEnd) {
+                val indicatorWidth = if (progress >= 1f) {
                     compactWidthPx
                 } else {
                     lerp(expandedTabWidthPx, compactInnerWidthPx, progress)
                 }
-                if (progress >= CompactIndicatorFadeEnd) {
-                    // The settled transparent interaction box is 48dp wide. Keep it centered
-                    // inside the still-continuously-morphing outer surface until p reaches 1.
+                if (progress >= 1f) {
+                    // The transparent compact interaction target follows the material center.
                     val compactOffset = (currentWidth - compactWidthPx).coerceAtLeast(0f) / 2f
                     translationX = compactOffset * if (isLtr) 1f else -1f
                 } else {
@@ -703,112 +735,67 @@ fun <T> GlasmioNavigationBar(
                         indicatorLeft + indicatorWidth / 2f, currentWidth / 2f, indicatorPanelScale.value,
                     )
                 }
+                translationX += compactInsetPx * compactProgress.value * if (isLtr) 1f else -1f
             }
         }
         val indicatorBackdropLayerBlock: GraphicsLayerScope.() -> Unit = remember(
             dragAnimation,
             innerGlassVisibilityState,
             selectionFeedbackEnabled,
+            panelPressScale,
         ) {
             {
-                scaleX = if (selectionFeedbackEnabled.value) dragAnimation.scaleX else 1f
-                scaleY = if (selectionFeedbackEnabled.value) dragAnimation.scaleY else 1f
                 val velocity = if (selectionFeedbackEnabled.value) dragAnimation.velocity / 10f else 0f
-                scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
-                scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
+                scaleX = panelPressScale.value / (1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f))
+                scaleY = panelPressScale.value * (1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f))
                 // drawBackdrop installs this block on the backdrop layer itself. Keep the
                 // complete refractive surface, highlight and shadows on the same alpha curve.
                 alpha = innerGlassVisibilityState.value
             }
         }
-        val indicatorEdgeLayerBlock: GraphicsLayerScope.() -> Unit = remember(
-            indicatorBackdropLayerBlock,
-            selectionPressProgressState,
-            expandedIndicatorVisibilityState,
-        ) {
-            {
-                indicatorBackdropLayerBlock(this)
-                // Exterior decorations follow the lens transform without tinting the resting selection.
-                alpha *= selectionPressProgressState.value.coerceIn(0f, 1f) *
-                    expandedIndicatorVisibilityState.value
-            }
-        }
-        val indicatorBackdropModifier = if (!indicatorSettled) {
+        val indicatorBackdropModifier = if (hasSelection && !indicatorSettled) {
             remember(
-                indicatorBackdrop,
+                sourceBackdrop,
+                tabsBackdrop,
                 dragAnimation,
                 compactState,
-                expandedIndicatorVisibilityState,
                 containerColor,
                 isLight,
                 indicatorBackdropLayerBlock,
-                indicatorEdgeLayerBlock,
                 selectionPressProgressState,
                 appearance,
                 isLtr,
                 tabItems.size,
             ) {
                 Modifier
-                    .navigationGlassDropShadow({ Capsule() }, indicatorEdgeLayerBlock, cacheBlurResult = true)
-                    .navigationGlassBoxShadow({ Capsule() }, GlassBoxShadowAlpha, indicatorEdgeLayerBlock)
-                    .drawBackdrop(
-                        backdrop = if (appearance.usesRefraction) indicatorBackdrop else emptyBackdrop(),
+                    .drawPlainBackdrop(
+                        backdrop = if (appearance.usesBackdrop) sourceBackdrop else emptyBackdrop(),
                         shape = { Capsule() },
                         effects = {
-                            val press = selectionPressProgressState.value
-                            val opticalIntensity = press * expandedIndicatorVisibilityState.value
-                            if (appearance.usesRefraction) {
-                                navigationContactLens(
-                                    refractionHeight = NavigationIndicatorRefractionHeight.toPx() * opticalIntensity,
-                                    refractionAmount = NavigationIndicatorRefractionAmount.toPx() * opticalIntensity,
-                                    contactDirection = contactMember?.let {
-                                        val direction = it.contact.lensContactDirection(it)
-                                        val endIndex = if ((direction > 0f) == isLtr) tabItems.lastIndex else 0
-                                        val proximity = (1f - abs(dragAnimation.value - endIndex) * 2f).coerceIn(0f, 1f)
-                                        direction * proximity * proximity * (3f - 2f * proximity)
-                                    } ?: 0f,
+                            if (appearance.usesBackdrop) {
+                                nativeControlLens(
+                                    style = NativeControlLensStyle.TabBarIndicator,
+                                    liftProgress = if (appearance.usesRefraction) selectionPressProgressState.value else 0f,
+                                    isDark = !isLight,
+                                    liftedContent = tabsBackdrop,
                                 )
                             }
                         },
-                        highlight = {
-                            val press = selectionPressProgressState.value.coerceIn(0f, 1f)
-                            Highlight.Default.copy(
-                                alpha = (0.54f + 0.38f * press) * press *
-                                    expandedIndicatorVisibilityState.value,
-                                style = HighlightStyle.Default(angle = 90f),
-                            )
-                        },
-                        shadow = null,
-                        innerShadow = {
-                            val strength = selectionPressProgressState.value * expandedIndicatorVisibilityState.value
-                            InnerShadow(
-                                radius = 10.dp * strength,
-                                alpha = 0.86f * strength,
-                            )
-                        },
                         layerBlock = indicatorBackdropLayerBlock,
                         onDrawSurface = {
-                            val press = selectionPressProgressState.value
-                            val indicatorBaseColor = if (isLight) {
-                                Color.Black.copy(alpha = 0.10f)
-                            } else {
-                                Color.White.copy(alpha = 0.10f)
+                            if (!appearance.usesBackdrop) {
+                                val indicatorBaseColor = if (isLight) {
+                                    Color.Black.copy(alpha = 0.10f)
+                                } else {
+                                    Color.White.copy(alpha = 0.10f)
+                                }
+                                drawRect(
+                                    androidx.compose.ui.graphics.lerp(
+                                        indicatorBaseColor, containerColor, compactState.value,
+                                    ),
+                                    alpha = 1f - compactState.value,
+                                )
                             }
-                            val indicatorColor = androidx.compose.ui.graphics.lerp(
-                                indicatorBaseColor,
-                                containerColor,
-                                compactState.value,
-                            )
-                            drawRect(
-                                indicatorColor,
-                                alpha = (if (appearance.usesRefraction) 1f - press else 1f) *
-                                    (1f - compactState.value),
-                            )
-                            drawRect(
-                                Color.Black.copy(
-                                    alpha = 0.03f * press * expandedIndicatorVisibilityState.value,
-                                ),
-                            )
                         },
                     )
             }
@@ -816,8 +803,8 @@ fun <T> GlasmioNavigationBar(
             Modifier
         }
 
-        // Keep both layers on the same navigation morph while limiting the press magnification
-        // to the hidden Lens source.
+        // The platter's outermost-layer puff carries both ordinary content and the lens.
+        // The lifted source retains its additional per-item 1.16 transform.
         CompositionLocalProvider(
             LocalLiquidTabScale provides visibleTabContentScale,
             LocalViewConfiguration provides navigationViewConfiguration,
@@ -826,12 +813,17 @@ fun <T> GlasmioNavigationBar(
             Box(
                 modifier = Modifier
                     .then(surfaceSizeModifier)
-                    .onGloballyPositioned { contactMember?.updateCoordinates(it) },
+                    .then(morphLuminanceModifier)
+                    .onGloballyPositioned {
+                        navigationSurfaceSize.value = it.size.toSize()
+                        contactMember?.updateCoordinates(it)
+                    },
             ) {
                 // Keep registration outside both transforms so contact geometry cannot feed
                 // its own press magnification back into layout bounds.
                 Box(Modifier.matchParentSize()
                     .then(commonTransform)
+                    .then(if (appearance.usesBackdrop && !sharesContactSurface) Modifier.layerBackdrop(ownBarBackdrop) else Modifier)
                     .then(navigationGlassModifier)
                     .then(if (sharesContactSurface) Modifier else interactiveHighlight.modifier))
             }
@@ -839,8 +831,10 @@ fun <T> GlasmioNavigationBar(
                 modifier = Modifier
                     .then(surfaceSizeModifier)
                     .then(commonTransform)
+                    .then(interactiveHighlight.gestureModifier)
                     .then(if (compactMode) Modifier.clearAndSetSemantics {} else Modifier)
-                    .padding(4.dp)
+                    .padding(horizontal = 4.dp)
+                    .navigationContentPadding { 4.dp }
                     .clip(Capsule()),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -852,8 +846,8 @@ fun <T> GlasmioNavigationBar(
                     Box(Modifier.fillMaxSize().graphicsLayer(pressLayerBlock)) {
                         FullTabContent(
                             items = stableItems,
-                            selectedKey = selectedItem.key,
-                            onSelected = stableOnSelected,
+                            selectedKey = selectedKey,
+                            onSelected = onUserSelected,
                             enabled = !compactMode,
                             alpha = tabContentAlpha,
                             selectedColorFilter = selectedIconColorFilterState,
@@ -861,10 +855,10 @@ fun <T> GlasmioNavigationBar(
                             expandedTabWidthPx = expandedTabWidthPx,
                             compactTabWidthPx = compactInnerWidthPx / tabItems.size,
                             compactProgress = compactState,
-                            pressCorrection = tabPressCorrection,
+                            onItemBoundsChanged = onItemBoundsChanged,
                         )
                     }
-                    MorphingSelectedNavigationItem(
+                    if (hasSelection || compactMode) MorphingSelectedNavigationItem(
                         item = selectedItem,
                         compactProgress = compactState,
                         fullWidthPx = fullWidthPx,
@@ -873,6 +867,7 @@ fun <T> GlasmioNavigationBar(
                         selectedIndex = selectedIndex,
                         isLtr = isLtr,
                         horizontalInsetPx = paddingPx,
+                        expandedTabWidthPx = expandedTabWidthPx,
                         selectedContentLateScale = selectedContentLateScaleProvider,
                         labelAlpha = tabContentAlpha,
                         selectedIconColorFilter = selectedIconColorFilterState,
@@ -883,7 +878,7 @@ fun <T> GlasmioNavigationBar(
             }
         }
 
-        if (!indicatorSettled && appearance.usesRefraction) {
+        if (hasSelection && !indicatorSettled && appearance.usesBackdrop) {
             CompositionLocalProvider(
                 LocalLiquidTabScale provides lensSourceTabContentScale,
                 LocalViewConfiguration provides navigationViewConfiguration,
@@ -895,10 +890,9 @@ fun <T> GlasmioNavigationBar(
                         .then(hiddenLayerBackdropModifier)
                         .then(hiddenSourceSizeModifier)
                         .then(commonTransform)
-                        .then(hiddenBackdropModifier)
-                        .then(if (sharesContactSurface) Modifier else selectionHighlightModifier)
+                        .graphicsLayer(pressLayerBlock)
                         .padding(horizontal = 4.dp)
-                        .clip(Capsule()),
+                        .navigationContentPadding { 4.dp },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Box(
@@ -909,15 +903,16 @@ fun <T> GlasmioNavigationBar(
                     ) {
                         FullTabContent(
                             items = stableItems,
-                            selectedKey = selectedItem.key,
-                            onSelected = stableOnSelected,
-                            enabled = !compactMode,
+                            selectedKey = selectedKey,
+                            onSelected = onUserSelected,
+                            enabled = false,
                             alpha = tabContentAlpha,
                             selectedColorFilter = selectedIconColorFilterState,
                             hideSelectedItem = true,
                             expandedTabWidthPx = expandedTabWidthPx,
                             compactTabWidthPx = compactInnerWidthPx / tabItems.size,
                             compactProgress = compactState,
+                            selectedContentSource = true,
                         )
                         MorphingSelectedNavigationItem(
                             item = selectedItem,
@@ -928,44 +923,62 @@ fun <T> GlasmioNavigationBar(
                             selectedIndex = selectedIndex,
                             isLtr = isLtr,
                             horizontalInsetPx = paddingPx,
+                            expandedTabWidthPx = expandedTabWidthPx,
                             selectedContentLateScale = selectedContentLateScaleProvider,
                             labelAlpha = tabContentAlpha,
                             selectedIconColorFilter = hiddenSelectedIconColorFilterState,
                             contentColor = colors.content,
+                            selectedContentSource = true,
                         )
                     }
                 }
             }
         }
 
-        CompositionLocalProvider(LocalViewConfiguration provides navigationViewConfiguration) {
+        if (hasSelection || compactMode) CompositionLocalProvider(LocalViewConfiguration provides navigationViewConfiguration) {
             Box(
                 modifier = Modifier
                     .graphicsLayer(indicatorPositionLayerBlock)
-                    .then(indicatorBackdropModifier)
-                    .then(indicatorSizeModifier)
-                    .then(indicatorHitBoundsModifier)
-                    .then(interactiveHighlight.gestureModifier)
-                    .then(dragAnimation.modifier)
-                    .then(
-                        if (compactMode) {
-                            Modifier
-                                .clickable(
-                                    interactionSource = null,
-                                    indication = null,
-                                    role = Role.Tab,
-                                    onClick = { onExpandState.value() },
-                                )
-                                .semantics(mergeDescendants = true) {
-                                    contentDescription = selectedItem.contentDescription
-                                    selected = true
-                                }
-                        } else {
-                            Modifier
-                        },
-                    ),
-            )
+                    .then(indicatorSizeModifier),
+            ) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .nativeControlLensGeometry(
+                            NativeControlLensStyle.TabBarIndicator,
+                            horizontalProgress = {
+                                if (appearance.usesRefraction && selectionFeedbackEnabled.value) {
+                                    dragAnimation.pressProgress
+                                } else 0f
+                            },
+                        )
+                        .then(indicatorBackdropModifier),
+                )
+                Box(
+                    Modifier.fillMaxSize()
+                        .then(indicatorHitBoundsModifier)
+                        .then(interactiveHighlight.gestureModifier)
+                        .then(dragAnimation.modifier)
+                        .then(
+                            if (compactMode) {
+                                Modifier
+                                    .clickable(
+                                        interactionSource = null,
+                                        indication = null,
+                                        role = Role.Tab,
+                                        onClick = { onExpandState.value() },
+                                    )
+                                    .semantics(mergeDescendants = true) {
+                                        contentDescription = selectedItem.contentDescription
+                                        selected = hasSelection
+                                    }
+                            } else {
+                                Modifier
+                            },
+                        ),
+                )
+            }
         }
+    }
     }
 }
 
@@ -981,7 +994,8 @@ private fun <T> FullTabContent(
     compactTabWidthPx: Float,
     compactProgress: State<Float>,
     hideSelectedItem: Boolean = false,
-    pressCorrection: GraphicsLayerScope.(Int) -> Unit = {},
+    selectedContentSource: Boolean = false,
+    onItemBoundsChanged: ((T, Rect) -> Unit)? = null,
 ) {
     val scale = LocalLiquidTabScale.current
     Layout(
@@ -992,14 +1006,24 @@ private fun <T> FullTabContent(
                 Layout(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .clickable(
-                            enabled = enabled,
-                            interactionSource = null,
-                            indication = null,
-                            role = Role.Tab,
-                            onClick = { onSelected(item.key) },
+                        .then(
+                            // A disabled clickable still participates in pointer hit testing.
+                            // The invisible source plane must never cover the real tab targets.
+                            if (selectedContentSource) Modifier else Modifier
+                                .clickable(
+                                    enabled = enabled,
+                                    interactionSource = null,
+                                    indication = null,
+                                    role = Role.Tab,
+                                    onClick = { onSelected(item.key) },
+                                )
+                                .semantics { this.selected = selected },
                         )
-                        .semantics { this.selected = selected },
+                        .then(
+                            if (onItemBoundsChanged != null) Modifier.onGloballyPositioned { coordinates ->
+                                onItemBoundsChanged(item.key, coordinates.boundsInWindow())
+                            } else Modifier,
+                        ),
                     content = {
                         Column(
                             modifier = Modifier
@@ -1010,7 +1034,6 @@ private fun <T> FullTabContent(
                                     val contentScale = scale()
                                     scaleX = contentScale
                                     scaleY = contentScale
-                                    pressCorrection(index)
                                 },
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,
@@ -1022,6 +1045,7 @@ private fun <T> FullTabContent(
                                 // morphing item owns its pixels. Keep its layout and semantics
                                 // without two unused tint layers observing every press frame.
                                 selectedColorFilter = if (selected && hideSelectedItem) null else selectedColorFilter,
+                                selectedContentSource = selectedContentSource,
                             )
                         }
                     },
@@ -1083,6 +1107,7 @@ private fun <T> NavigationTabContent(
     selectedIconTint: Color? = null,
     labelAlpha: (() -> Float)? = null,
     rasterizeBeforeScale: Boolean = false,
+    selectedContentSource: Boolean = false,
 ) {
     val colors = LocalGlassColors.current
     SfIcon(
@@ -1090,7 +1115,10 @@ private fun <T> NavigationTabContent(
         contentDescription = item.contentDescription,
         tint = if (selected) selectedIconTint ?: colors.accent else colors.content,
         size = ExpandedNavigationIconSize,
-        weight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+        fontSize = 18.sp,
+        weight = FontWeight.Medium,
+        fontFeatureSettings = "'ss16' 1",
+        fitGlyphToBounds = false,
         modifier = Modifier
             .then(
                 if (labelAlpha != null) Modifier.navigationTabIconPadding(labelAlpha)
@@ -1111,7 +1139,7 @@ private fun <T> NavigationTabContent(
         text = item.label,
         color = colors.content,
         style = NavigationLabelStyle,
-        fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+        fontWeight = if (selectedContentSource) FontWeight.SemiBold else FontWeight.Medium,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
@@ -1174,22 +1202,21 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
     selectedIndex: Int,
     isLtr: Boolean,
     horizontalInsetPx: Float,
+    expandedTabWidthPx: Float,
     selectedContentLateScale: () -> Float,
     labelAlpha: () -> Float,
     selectedIconColorFilter: State<ColorFilter>?,
     contentColor: Color,
     panelScale: () -> Float = { 1f },
+    selectedContentSource: Boolean = false,
 ) {
     val sharedTabScale = LocalLiquidTabScale.current
     val density = LocalDensity.current
-    val expandedTabs = remember(fullWidthPx, horizontalInsetPx, density, itemCount) {
-        navigationTabGeometry(
-            contentWidthPx = fullWidthPx - 2f * horizontalInsetPx,
-            itemCount = itemCount,
-            minimumWidthPx = with(density) { ExpandedNavigationItemMinWidth.toPx() },
-            protectedIconRadiusPx = with(density) {
-                ExpandedNavigationIconSize.toPx() / 2f + NavigationItemIconClearance.toPx()
-            },
+    val expandedTabs = remember(fullWidthPx, horizontalInsetPx, expandedTabWidthPx, itemCount) {
+        val contentWidth = fullWidthPx - 2f * horizontalInsetPx
+        NavigationTabGeometry(
+            widthPx = expandedTabWidthPx,
+            stepPx = if (itemCount > 1) (contentWidth - expandedTabWidthPx) / (itemCount - 1) else 0f,
         )
     }
     val selectedTabWidthModifier = remember(
@@ -1216,6 +1243,8 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
     }
     Box(
         modifier = Modifier
+            // The actual interactive row (or compact hit surface) owns accessibility.
+            .clearAndSetSemantics {}
             .align(Alignment.Center)
             .fillMaxSize()
             .graphicsLayer {
@@ -1239,9 +1268,8 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
                 val tabScale = panelScale()
                 translationX = targetCenter - currentContentWidth / 2f +
                     navigationPanelCenterOffset(targetCenter, currentContentWidth / 2f, tabScale)
-                // Scale the selected icon and label as one tab item. The shared tab scale owns
-                // press deformation and the <= 0.74 morph; the late correction only reconciles
-                // the expanded icon size with the compact control endpoint.
+                // The icon keeps its native metrics while its center and title move to the
+                // compact target. Only the platter and active lens supply press scaling.
                 val scale = sharedTabScale() * selectedContentLateScale() * tabScale
                 scaleX = scale
                 scaleY = scale
@@ -1264,6 +1292,7 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
                 // Match the filtered path's individual raster bounds before the tab
                 // scales, even when the opaque parent makes both inner tints redundant.
                 rasterizeBeforeScale = true,
+                selectedContentSource = selectedContentSource,
             )
         }
     }
