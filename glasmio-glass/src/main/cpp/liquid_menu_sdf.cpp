@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <unordered_map>
+#include <cstring>
 #include <vector>
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -27,15 +29,15 @@ struct RoundedField {
     float cx, cy, radius, inverseX, inverseY, halfWidth, halfHeight;
     float expanded, curvatureX, curvatureY, baseRadius;
     bool circular;
-    explicit RoundedField(const float *g) {
-        cx = g[0] + g[2] / 2.0f;
-        cy = g[1] + g[3] / 2.0f;
+    explicit RoundedField(const float *g, bool edges = false) {
+        cx = edges ? (g[0] + g[2]) / 2.0f : g[0] + g[2] / 2.0f;
+        cy = edges ? (g[1] + g[3]) / 2.0f : g[1] + g[3] / 2.0f;
         const float rx = std::max(g[4], 0.01f), ry = std::max(g[5], 0.01f);
         radius = std::min(rx, ry);
         inverseX = radius / rx;
         inverseY = radius / ry;
-        halfWidth = g[2] / 2.0f * inverseX;
-        halfHeight = g[3] / 2.0f * inverseY;
+        halfWidth = (edges ? g[2] - g[0] : g[2]) / 2.0f * inverseX;
+        halfHeight = (edges ? g[3] - g[1] : g[3]) / 2.0f * inverseY;
         expanded = radius * kExpansion;
         curvatureX = saturate(2.8915570351735034f - 1.4457785175867517f * (halfWidth * 2.0f) / expanded);
         curvatureY = saturate(2.8915570351735034f - 1.4457785175867517f * (halfHeight * 2.0f) / expanded);
@@ -71,7 +73,7 @@ struct RoundedField {
         return interior + expanded * (continuous - 1.0f +
                                       correction * (curvatureX + (curvatureY - curvatureX) * weight));
     }
-    Normal normal(float x, float y) const {
+    Normal normal(float x, float y, float normalMix = 0.5f) const {
         const float lx = (x - cx) * inverseX, ly = (y - cy) * inverseY;
         const float qx = std::abs(lx) - halfWidth + baseRadius;
         const float qy = std::abs(ly) - halfHeight + baseRadius;
@@ -100,8 +102,13 @@ struct RoundedField {
             ox = nx;
             oy = ny;
         }
-        nx += ox;
-        ny += oy;
+        if (normalMix == 0.5f) {
+            nx += ox;
+            ny += oy;
+        } else {
+            nx += (ox - nx) * normalMix;
+            ny += (oy - ny) * normalMix;
+        }
         const float length = std::sqrt(nx * nx + ny * ny);
         if (length <= 0.000001f)
             return {0.0f, 0.0f};
@@ -374,5 +381,172 @@ extern "C" JNIEXPORT void JNICALL Java_io_github_neoruaa_glasmio_glass_LiquidMen
     std::vector<float>().swap(scratch.horizontal);
     std::vector<float>().swap(scratch.contactEdges);
     std::vector<float>().swap(scratch.contactColumns);
+}
+
+namespace {
+inline uint64_t navigationFloatBits(float value) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+struct NavigationUnionPath {
+    JNIEnv *env;
+    jobject path;
+    jmethodID moveTo, lineTo, close;
+    RoundedField a, b;
+    bool hasSecond;
+    float smoothness;
+    const float *ag;
+    const float *bg;
+    float centerY, guard, left, top, right, bottom;
+    std::unordered_map<uint64_t, float> edgeRoots;
+    std::vector<std::pair<float, float>> points;
+
+    NavigationUnionPath(JNIEnv *env, jobject path, const float *geometry)
+        : env(env), path(path), a(geometry, true), b(geometry + 6, true), hasSecond(geometry[13] != 0.0f),
+          smoothness(geometry[12]), ag(geometry), bg(geometry + 6) {
+        jclass pathClass = env->GetObjectClass(path);
+        moveTo = env->GetMethodID(pathClass, "moveTo", "(FF)V");
+        lineTo = env->GetMethodID(pathClass, "lineTo", "(FF)V");
+        close = env->GetMethodID(pathClass, "close", "()V");
+        env->DeleteLocalRef(pathClass);
+        left = hasSecond ? std::min(ag[0], bg[0]) : ag[0];
+        top = hasSecond ? std::min(ag[1], bg[1]) : ag[1];
+        right = hasSecond ? std::max(ag[2], bg[2]) : ag[2];
+        bottom = hasSecond ? std::max(ag[3], bg[3]) : ag[3];
+        centerY = hasSecond ? ((ag[1] + ag[3]) / 2.0f + (bg[1] + bg[3]) / 2.0f) * 0.5f
+                            : (ag[1] + ag[3]) / 2.0f;
+        guard = smoothness * 0.25f + 1.0f;
+        top -= guard;
+        bottom += guard;
+    }
+
+    float distance(float x, float y) const {
+        if (!hasSecond) return a.distance(x, y);
+        const float ad = a.distance(x, y);
+        const float bd = b.distance(x, y);
+        const Normal an = a.normal(x, y, 0.0f), bn = b.normal(x, y, 0.0f);
+        const float radius = smoothness * saturate(0.5f - 0.5f * (an.x * bn.x + an.y * bn.y));
+        const float h = radius <= 0.000001f ? (ad < bd ? 1.0f : 0.0f)
+                                           : saturate(0.5f + 0.5f * (bd - ad) / radius);
+        return bd + (ad - bd) * h - radius * h * (1.0f - h);
+    }
+
+    float rootX(float outside, float inside) {
+        float lo = outside, hi = inside;
+        for (int i = 0; i < 20; ++i) {
+            const float mid = (lo + hi) * 0.5f;
+            if (distance(mid, centerY) > 0.0f) lo = mid; else hi = mid;
+        }
+        return (lo + hi) * 0.5f;
+    }
+
+    float edgeY(float x, float outer) {
+        const uint64_t key = (navigationFloatBits(x) << 32) | navigationFloatBits(outer);
+        const auto cached = edgeRoots.find(key);
+        if (cached != edgeRoots.end()) return cached->second;
+        float lo = outer, hi = centerY;
+        for (int i = 0; i < 20; ++i) {
+            const float mid = (lo + hi) * 0.5f;
+            if (distance(x, mid) > 0.0f) lo = mid; else hi = mid;
+        }
+        const float result = (lo + hi) * 0.5f;
+        edgeRoots.emplace(key, result);
+        return result;
+    }
+
+    void subdivide(float x0, float y0, float x1, float y1, float outer, int depth) {
+        const float xm = (x0 + x1) * 0.5f;
+        const float ym = edgeY(xm, outer);
+        const bool refine = std::abs(x1 - x0) > 8.0f || std::abs(ym - (y0 + y1) * 0.5f) > 0.125f ||
+            std::abs(edgeY(x0 + (x1 - x0) * 0.25f, outer) - (y0 + (y1 - y0) * 0.25f)) > 0.125f ||
+            std::abs(edgeY(x0 + (x1 - x0) * 0.75f, outer) - (y0 + (y1 - y0) * 0.75f)) > 0.125f;
+        if (depth < 16 && refine) {
+            subdivide(x0, y0, xm, ym, outer, depth + 1);
+            subdivide(xm, ym, x1, y1, outer, depth + 1);
+        } else {
+            points.emplace_back(x1, y1);
+        }
+    }
+
+    void append(float appendLeft, float appendRight) {
+        std::vector<float> stops = {appendLeft, appendRight};
+        auto addElement = [&stops](const float *g) {
+            const float cx = (g[0] + g[2]) / 2.0f;
+            stops.push_back(cx);
+            stops.push_back(g[0] + g[4]);
+            stops.push_back(g[2] - g[4]);
+            stops.push_back(g[0]);
+            stops.push_back(g[2]);
+        };
+        addElement(ag);
+        if (hasSecond) {
+            addElement(bg);
+            stops.push_back((ag[2] + bg[0]) * 0.5f);
+        }
+        stops.erase(std::remove_if(stops.begin(), stops.end(), [appendLeft, appendRight](float value) {
+            return value < appendLeft || value > appendRight;
+        }), stops.end());
+        std::vector<float> distinct;
+        for (float value : stops) {
+            bool exists = false;
+            for (float previous : distinct) {
+                if (navigationFloatBits(previous) == navigationFloatBits(value)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) distinct.push_back(value);
+        }
+        std::sort(distinct.begin(), distinct.end());
+
+        env->CallVoidMethod(path, moveTo, appendLeft, edgeY(appendLeft, top));
+        for (int pass = 0; pass < 2; ++pass) {
+            const float outer = pass == 0 ? top : bottom;
+            points.clear();
+            if (pass == 0) {
+                for (size_t i = 0; i + 1 < distinct.size(); ++i) {
+                    const float x0 = distinct[i], x1 = distinct[i + 1];
+                    subdivide(x0, edgeY(x0, outer), x1, edgeY(x1, outer), outer, 0);
+                }
+            } else {
+                for (size_t i = distinct.size(); i-- > 1;) {
+                    const float x0 = distinct[i], x1 = distinct[i - 1];
+                    subdivide(x0, edgeY(x0, outer), x1, edgeY(x1, outer), outer, 0);
+                }
+            }
+            for (const auto &point : points) env->CallVoidMethod(path, lineTo, point.first, point.second);
+            if (pass == 0) env->CallVoidMethod(path, lineTo, appendRight, edgeY(appendRight, bottom));
+        }
+        env->CallVoidMethod(path, close);
+    }
+
+    void build() {
+        const float firstCenterX = (ag[0] + ag[2]) / 2.0f;
+        const float secondCenterX = hasSecond ? (bg[0] + bg[2]) / 2.0f : firstCenterX;
+        if (!hasSecond || distance((ag[2] + (hasSecond ? bg[0] : ag[0])) * 0.5f, centerY) <= 0.0f) {
+            append(rootX(left - guard, firstCenterX), rootX(right + guard, secondCenterX));
+        } else {
+            const float gap = (ag[2] + bg[0]) * 0.5f;
+            append(rootX(ag[0] - guard, firstCenterX), rootX(gap, firstCenterX));
+            append(rootX(gap, secondCenterX), rootX(bg[2] + guard, secondCenterX));
+        }
+    }
+};
+} // namespace
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_io_github_neoruaa_glasmio_glass_LiquidMenuNativeField_buildNavigationPathNative(
+    JNIEnv *env, jobject, jfloatArray geometry, jobject path) {
+    if (!geometry || !path || env->GetArrayLength(geometry) != 14) return JNI_FALSE;
+    float g[14];
+    env->GetFloatArrayRegion(geometry, 0, 14, g);
+    if (env->ExceptionCheck()) return JNI_FALSE;
+    for (float value : g) if (!std::isfinite(value)) return JNI_FALSE;
+    NavigationUnionPath builder(env, path, g);
+    if (!builder.moveTo || !builder.lineTo || !builder.close) return JNI_FALSE;
+    builder.build();
+    return env->ExceptionCheck() ? JNI_FALSE : JNI_TRUE;
 }
 #endif

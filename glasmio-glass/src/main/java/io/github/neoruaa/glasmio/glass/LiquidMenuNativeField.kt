@@ -33,6 +33,9 @@ object LiquidMenuNativeField {
         width: Int, height: Int, band: Float, rgba: FloatArray,
     ): Boolean = available && buildContactNative(edges, originX, originY, step, width, height, band, rgba)
 
+    fun buildNavigationPath(geometry: FloatArray, path: android.graphics.Path): Boolean =
+        available && buildNavigationPathNative(geometry, path)
+
     fun release() {
         if (available) releaseNative()
     }
@@ -50,6 +53,8 @@ object LiquidMenuNativeField {
         edges: FloatArray, originX: Float, originY: Float, step: Float,
         width: Int, height: Int, band: Float, rgba: FloatArray,
     ): Boolean
+
+    private external fun buildNavigationPathNative(geometry: FloatArray, path: android.graphics.Path): Boolean
 
     private external fun releaseNative()
 }

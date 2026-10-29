@@ -4,6 +4,7 @@ import androidx.collection.MutableLongFloatMap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asAndroidPath
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSdfFunctions
 import kotlin.math.abs
 import kotlin.math.max
@@ -45,7 +46,21 @@ internal class NavigationNativeUnion private constructor(
     val isConnected: Boolean = if (multipleElements.isNotEmpty()) axisRanges.size == 1 else second?.let {
         distance((first.bounds.right + it.bounds.left) * .5f, centerY) <= 0f
     } ?: false
-    val path: Path by lazy(LazyThreadSafetyMode.NONE) { createPath() }
+    val path: Path by lazy(LazyThreadSafetyMode.NONE) {
+        // Evaluate the same roots and subdivision rules in C++; keep the reference for JVM and 3+ nodes.
+        if (multipleElements.isEmpty()) {
+            fun geometry(element: Element) = floatArrayOf(
+                element.bounds.left, element.bounds.top, element.bounds.right, element.bounds.bottom,
+                element.radii.x, element.radii.y,
+            )
+            val nativePath = Path()
+            val built = LiquidMenuNativeField.buildNavigationPath(
+                geometry(a) + geometry(b ?: a) + floatArrayOf(smoothness, if (b == null) 0f else 1f),
+                nativePath.asAndroidPath(),
+            )
+            if (built) nativePath else createPath()
+        } else createPath()
+    }
 
     /** ShaderUtils::sdf_union, including its deliberately unnormalized mixed gradient. */
     fun field(x: Float, y: Float, output: FloatArray = FloatArray(3)): FloatArray {
