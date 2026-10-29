@@ -26,6 +26,8 @@ Requires Android 13 (API 33) or newer. The Demo includes SF Pro, SF Symbols, and
 
 UI dependencies expose their underlying modules transitively. Add the highest-level modules you use.
 
+`glasmio-glass` owns backdrop recording and material rendering under `io.github.neoruaa.glasmio.glass.render`; no separate Kyant Backdrop dependency is required. Direct consumers must migrate imports to that namespace. Continuous-shape dependencies and existing third-party attributions remain in place.
+
 ## Build and run
 
 Requires JDK 21, Android SDK 37, NDK `27.1.12297006`, and CMake `3.22.1`. The minimum supported Android version is API 33. The repository includes its Gradle wrapper.
@@ -41,7 +43,9 @@ Run the component behavior tests on an Android device or emulator:
 ./gradlew :sample:connectedDebugAndroidTest
 ```
 
-The sample demonstrates materials, controls, navigation, lists, preferences, text styles, search, menus, and sheets. Its Home, Materials, Settings, and About tabs share a navigation bar with a separate floating search control. Each page owns its collapsing title and progressive edge blur; only the top toolbar buttons are shared between destinations. Root tabs fade between destinations; detail pages use Miuix transitions. It builds independently of MeiloX.
+The sample demonstrates materials, controls, navigation, lists, preferences, text styles, search, menus, and sheets. Its Home, Materials, Settings, and About tabs share a navigation bar with a separate floating search control. Each page owns its collapsing title and progressive edge blur; only the top toolbar buttons are shared between destinations. Root tabs fade between destinations; detail pages use Glasmio's iOS-style transitions and swipe-back interaction. It builds independently of MeiloX.
+
+Settings contains persistent options that affect the Demo, including HDR Effects and FPS Counter, both off by default. The counter shows rendered-window FPS and the recent 1% Low without requesting extra animation frames. Preference component examples live in Controls under Preference Rows.
 
 Build the Demo with SF Pro and its real italic font:
 
@@ -132,6 +136,7 @@ The example uses `androidx.compose.ui.platform.LocalContext`, `androidx.core.con
 
 - [Component catalog and examples](docs/components.md)
 - [Backdrop hosting and modal sampling](docs/backdrop.md)
+- [Native material rendering and automatic appearance](docs/native-materials.md)
 - [iOS glass loupe motion reference](docs/ios-loupe-motion.zh-CN.md) (Chinese)
 - [Migration from MeiloX](MIGRATION.md)
 - [Module and dependency boundaries](docs/migration-dependencies.md)

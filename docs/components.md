@@ -15,7 +15,7 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Text editing | `GlasmioTextSelectionHost`, `GlasmioTextSelectionMenu`, `GlasmioTextSelectionLabels`, `GlasmioMagnifier`, `GlasmioLoupeMotion`, `GlasmioLoupeFlex`, `rememberGlasmioLoupeFollow`, `GlasmioLoupeFollowState` |
 | Lists | `GlasmioCard`, `GlasmioGroupedList`, `GlasmioListRow`, `GlasmioSectionTitle`, `GlasmioGroupedTableFooter`, `GlasmioListValuePill`, `GlasmioListSwipeActions`, `GlasmioListSwipeAction`, `GlasmioSwipeActionStyle`, `GlasmioReorderableGroup` |
 | Toolbars | `GlasmioTopBar`, `GlasmioTopBarStyle`, `GlasmioToolbarActionGroup`, `GlasmioToolbarActionStyle`, `GlasmioBottomToolbar`, `GlasmioSheetTopToolbar`, `GlasmioSheetToolbarButton`, `GlasmioSheetButton` |
-| Navigation | `GlasmioNavigationBar`, `GlasmioTabItem` |
+| Navigation | `GlasmioNavigationBar`, `GlasmioNavigationBarWithTrailingItem`, `GlasmioTabItem`, `GlasmioNavigationScrollState`, `rememberGlasmioNavigationScrollState`, `Modifier.glasmioNavigationScrollHint` |
 | Menus | `GlasmioMenu`, `GlasmioMenuItem`, `GlasmioContextMenu`, `GlasmioCascadingMenu`, `GlasmioCascadingMenuItem`, `GlasmioPopUpButton`, `rememberGlasmioMenuAnchorState`, `Modifier.glasmioMenuAnchor` |
 | Alerts | `GlasmioAlertDialog`, `GlasmioAlertButtonSpec`, `GlasmioAlertButtonRole`, `GlasmioAlertButtonLayout`, `GlasmioAlertSurface`, `GlasmioAlertButton`, `GlasmioAlertFieldGroup`, `GlasmioAlertTextField` |
 | Sheets and overlays | `GlasmioBottomSheet`, `GlasmioSheetSurface`, `GlasmioActionSheet`, `GlasmioActionSheetContent`, `GlasmioModalOverlay` |
@@ -193,7 +193,7 @@ fun EditingScreen() = ExampleHost {
 
 `GlasmioEditableText`, text fields, search fields and Alert fields use the Clear magnifier and 16 dp selection lollipops. The lens follows UIKit's glass caret loupe: `115 × 85 dp` at `1.25×`, centred `75 dp` above the finger, a `0.3` low-pass feeding a `damping 0.7 / 0.2 s` spring, the two opening passes started together, a `0.23 s` dismissal that collapses the sampled content towards `0.125×`, and acceleration-driven body deformation while tracking, as recovered in [the native loupe motion reference](ios-loupe-motion.zh-CN.md). The opening shape is the caret rect, a caret-to-selection swap replays the opening passes, and a selection widget taller than the lens body suppresses the lens. The lens and its sample stay inside status-bar, navigation-bar and IME insets, a body larger than the viewport is scaled down, and a body that would leave the container on its lift side is hidden instead of flipped. UIKit's `borderWidth 42.5 → 2` and corner-radius morph, its status-bar hiding, and its vertical-writing lens are not wired to `GlassSurface`: the border is part of the shared material. Expanded editing menus stay within the same viewport and scroll when space is limited. Foundation continues to own text input, selection recognition, transformations and IME sessions. Set `singleLine = false` to wrap text and scroll vertically while retaining the same editing chrome. Constrain the editor with a height, `fillMaxSize()`, or `maxLines`; `maxLines` limits the visible lines without truncating the document. Selection handles support cross-line dragging and vertical edge scrolling, and editing menus anchor to the visible selection. The editor owns its scroll container, so avoid wrapping it in another vertical scroller. Apply IME insets at the screen level so the viewport can shrink above the keyboard. Without a host, fields use their normal Foundation behavior.
 
-`GlasmioMagnifier` can also be used independently in a bounded overlay. Pass its source position, the shape it grows out of, and optional viewport bounds in physical pixels relative to that overlay. Its backdrop must exclude the lens itself. `lensSize`, `verticalOffset`, `orientation`, `magnification`, `collapsedMagnification` and `horizontalInset` override the recovered geometry; `motion` replaces every timing constant at once, `tracking` selects the tracking deformation spring, `identity` replays the opening passes when the attached widget changes, and `onDismissed` reports the end of the dismissal spring. `dismissalProgress` closes the lens without ending the caller's gesture; UIKit only writes that progress when `YukonMagnifiersDisabled` is set, so hosts keep it at its `0f` default. `backgroundColor` fills sampling beyond the source window near its edges. The lens uses Clear tint, edge and shadow layers with a local zero-frost override and preserved source colors, retaining AndroidLiquidGlass's 8/24 dp lens without navigation vibrancy or shadow lifting. `GlassSurface.frostRadius` and `preserveBackdropColors` affect only the specified surface. A lens with its own placement can reuse only the follower through `rememberGlasmioLoupeFollow`, which needs the same `GlasmioLoupeMotion`.
+`GlasmioMagnifier` can also be used independently in a bounded overlay. Pass its source position, the shape it grows out of, and optional viewport bounds in physical pixels relative to that overlay. Its backdrop must exclude the lens itself. `lensSize`, `verticalOffset`, `orientation`, `magnification`, `collapsedMagnification` and `horizontalInset` override the recovered geometry; `motion` replaces every timing constant at once, `tracking` selects the tracking deformation spring, `identity` replays the opening passes when the attached widget changes, and `onDismissed` reports the end of the dismissal spring. `dismissalProgress` closes the lens without ending the caller's gesture; UIKit only writes that progress when `YukonMagnifiersDisabled` is set, so hosts keep it at its `0f` default. `backgroundColor` fills sampling beyond the source window near its edges. The lens uses Glasmio's [owned material renderer](native-materials.md) with Clear edges and shadows, a local zero-frost override, preserved source colors and explicit 8/24 dp refraction overrides. Those retained optical values originated in the AndroidLiquidGlass adaptation; they are separate from the default native-calibrated Clear profile. `GlassSurface.frostRadius` and `preserveBackdropColors` affect only the specified surface. A lens with its own placement can reuse only the follower through `rememberGlasmioLoupeFollow`, which needs the same `GlasmioLoupeMotion`.
 
 ## Lists, insets, and preferences
 
@@ -290,6 +290,9 @@ Inside a sheet, grouped rows inherit UIKit's material context. Medium rows trans
 
 Put `GlasmioSheetTopToolbar` in the modal's `topBar` slot for a pinned progressive-blur header.
 Only the body is recorded into the header's backdrop, excluding the toolbar and grabber.
+`GlasmioSheetToolbarButton` and `GlasmioSheetButton` use the native navigation platter's
+interactive Regular glass material over that body-only source. Action groups retain their
+shared glass field while sheet content scrolls behind them.
 The header uses the same untinted 10dp progressive blur and foreground opacity mask as the page navigation header;
 Reduce Transparency replaces it with a solid canvas color. With this slot, content draws
 behind the handle, header and system navigation bar. Read `LocalGlasmioSheetContentPadding`:
@@ -413,7 +416,34 @@ handles Back by default so the first Back can dismiss the IME. Set `handleBack =
 when no navigation host owns dismissal. Use
 `GlasmioFloatingSearchButton` beside the navigation bar with the same compact progress.
 
-`GlasmioNavigationBar` takes caller-owned `GlasmioTabItem<T>` keys, selection, compact progress, and an expand callback. It does not define destinations or install a navigation runtime. The compact progress is `State<Float>` in `0f..1f`; use a stable state object for live transitions.
+`GlasmioNavigationBar` takes caller-owned `GlasmioTabItem<T>` keys, selection, compact progress, and an expand callback. It does not define destinations or install a navigation runtime. The compact progress is a stable `State<Float>` with expanded and compact targets at `0f` and `1f`; retain the spring's overshoot for material geometry.
+
+`compactItem` can replace the compact expansion target when a separate auxiliary item owns the current route. The replacement keeps the expand action and is not marked selected; it does not change the caller's route.
+
+`GlasmioNavigationBarWithTrailingItem` shares that contract and adds one caller-owned `trailingItem`. With `detachTrailingItem = true`, it occupies a separate icon-only capsule; with `false`, its expanded form is a normal item with its icon and label in the main capsule. Compact mode gives the trailing role its own icon-only button in either configuration. The main and trailing geometries use the same compact progress and spring, preserving the supplied key and `onSelected` callback through retargeting. The wrapper owns their `BottomNavigationContact`; supply outer padding and window insets on its modifier.
+
+`onItemBoundsChanged` reports the visible item's measured bounds in window pixels in either presentation. A host can pass a search item's rectangle to `GlasmioFloatingSearch(sourceBoundsInWindow = ...)` so its opening capsule starts at that actual item. The source is frozen for the open/close cycle, while routes, selection and the search query remain caller-owned.
+
+`rememberGlasmioNavigationScrollState(listState)` supplies a non-consuming `nestedScrollConnection`,
+`compactProgress`, `scrollHintProgress`, and `expand()`. Attach the connection above the active list
+and pass the compact state and expand callback to the bar. User scrolling first drives an independent
+five-percent hint; 64 dp of forward movement changes the compact target. Lists need at least 96 dp
+of scroll range. An interior reverse scroll keeps the compact bar; crossing the actual top boundary
+reveals it. A partial gesture resets only the hint. Changing the bound list preserves the compact
+target and cancels the old gesture, while `enabled = false` prevents secondary pages from driving it.
+
+Apply `Modifier.glasmioNavigationScrollHint(state.scrollHintProgress)` once to the common bottom
+navigation root. Its layer includes the detached item, foreground glyphs, and bottom window-inset
+allocation. Put application margins outside the modifier and `navigationBarsPadding()` after it;
+scaling each capsule separately would move their centers differently from UIKit's shared wrapper.
+
+The default range comes from Compose's official lazy scroll indicator, which estimates unmeasured
+rows. Supply `scrollableRangePx` when the host knows the exact extent. The target uses the recovered
+`.8 / .3 s` spring; tracking, decelerating and resetting hints use `.8 / .1 s`, `.8 / .5 s` and
+`.8 / .3 s`. Android's motion-duration setting remains active. Compose retargeting preserves velocity;
+AnimationKit's conditional projection, smoothing and impulse integrator are a separate adapter
+boundary. The [local native scroll reference](../.local-research/ios/control-lenses/ida/nav-compact/native-scroll-contract.md)
+records the UIKit caller and iPhone geometry.
 
 `GlasmioReorderableGroup` reports the complete reordered list through `onReorder`. Its grabber owns the drag target, leaving the rest of the row available for vertical scrolling. Supply localized drag, move-up, and move-down labels for accessibility actions.
 

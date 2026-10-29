@@ -19,7 +19,7 @@ Glasmio owns rendering, controls, page structure, and preference presentation. M
 ## Platform and third-party dependencies
 
 - All first-release modules target Android Compose. Android `View`, window, bitmap, canvas, and runtime shader code remains in the rendering implementation rather than public business models.
-- Backdrop, Capsule, and Shapes provide existing glass sampling and continuous corners. The extraction preserves the source rendering parameters.
+- `glasmio-glass` owns backdrop capture and material rendering under `io.github.neoruaa.glasmio.glass.render`; consumers no longer need the Kyant Backdrop artifact or a compatibility namespace. Adapted source keeps its attribution. Capsule and Shapes remain geometry dependencies; see [Native material rendering](native-materials.md).
 - `glasmio-scaffold` uses AndroidX Foundation lazy/overscroll APIs, Material3 pull-to-refresh state, and MIUIX overscroll physics. Coroutine jobs remain bound to Compose lifecycles.
 - `glasmio-icons` uses Apache-2.0 Material icons when a host does not install its own symbol renderer. No Apple font file or app resource ID is included.
 - Preference dialogs compose Glasmio card and alert-button primitives. The host owns selected values, validation, and persistence.

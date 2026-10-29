@@ -1,6 +1,6 @@
 # Apple design reference
 
-The [Apple iOS and iPadOS 27 design library](https://www.figma.com/design/AmwPTDqf3t85rARQXQhfX9/) supplies the component terminology, geometry, typography, material layers and Sample wallpaper. The Sample renders interactive Compose controls. Existing control optics, menu springs and drag physics remain preserved.
+The [Apple iOS and iPadOS 27 design library](https://www.figma.com/design/AmwPTDqf3t85rARQXQhfX9/) supplies the component terminology, geometry, typography, material-layer references and Sample wallpaper. Native UIKit analysis and iPhone 13 mini captures take precedence for runtime material behavior. The Sample renders interactive Compose controls.
 
 | Apple component | Glasmio API | Reference node | Geometry |
 | --- | --- | --- | --- |
@@ -25,15 +25,17 @@ List accessories set `SfIcon.fontSize` separately from the layout slot and opt o
 
 `GlasmioSwitch` defaults to iOS system green (`#34C759` light / `#30D158` dark), independently of the host accent; use `onTintColor` for an explicit override. Disabled switches apply 0.5 opacity to the whole control. Disabled text and icon buttons retain regular glass with tertiary vibrant content, including when their enabled style is Prominent or destructive.
 
+The design's switch artwork uses a 64 × 28 track and a 38 × 24 knob. The runtime implementation follows the measured UIKit control: a 63 × 28 track and a 37 × 24 resting thumb. Native control-lens geometry and state behavior are recorded in [native materials](native-materials.md#control-lenses).
+
 All rounded component surfaces and Material theme shape roles use continuous curvature through `ContinuousRoundedRectangle` or Capsule. Circles remain circles. The host can override shape tokens and provide typography and symbol typefaces.
 
 ## Navigation glass
 
-All standalone glass surfaces share the navigation renderer. Its default retains MeiloX's calibrated navigation appearance: the original neutral tint, 2 dp backdrop blur, exterior side shadows, crisp outline, inner shadows and light-mode shadow lift. Selecting a scene never removes these edge layers. Existing navigation bars and floating controls retain this default.
+All standalone glass surfaces share Glasmio's owned navigation renderer. Regular materials use a measured 5-point native blur profile; Clear uses a distinct 0.75-point profile. Native CPU/AIR recovery supplies radius packing, mip sampling, face/tint transforms and SDF edge transfers. Physical captures supply material profiles and confirm the finger-driven glow. Size interpolation and Android render-target adaptation remain documented reconstruction boundaries.
 
-Explicit `NavigationGlassMaterial` presets adapt backing parameters from the Materials page (`215:105157`): Regular Small and Clear declare a frost radius of 6; Regular Medium and Large declare 16. Their tint layers and exterior shadow parameters are applied within the same renderer. Slider, Switch and Segmented Control internals keep their own optical behavior.
+`NavigationGlassMaterial.RegularSmall`, `RegularMedium`, `RegularLarge` and `Clear` retain the design's scene terminology. The regular presets use native face and edge processing. Switch, Slider, Segmented Control and Tab selected indicators use the separate native control-lens composition, with distinct resting bodies and identity transitions.
 
-Figma's native parameters are recorded in [design/ios27-materials.json](design/ios27-materials.json). Its GLASS frost, depth and refraction fields do not establish equivalent Android shader kernels or lens units. The existing calibrated navigation lens remains the shared optical implementation; those values are not presented as a direct numerical conversion. The preserved default remains the visual reference for navigation controls.
+The design's original parameters remain in [design/ios27-materials.json](design/ios27-materials.json). Their GLASS frost, depth and refraction fields are design data rather than Android kernel units. [Native material rendering](native-materials.md) separates measured UIKit values, recovered tint/hysteresis logic and Glasmio's portable shader reconstruction.
 
 ## Sample wallpaper
 
