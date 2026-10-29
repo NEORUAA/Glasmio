@@ -80,6 +80,7 @@ import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.glass.GlassSurfaceStyle
 import io.github.neoruaa.glasmio.glass.BottomNavigationContact
 import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
+import io.github.neoruaa.glasmio.glass.LocalBottomControlContactMemberActive
 import io.github.neoruaa.glasmio.glass.LocalGlassBackdrop
 import io.github.neoruaa.glasmio.glass.trackBackdropPosition
 import io.github.neoruaa.glasmio.icons.SfIcon
@@ -340,9 +341,10 @@ fun <T> GlasmioNavigationBarWithTrailingItem(
     val mainItems = remember(items, trailingItem, detachTrailingItem) {
         if (detachTrailingItem) items else items + trailingItem
     }
-    val auxiliaryActive by remember(compactProgress, detachTrailingItem) {
+    val auxiliaryActive = remember(compactProgress, detachTrailingItem) {
         derivedStateOf { detachTrailingItem || compactProgress.value > 0f }
     }
+    val auxiliaryContactActive = remember(auxiliaryActive) { { auxiliaryActive.value } }
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     var hostOrigin by remember { mutableStateOf(Offset.Zero) }
     var sourceIconBounds by remember { mutableStateOf<Rect?>(null) }
@@ -376,35 +378,37 @@ fun <T> GlasmioNavigationBarWithTrailingItem(
                         if (key == trailingItem.key && compactProgress.value <= 0f) sourceIconBounds = bounds
                     },
                 )
-                FloatingNavigationControl(
-                    compactProgress = compactProgress,
-                    onClick = { onSelected(trailingItem.key) },
-                    backdrop = backdrop,
-                    compactSize = compactSize,
-                    modifier = Modifier.zIndex(2f).graphicsLayer {
-                        alpha = if (detachTrailingItem) 1f else compactProgress.value.coerceIn(0f, 1f)
-                    },
-                    itemSelected = trailingItem.key == selectedKey,
-                    itemActive = auxiliaryActive,
-                    itemContentDescription = trailingItem.contentDescription,
-                    onBoundsChanged = { bounds -> onItemBoundsChanged?.invoke(trailingItem.key, bounds) },
-                ) { progress ->
-                    SfIcon(
-                        trailingItem.symbol,
-                        contentDescription = trailingItem.contentDescription,
-                        tint = LocalGlassColors.current.let { if (trailingItem.key == selectedKey) it.accent else it.content },
-                        size = CompactBottomControlIconSize,
-                        fontSize = 18.sp,
-                        weight = FontWeight.Medium,
-                        fontFeatureSettings = "'ss16' 1",
-                        fitGlyphToBounds = false,
-                        modifier = Modifier.graphicsLayer {
-                            if (!detachTrailingItem) {
-                                translationY = ((sourceIconCenter.value?.y ?: size.height / 2f) -
-                                    NavigationBarSurfaceHeight.toPx() / 2f) * (1f - progress)
-                            }
+                CompositionLocalProvider(LocalBottomControlContactMemberActive provides auxiliaryContactActive) {
+                    FloatingNavigationControl(
+                        compactProgress = compactProgress,
+                        onClick = { onSelected(trailingItem.key) },
+                        backdrop = backdrop,
+                        compactSize = compactSize,
+                        modifier = Modifier.zIndex(2f).graphicsLayer {
+                            alpha = if (detachTrailingItem) 1f else compactProgress.value.coerceIn(0f, 1f)
                         },
-                    )
+                        itemSelected = trailingItem.key == selectedKey,
+                        itemActive = auxiliaryActive.value,
+                        itemContentDescription = trailingItem.contentDescription,
+                        onBoundsChanged = { bounds -> onItemBoundsChanged?.invoke(trailingItem.key, bounds) },
+                    ) { progress ->
+                        SfIcon(
+                            trailingItem.symbol,
+                            contentDescription = trailingItem.contentDescription,
+                            tint = LocalGlassColors.current.let { if (trailingItem.key == selectedKey) it.accent else it.content },
+                            size = CompactBottomControlIconSize,
+                            fontSize = 18.sp,
+                            weight = FontWeight.Medium,
+                            fontFeatureSettings = "'ss16' 1",
+                            fitGlyphToBounds = false,
+                            modifier = Modifier.graphicsLayer {
+                                if (!detachTrailingItem) {
+                                    translationY = ((sourceIconCenter.value?.y ?: size.height / 2f) -
+                                        NavigationBarSurfaceHeight.toPx() / 2f) * (1f - progress)
+                                }
+                            },
+                        )
+                    }
                 }
             },
         ) { measurables, constraints ->

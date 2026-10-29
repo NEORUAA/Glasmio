@@ -55,6 +55,8 @@ import kotlin.math.ceil
 import kotlin.math.floor
 
 val LocalBottomControlContact = staticCompositionLocalOf<BottomControlContact?> { null }
+/** Retained, unplaced controls keep their material owner without contributing geometry or light. */
+val LocalBottomControlContactMemberActive = staticCompositionLocalOf<() -> Boolean> { { true } }
 
 /** One material context owns both separated controls and their joined contour. */
 @Composable
@@ -254,6 +256,7 @@ fun rememberBottomControlContactMember(
     lensSourcePressProgress: (() -> Float)? = null,
 ): BottomControlContactMember? {
     val contact = LocalBottomControlContact.current
+    val currentActive = rememberUpdatedState(LocalBottomControlContactMemberActive.current)
     val currentBounds = rememberUpdatedState(visualBounds)
     val currentMaterialPress = rememberUpdatedState(materialPressProgress)
     val currentHighlight = rememberUpdatedState(highlight)
@@ -263,7 +266,7 @@ fun rememberBottomControlContactMember(
     val member = remember(contact) {
         contact?.let {
             BottomControlContactMember(
-                it, currentBounds, currentMaterialPress, currentHighlight,
+                it, currentActive, currentBounds, currentMaterialPress, currentHighlight,
                 currentLensSourceActive, currentLensSourceScale, currentLensSourcePress,
             )
         }
@@ -277,6 +280,7 @@ fun rememberBottomControlContactMember(
 
 class BottomControlContactMember(
     val contact: BottomControlContact,
+    private val active: State<() -> Boolean>,
     private val visualBounds: State<(Size) -> Rect>,
     private val materialPressProgress: State<() -> Float>,
     private val highlight: State<(Size) -> GlassPressHighlight>,
@@ -290,11 +294,11 @@ class BottomControlContactMember(
     val connected: Boolean get() = contact.connected.value
     val sharesSurface: Boolean get() = contact.surface.value != null
 
-    fun capsule(): LiquidContactCapsule? = bounds?.let {
+    fun capsule(): LiquidContactCapsule? = if (!active.value()) null else bounds?.let {
         LiquidContactCapsule(it.size, visualBounds.value(it.size).translate(it.topLeft))
     }
 
-    fun needsLensSource(): Boolean = lensSourceActive.value?.invoke() == true
+    fun needsLensSource(): Boolean = active.value() && lensSourceActive.value?.invoke() == true
 
     fun lensTransform(): BottomContactLensTransform? {
         val capsule = capsule() ?: return null
@@ -303,11 +307,12 @@ class BottomControlContactMember(
         return BottomContactLensTransform(scale, capsule.bounds.center)
     }
 
-    fun lensSourcePressProgress(): Float? = lensSourcePress.value?.invoke()
+    fun lensSourcePressProgress(): Float? = if (active.value()) lensSourcePress.value?.invoke() else null
 
-    fun pressHighlight(): GlassPressHighlight = bounds?.let { highlight.value(it.size) } ?: GlassPressHighlight()
+    fun pressHighlight(): GlassPressHighlight =
+        if (active.value()) bounds?.let { highlight.value(it.size) } ?: GlassPressHighlight() else GlassPressHighlight()
 
-    fun materialPressProgress(): Float = materialPressProgress.value()
+    fun materialPressProgress(): Float = if (active.value()) materialPressProgress.value() else 0f
 
     fun updateCoordinates(value: LayoutCoordinates) {
         coordinates = value
@@ -390,7 +395,6 @@ class BottomControlContact(
         var second: LiquidContactCapsule? = null
         val progress = mergedProgress?.value?.coerceIn(0f, 1f)
         for (member in members) {
-            if (first != null && progress == 0f) break
             val capsule = member.capsule() ?: continue
             if (first == null) first = capsule
             else if (second == null) second = capsule

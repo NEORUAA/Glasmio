@@ -171,19 +171,42 @@ class ComponentBehaviorTest {
         )
         // A normal page item exercises the generic contract independently of search.
         val about = GlasmioTabItem("about", "About", SfSymbol.Heart)
-        content {
-            CompositionLocalProvider(LocalLayoutDirection provides direction) {
-                Text("page:$selected")
-                GlasmioNavigationBarWithTrailingItem(
-                    items = items,
-                    trailingItem = about,
-                    selectedKey = selected,
-                    onSelected = { selected = it; selections++ },
-                    onExpand = { compact.floatValue = 0f },
-                    compactProgress = compact,
-                    detachTrailingItem = detached,
-                    modifier = Modifier.fillMaxWidth().testTag("generic-navigation"),
+        rule.setContent {
+            GlasmioTheme(isDark = false) {
+                GlasmioBackdropHost(
+                    modifier = Modifier.fillMaxSize(),
+                    sampledContent = { Box(Modifier.fillMaxSize().background(Color.Black)) },
+                    overlayContent = {
+                        CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Text("page:$selected", color = Color.White)
+                                GlasmioNavigationBarWithTrailingItem(
+                                    items = items,
+                                    trailingItem = about,
+                                    selectedKey = selected,
+                                    onSelected = { selected = it; selections++ },
+                                    onExpand = { compact.floatValue = 0f },
+                                    compactProgress = compact,
+                                    detachTrailingItem = detached,
+                                    modifier = Modifier.fillMaxWidth().testTag("generic-navigation"),
+                                )
+                            }
+                        }
+                    },
                 )
+            }
+        }
+        fun assertMaterialSpan(merged: Boolean) {
+            val pixels = rule.onNodeWithTag("generic-navigation").captureToImage().toPixelMap()
+            val y = with(rule.density) { 6.dp.roundToPx() }
+            for (fraction in listOf(.3f, .5f, .7f)) {
+                val x = (pixels.width * fraction).toInt()
+                val brightness = (-1..1).sumOf { dy -> (-1..1).sumOf { dx ->
+                    val color = pixels[x + dx, y + dy]
+                    ((color.red + color.green + color.blue) / 3f).toDouble()
+                } } / 9.0
+                if (merged) assertTrue("The merged main platter must retain its material at $fraction: $brightness", brightness > .1)
+                else assertTrue("The compact gap must retain the black page at $fraction: $brightness", brightness < .05)
             }
         }
         val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
@@ -210,7 +233,10 @@ class ComponentBehaviorTest {
                 rule.onNode(aboutTab).assertIsSelected()
                 rule.onNode(homeTab).assertIsNotSelected()
                 if (separate) rule.onAllNodesWithText("About").assertCountEquals(0)
-                else rule.onNodeWithText("About").assertIsDisplayed()
+                else {
+                    rule.onNodeWithText("About").assertIsDisplayed()
+                    assertMaterialSpan(merged = true)
+                }
                 rule.runOnIdle { assertEquals("Changing style must preserve the route", expectedSelections, selections) }
 
                 // Hit-test the real target while it is emerging and at its final endpoint.
@@ -221,6 +247,7 @@ class ComponentBehaviorTest {
                     rule.onNode(aboutTab).assertIsSelected()
                     rule.onNode(homeTab).assertIsNotSelected()
                     rule.onAllNodesWithText("About").assertCountEquals(0)
+                    if (progress == 1f) assertMaterialSpan(merged = false)
                     val mainBounds = rule.onNode(homeTab).fetchSemanticsNode().boundsInRoot
                     val auxiliaryBounds = rule.onNode(aboutTab).fetchSemanticsNode().boundsInRoot
                     assertEquals("The auxiliary keeps its physical trailing side", layoutDirection == LayoutDirection.Ltr,
