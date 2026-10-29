@@ -156,6 +156,13 @@ internal fun BackdropEffectScope.nativeNavigationGlassFilter(
     renderEffect = result.asComposeRenderEffect()
 }
 
+private data class NativeAtlasMaterialSourceKey(
+    val functions: String,
+    val colorManaged: Boolean,
+    val nativeGammaStorage: Boolean,
+    val complete: Boolean,
+)
+
 /** The producer is materialized before this single sampled material program evaluates its ROI. */
 private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     pyramid: NativeGlassMipPyramid,
@@ -177,12 +184,20 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     val atlas = pyramid.atlas(source, IntSize(ceil(sourceSize.width).toInt(), ceil(sourceSize.height).toInt()),
         maximumLod, NativeGlassMipKernel.Compute13Tap, colorManaged = storage.colorManagedNativeGlass)
     val functions = field?.shaderFunctions ?: NativeDefaultFieldShader
-    val shader = obtainRuntimeShader("Glasmio.NativeAtlas.material.${atlas.colorManaged}.${atlas.nativeGammaStorage}.${completion != null}.${functions.hashCode()}",
+    // Keep the full field source in the key so hash collisions retain source validation.
+    val sources = storage.cachedResource("Glasmio.NativeAtlas.material.sources") {
+        mutableMapOf<NativeAtlasMaterialSourceKey, String>()
+    }
+    val program = sources.getOrPut(NativeAtlasMaterialSourceKey(
+        functions, atlas.colorManaged, atlas.nativeGammaStorage, completion != null,
+    )) {
         (if (completion != null) nativeGlassCompletionFieldFunctions(functions) else functions) +
             (if (completion != null && !functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") +
             atlas.samplingFunctions + NativeAtlasMaterialFunctions + if (completion == null) NativeAtlasMaterialMain
-        else (if (!atlas.colorManaged) GlassColorSpaceShaderFunctions else "") + NativeGlassCompletionShader)
-        .asAndroidRuntimeShader()
+        else (if (!atlas.colorManaged) GlassColorSpaceShaderFunctions else "") + NativeGlassCompletionShader
+    }
+    val shader = obtainRuntimeShader("Glasmio.NativeAtlas.material.${atlas.colorManaged}.${atlas.nativeGammaStorage}.${completion != null}.${functions.hashCode()}",
+        program).asAndroidRuntimeShader()
     atlas.configure(shader)
     if (field == null) {
         shader.setFloatUniform("size", size.width, size.height)

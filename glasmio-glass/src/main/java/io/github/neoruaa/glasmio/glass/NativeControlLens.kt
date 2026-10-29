@@ -81,8 +81,10 @@ fun BackdropEffectScope.nativeControlLens(
     val producer = if (blur > 0f && scope.colorManagedNativeGlass) {
         val colorFunctions = NativeControlProducerManagedColor
         val atlasExtract = obtainRuntimeShader("Glasmio.ControlLens.extractAtlas.true",
-            colorFunctions + GlassSdfShader + NativeControlDisplacementFunctions +
-                NativeControlLensExtractFunctions + NativeControlLensExtractAtlasMain).asAndroidRuntimeShader()
+            scope.cachedResource("Glasmio.ControlLens.extractAtlas.true.source") {
+                colorFunctions + GlassSdfShader + NativeControlDisplacementFunctions +
+                    NativeControlLensExtractFunctions + NativeControlLensExtractAtlasMain
+            }).asAndroidRuntimeShader()
         atlasExtract.setFloatUniform("planeSize", base.width.toFloat(), base.height.toFloat())
         atlasExtract.setFloatUniform("size", size.width, size.height)
         atlasExtract.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, layoutDirection, this))
@@ -93,9 +95,12 @@ fun BackdropEffectScope.nativeControlLens(
         producerStages += RenderEffect.createRuntimeShaderEffect(atlasExtract, "content")
         val weights = scope.cachedResource("Glasmio.ControlLens.GaussianWeights") { NativeControlGaussianWeights() }
         weights.update(blur * blurScale)
+        val gaussianSource = scope.cachedResource("Glasmio.ControlLens.gaussianAtlas.${weights.tapLimit}.$small.source") {
+            colorFunctions + nativeControlManagedAtlasGaussian(weights.tapLimit, planeOnly = small)
+        }
         for (axis in 0..1) {
             val pass = obtainRuntimeShader("Glasmio.ControlLens.gaussianAtlas.${weights.tapLimit}.$axis.$small",
-                colorFunctions + nativeControlManagedAtlasGaussian(weights.tapLimit, planeOnly = small)).asAndroidRuntimeShader()
+                gaussianSource).asAndroidRuntimeShader()
             pass.setFloatUniform("gaussianAxis", if (axis == 0) 1f else 0f, if (axis == 1) 1f else 0f)
             pass.setFloatUniform("gaussianRadius", weights.radius.toFloat())
             pass.setFloatUniform("gaussianWeights", weights.values)
@@ -162,14 +167,17 @@ fun BackdropEffectScope.nativeControlLens(
     }
     if (precomposedScene) {
         val sceneShader = obtainRuntimeShader("Glasmio.ControlLens.scene.${atlas.colorManaged}",
-            GlassSdfShader + atlas.samplingFunctions + NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
-                NativeControlDisplacementFunctions + NativeControlLensSceneFunctions + NativeControlSceneAtlasMain)
-            .asAndroidRuntimeShader()
+            scope.cachedResource("Glasmio.ControlLens.scene.${atlas.colorManaged}.source") {
+                GlassSdfShader + atlas.samplingFunctions + NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
+                    NativeControlDisplacementFunctions + NativeControlLensSceneFunctions + NativeControlSceneAtlasMain
+            }).asAndroidRuntimeShader()
         configureLens(sceneShader, highlight = false)
         stages += RenderEffect.createRuntimeShaderEffect(sceneShader, "content")
     }
-    val shader = obtainRuntimeShader("Glasmio.ControlLens.${atlas.colorManaged}.$fullyResting.$small.$tab.$precomposedScene",
-        nativeControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene)).asAndroidRuntimeShader()
+    val lensKey = "Glasmio.ControlLens.${atlas.colorManaged}.$fullyResting.$small.$tab.$precomposedScene"
+    val shader = obtainRuntimeShader(lensKey, scope.cachedResource("$lensKey.source") {
+        nativeControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene)
+    }).asAndroidRuntimeShader()
     configureLens(shader, highlight = !fullyResting)
     scope.materializeNativeGlassAtlas(atlas)
     val guard = ceil(25.dp.toPx() / scope.samplingScale)
@@ -203,8 +211,10 @@ internal fun BackdropEffectScope.nativeControlLensReferenceProducer(
         ceil(base.height * blurScale).toInt().coerceAtLeast(1))
     val managed = scope.colorManagedNativeGlass
     val colorFunctions = if (managed) NativeControlProducerManagedColor else NativeControlProducerIdentityColor
-    val extract = obtainRuntimeShader("Glasmio.ControlLens.extract.$managed", colorFunctions + GlassSdfShader +
-        NativeControlDisplacementFunctions + NativeControlLensExtract).asAndroidRuntimeShader()
+    val extract = obtainRuntimeShader("Glasmio.ControlLens.extract.$managed",
+        scope.cachedResource("Glasmio.ControlLens.extract.$managed.source") {
+            colorFunctions + GlassSdfShader + NativeControlDisplacementFunctions + NativeControlLensExtract
+        }).asAndroidRuntimeShader()
     extract.setFloatUniform("planeSize", base.width.toFloat(), base.height.toFloat())
     extract.setFloatUniform("size", size.width, size.height)
     extract.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, layoutDirection, this))
@@ -220,8 +230,11 @@ internal fun BackdropEffectScope.nativeControlLensReferenceProducer(
     val sigma = blur * blurScale
     val gaussian = if (!managed) RenderEffect.createBlurEffect(sigma, sigma, clipped, Shader.TileMode.CLAMP) else {
         var effect = clipped
+        val gaussianSource = scope.cachedResource("Glasmio.ControlLens.gaussian.true.source") {
+            colorFunctions + NativeControlManagedGaussian
+        }
         for (axis in 0..1) {
-            val pass = obtainRuntimeShader("Glasmio.ControlLens.gaussian.$axis", colorFunctions + NativeControlManagedGaussian)
+            val pass = obtainRuntimeShader("Glasmio.ControlLens.gaussian.$axis", gaussianSource)
                 .asAndroidRuntimeShader()
             pass.setFloatUniform("gaussianAxis", if (axis == 0) 1f else 0f, if (axis == 1) 1f else 0f)
             pass.setFloatUniform("gaussianSigma", sigma)
