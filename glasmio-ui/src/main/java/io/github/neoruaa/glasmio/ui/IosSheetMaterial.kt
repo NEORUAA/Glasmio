@@ -1,6 +1,7 @@
 package io.github.neoruaa.glasmio.ui
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -39,7 +40,7 @@ internal data class IosSheetMaterialContext(
     fun opaque() = copy(vibrancy = 0f)
 }
 
-internal val LocalIosSheetMaterialContext = staticCompositionLocalOf<IosSheetMaterialContext?> { null }
+internal val LocalIosSheetMaterialContext = compositionLocalOf<IosSheetMaterialContext?> { null }
 internal val LocalIosSheetBackdrop = staticCompositionLocalOf<LayerBackdrop?> { null }
 
 private fun sheetCellFilter(bias: Float): ColorFilter = ColorFilter.colorMatrix(ColorMatrix(floatArrayOf(

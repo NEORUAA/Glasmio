@@ -5,6 +5,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -19,7 +20,7 @@ import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.glass.adaptiveGlassContentColors
 
 internal val LocalBackdropLuminance = staticCompositionLocalOf<BackdropLuminance?> { null }
-private val LocalGlassMaterialContext = staticCompositionLocalOf<GlassMaterialContext?> { null }
+private val LocalGlassMaterialContext = compositionLocalOf<GlassMaterialContext?> { null }
 
 /** One surface's appearance and foreground share the same retained local luminance sample. */
 @Stable

@@ -192,25 +192,58 @@ extern "C" void liquid_menu_sdf_build(const float *geometry, float originX, floa
             raw[output + 2] = s.ny;
         }
     }
-    for (int row = 0; row < paddedHeight; row++)
-        for (int column = 0; column < width; column++) {
-            const size_t center = (static_cast<size_t>(row) * paddedWidth + column + radius) * 3;
-            float d = raw[center] * weights[0], nx = raw[center + 1] * weights[0],
-                  ny = raw[center + 2] * weights[0];
+    for (int row = 0; row < paddedHeight; row++) {
+        const float *source = raw + (static_cast<size_t>(row) * paddedWidth + radius) * 3;
+        float *output = horizontal + static_cast<size_t>(row) * width * 3;
+        int channel = 0;
+#if defined(__aarch64__)
+        // Four independent channel sums preserve every tap's Float32 operation order.
+        // Keep field channels interleaved, including partial four-pixel groups.
+        for (; channel + 4 <= width * 3; channel += 4) {
+            float32x4_t value = vmulq_n_f32(vld1q_f32(source + channel), weights[0]);
             for (int offset = 1; offset <= radius; offset++) {
-                const size_t left = center - offset * 3, right = center + offset * 3;
-                const float weight = weights[offset];
-                d += (raw[left] + raw[right]) * weight;
-                nx += (raw[left + 1] + raw[right + 1]) * weight;
-                ny += (raw[left + 2] + raw[right + 2]) * weight;
+                const float32x4_t left = vld1q_f32(source + channel - offset * 3);
+                const float32x4_t right = vld1q_f32(source + channel + offset * 3);
+                value = vaddq_f32(value, vmulq_n_f32(vaddq_f32(left, right), weights[offset]));
             }
-            const size_t output = (static_cast<size_t>(row) * width + column) * 3;
-            horizontal[output] = d;
-            horizontal[output + 1] = nx;
-            horizontal[output + 2] = ny;
+            vst1q_f32(output + channel, value);
         }
-    for (int row = 0; row < height; row++)
-        for (int column = 0; column < width; column++) {
+#endif
+        for (; channel < width * 3; channel++) {
+            float value = source[channel] * weights[0];
+            for (int offset = 1; offset <= radius; offset++)
+                value += (source[channel - offset * 3] + source[channel + offset * 3]) * weights[offset];
+            output[channel] = value;
+        }
+    }
+    for (int row = 0; row < height; row++) {
+        int column = 0;
+#if defined(__aarch64__)
+        // Resolve four pixels together with exact square roots and division, not
+        // reciprocal estimates. This matches the portable normal at every lane.
+        for (; column + 4 <= width; column += 4) {
+            const size_t center = (static_cast<size_t>(row + radius) * width + column) * 3;
+            const float32x4x3_t values = vld3q_f32(horizontal + center);
+            float32x4_t d = vmulq_n_f32(values.val[0], weights[0]);
+            float32x4_t nx = vmulq_n_f32(values.val[1], weights[0]);
+            float32x4_t ny = vmulq_n_f32(values.val[2], weights[0]);
+            for (int offset = 1; offset <= radius; offset++) {
+                const float32x4x3_t above = vld3q_f32(horizontal + center - offset * width * 3);
+                const float32x4x3_t below = vld3q_f32(horizontal + center + offset * width * 3);
+                const float weight = weights[offset];
+                d = vaddq_f32(d, vmulq_n_f32(vaddq_f32(above.val[0], below.val[0]), weight));
+                nx = vaddq_f32(nx, vmulq_n_f32(vaddq_f32(above.val[1], below.val[1]), weight));
+                ny = vaddq_f32(ny, vmulq_n_f32(vaddq_f32(above.val[2], below.val[2]), weight));
+            }
+            const float32x4_t length = vsqrtq_f32(vaddq_f32(vmulq_f32(nx, nx), vmulq_f32(ny, ny)));
+            const uint32x4_t valid = vcgtq_f32(length, vdupq_n_f32(0.000001f));
+            const float32x4_t safeLength = vbslq_f32(valid, length, vdupq_n_f32(1.0f));
+            const float32x4x4_t result = {{d, vbslq_f32(valid, vdivq_f32(nx, safeLength), vdupq_n_f32(0.0f)),
+                vbslq_f32(valid, vdivq_f32(ny, safeLength), vdupq_n_f32(0.0f)), vdupq_n_f32(1.0f)}};
+            vst4q_f32(rgba + (static_cast<size_t>(row) * width + column) * 4, result);
+        }
+#endif
+        for (; column < width; column++) {
             const size_t center = (static_cast<size_t>(row + radius) * width + column) * 3;
             float d = horizontal[center] * weights[0], nx = horizontal[center + 1] * weights[0],
                   ny = horizontal[center + 2] * weights[0];
@@ -228,6 +261,7 @@ extern "C" void liquid_menu_sdf_build(const float *geometry, float originX, floa
             rgba[output + 2] = length > 0.000001f ? ny / length : 0.0f;
             rgba[output + 3] = 1.0f;
         }
+    }
 }
 
 // Identical Float32 axis-hoisted raster; no contour, sample spacing or optical band changes.

@@ -4,6 +4,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -122,7 +123,9 @@ object IosTypography {
         get() = MaterialTheme.typography.labelMedium
 }
 
-val LocalGlassColors = staticCompositionLocalOf {
+// Sheet vibrancy and adaptive materials can change this palette every animation frame.
+// Track readers so those changes do not invalidate unrelated application content.
+val LocalGlassColors = compositionLocalOf {
     GlassColors(
         isDark = false,
         accent = Color(0xFFFF3B30),
@@ -140,7 +143,7 @@ val LocalGlassColors = staticCompositionLocalOf {
 }
 
 /** Content color inherited by symbols and text placed inside a glass surface. */
-val LocalGlassContentColor = staticCompositionLocalOf<Color?> { null }
+val LocalGlassContentColor = compositionLocalOf<Color?> { null }
 val LocalGroupedListIconColor = staticCompositionLocalOf<Color?> { null }
 val LocalGroupedListBackgroundAlpha = staticCompositionLocalOf { 1f }
 

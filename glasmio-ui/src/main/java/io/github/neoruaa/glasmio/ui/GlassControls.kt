@@ -241,7 +241,7 @@ fun GlasmioSwitch(
     ) {
         Box(
             Modifier
-                .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop) else Modifier)
+                .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
                 .clip(Capsule())
                 .drawBehind { drawRect(colorLerp(track, onColor, animation.value)) }
                 .size(width = 63.dp, height = 28.dp),
@@ -394,7 +394,7 @@ fun GlasmioSlider(
             )
         }
         Box(
-            Modifier.then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop) else Modifier)
+            Modifier.then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
                 .fillMaxWidth(),
         ) {
             Box(
@@ -641,7 +641,7 @@ fun <T> GlasmioSegmentedControl(
         // 1. Record the actual track independently from both label planes.
         Box(
             Modifier.fillMaxSize()
-                .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop) else Modifier)
+                .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
                 .clip(Capsule())
                 .background(trackColor),
         )

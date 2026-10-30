@@ -6,11 +6,13 @@ import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import io.github.neoruaa.glasmio.glass.render.RuntimeShaderCache
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
@@ -104,6 +106,13 @@ internal class NativeGlassMipAtlas(
     private val compatibility by lazy(LazyThreadSafetyMode.NONE) { compatibilityProducer?.invoke() }
     val producerEffect: RenderEffect? get() = compatibility?.effect ?: immediateEffect
     val producerStages: List<RenderEffect> get() = compatibility?.stages ?: immediateStages
+    // AndroidRenderEffect wrappers use reference equality. Retain one wrapper per immutable
+    // filter so a source-only redraw does not repeatedly replace every RenderNode's filter.
+    internal val composeProducerStages by lazy(LazyThreadSafetyMode.NONE) {
+        producerStages.map { it.asComposeRenderEffect() }
+    }
+    internal val composeTextureStages = textureStages.map { it.asComposeRenderEffect() }
+    internal val composeTextureSource = textureSource?.asComposeRenderEffect()
     val samplingFunctions: String
         get() = when {
             nativeGammaStorage -> NativeGlassAtlasNativeGammaSamplingFunctions
@@ -133,7 +142,7 @@ internal fun BackdropEffectScope.materializeNativeGlassAtlas(atlas: NativeGlassM
     storage.effectTextureSize = atlas.size
     storage.materializedMipAtlas = atlas.takeIf { it.textureStages.isNotEmpty() || it.controlBlurPlane != null }
     storage.materializedInputEffects = if (storage.materializedMipAtlas != null) emptyList()
-        else atlas.producerStages.map { it.asComposeRenderEffect() }
+        else atlas.composeProducerStages
     return true
 }
 
@@ -142,6 +151,12 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
     private val retained = ArrayList<GraphicsLayer>()
 
     fun layers(effects: List<androidx.compose.ui.graphics.RenderEffect>): List<GraphicsLayer> {
+        recordedPyramid = null
+        recordedControl = null
+        return configureLayers(effects)
+    }
+
+    private fun configureLayers(effects: List<androidx.compose.ui.graphics.RenderEffect>): List<GraphicsLayer> {
         while (retained.size > effects.size) context.releaseGraphicsLayer(retained.removeAt(retained.lastIndex))
         while (retained.size < effects.size) retained += context.createGraphicsLayer()
         retained.forEachIndexed { index, layer ->
@@ -155,23 +170,52 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
     private var base: GraphicsLayer? = null
     private var assembled: GraphicsLayer? = null
     private val tiles = ArrayList<GraphicsLayer>()
+    private data class RecordingContext(
+        val densityBits: Int,
+        val fontScaleBits: Int,
+        val layoutDirection: LayoutDirection,
+        val hardware: Boolean,
+    )
+    private fun DrawScope.recordingContext() = RecordingContext(
+        density.toRawBits(), fontScale.toRawBits(), layoutDirection,
+        drawContext.canvas.nativeCanvas.isHardwareAccelerated,
+    )
+    private var recordedPyramid: NativeGlassMipAtlas? = null
+    private var pyramidContext: RecordingContext? = null
+    private var recordedControl: NativeGlassMipAtlas? = null
+    private var controlContext: RecordingContext? = null
+    private var controlInput: GraphicsLayer? = null
+    private var controlOutput: GraphicsLayer? = null
 
     fun recordControlBlur(
         atlas: NativeGlassMipAtlas,
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
     ) {
+        recordedPyramid = null
         val plane = requireNotNull(atlas.controlBlurPlane)
         check(atlas.producerStages.size == 3)
-        val stages = layers(atlas.producerStages.map { it.asComposeRenderEffect() })
+        val stages = configureLayers(atlas.composeProducerStages)
         // Keep the original extract's raw and portal pixels. Its two Gaussian successors
         // consume only the third plane, retaining the same independent texture barriers.
         record(stages[0], atlas.size, sourceBlock)
         val planeSize = IntSize(plane.width, plane.height)
+        var environment: RecordingContext? = null
         record(stages[1], planeSize) {
+            environment = recordingContext()
             translate(-plane.left.toFloat(), -plane.top.toFloat()) { drawLayer(stages[0]) }
         }
-        record(stages[2], planeSize) { drawLayer(stages[1]) }
+        // The source callback can mutate stage 0's outline, shadow or other layer state.
+        // Always draw it through stage 1 so Compose configures that state on every call.
+        // Stage 2 references only the private stage 1 RenderNode, whose input stays live.
+        if (recordedControl !== atlas || controlInput !== stages[1] || controlOutput !== stages[2] ||
+            controlContext != environment || environment?.hardware != true) {
+            record(stages[2], planeSize) { drawLayer(stages[1]) }
+        }
+        recordedControl = atlas
+        controlContext = environment
+        controlInput = stages[1]
+        controlOutput = stages[2]
     }
 
     fun drawControlBlurAtlas(scope: DrawScope, atlas: NativeGlassMipAtlas) = with(scope) {
@@ -190,24 +234,37 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
     ): GraphicsLayer {
+        recordedControl = null
         val original = base ?: context.createGraphicsLayer().also { base = it }
         original.clip = true
         original.compositingStrategy = CompositingStrategy.Offscreen
-        original.renderEffect = atlas.textureSource?.asComposeRenderEffect()
+        original.renderEffect = atlas.composeTextureSource
         record(original, atlas.baseSize, sourceBlock)
         while (tiles.size > atlas.textureStages.size) context.releaseGraphicsLayer(tiles.removeAt(tiles.lastIndex))
         while (tiles.size < atlas.textureStages.size) tiles += context.createGraphicsLayer()
         var previous = original
+        var environment: RecordingContext? = null
         tiles.forEachIndexed { index, tile ->
             val input = previous
-            val rect = atlas.rects[index + 1]
             tile.clip = true
             tile.compositingStrategy = CompositingStrategy.Offscreen
-            tile.renderEffect = atlas.textureStages[index].asComposeRenderEffect()
+            tile.renderEffect = atlas.composeTextureStages[index]
             // HWUI clips a RuntimeShader's input to its layer bounds. Retain the complete
             // preceding mip as input support; only the top-left output tile is evaluated.
             val support = atlas.rects[index]
-            record(tile, IntSize(support.width, support.height)) { drawLayer(input) }
+            if (index == 0) {
+                // This direct source draw must run even with a stable atlas: sourceBlock
+                // can modify original's public layer state, including outline and Z.
+                record(tile, IntSize(support.width, support.height)) {
+                    environment = recordingContext()
+                    drawLayer(input)
+                }
+            } else if (recordedPyramid !== atlas || pyramidContext != environment || environment?.hardware != true) {
+                // Deeper stages contain only a fixed draw of another private RenderNode.
+                // Retaining their display lists preserves every GPU texture barrier while
+                // the freshly recorded source propagates through the live child references.
+                record(tile, IntSize(support.width, support.height)) { drawLayer(input) }
+            }
             previous = tile
         }
         val output = assembled ?: context.createGraphicsLayer().also { assembled = it }
@@ -223,6 +280,8 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
                 }
             }
         }
+        recordedPyramid = atlas
+        pyramidContext = environment
         return output
     }
 
@@ -235,6 +294,12 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         assembled?.let(context::releaseGraphicsLayer)
         base = null
         assembled = null
+        recordedPyramid = null
+        pyramidContext = null
+        recordedControl = null
+        controlContext = null
+        controlInput = null
+        controlOutput = null
     }
 }
 

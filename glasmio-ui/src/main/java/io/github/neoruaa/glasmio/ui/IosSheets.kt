@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
@@ -185,7 +186,7 @@ fun GlasmioBottomSheet(
         val focus = LocalFocusManager.current
         LaunchedEffect(visible) { if (!visible) focus.clearFocus(force = true) }
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
-        SideEffect {
+        DisposableEffect(window, colors.isDark) {
             window?.apply {
                 setWindowAnimations(0)
                 setDimAmount(0f)
@@ -201,6 +202,7 @@ fun GlasmioBottomSheet(
                     isAppearanceLightNavigationBars = !colors.isDark
                 }
             }
+            onDispose { }
         }
         GlasmioTextEditingWindow(backdrop) {
             BoxWithConstraints(Modifier.fillMaxSize()) {

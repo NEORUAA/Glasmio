@@ -1129,13 +1129,16 @@ class ComponentBehaviorTest {
                 rule.runOnIdle { entries = (1..after).map { "Entry $it" } }
                 rule.mainClock.advanceTimeBy(3_500)
                 rule.waitForIdle()
+                val scenario = "$before->$after, duringOpening=$duringOpening"
                 val changed = ink()
+                // A full-screen Popup can contain ink unrelated to its text labels.
+                assertEquals("$scenario: the menu must render all current labels", after,
+                    rule.onAllNodesWithText("Entry ", substring = true).fetchSemanticsNodes().size)
+                entries.forEach { rule.onNodeWithText(it).assertIsDisplayed() }
                 close()
                 open(settled = true)
                 val fresh = ink()
-                val scenario = "$before->$after, duringOpening=$duringOpening"
-                assertEquals("$scenario: each label must retain one rendered ink band", fresh.rows.size, changed.rows.size)
-                assertEquals("$scenario: the menu must render all current labels", after, changed.rows.size)
+                assertEquals("$scenario: content changes must match fresh-menu ink bands", fresh.rows.size, changed.rows.size)
                 assertEquals("$scenario: rendered menu width", fresh.bounds.width, changed.bounds.width, 2f)
                 assertEquals("$scenario: rendered menu height", fresh.bounds.height, changed.bounds.height, 2f)
                 fresh.rows.zip(changed.rows).forEachIndexed { index, (expected, actual) ->

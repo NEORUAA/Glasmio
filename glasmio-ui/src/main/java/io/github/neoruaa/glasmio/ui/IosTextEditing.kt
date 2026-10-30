@@ -765,7 +765,7 @@ internal fun GlasmioTextEditingOverlay(host: GlasmioTextEditingHost, backdrop: B
     val handlesBackdrop = rememberLayerBackdrop()
     // Record the actual widgets at their laid-out positions. The loupe samples this layer with the
     // same coordinate mapping as the text, so both stay attached through all lens transforms.
-    Box(Modifier.fillMaxSize().layerBackdrop(handlesBackdrop)) {
+    Box(Modifier.fillMaxSize().layerBackdrop(handlesBackdrop, reuseContent = true)) {
         handles.forEach { handle ->
             key(editor, handle.start) { GlasmioEditingHandle(editor, handle.start, handle.anchor, handle.lineHeight) }
         }

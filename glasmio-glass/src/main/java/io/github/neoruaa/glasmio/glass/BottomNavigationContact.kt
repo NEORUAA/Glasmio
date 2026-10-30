@@ -116,7 +116,7 @@ fun BottomNavigationContact(
     Box(modifier.onGloballyPositioned(contact::updateCoordinates).then(probeModifier)) {
         // Capture the actual shared material once, before foreground members are drawn.
         // A selected UIKit lens samples this plane without the old optical source transform.
-        Box(Modifier.matchParentSize().layerBackdrop(materialBackdrop)) {
+        Box(Modifier.matchParentSize().layerBackdrop(materialBackdrop, reuseContent = true)) {
             if (surfaceReady) {
                 val shape = remember(renderedSurface) { { renderedSurface.value?.shape ?: Capsule() } }
                 val press = remember(contact) { derivedStateOf { contact.pressProgress() } }

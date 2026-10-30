@@ -46,6 +46,8 @@ class LayerBackdrop internal constructor(
     internal val onDraw: ContentDrawScope.() -> Unit
 ) : Backdrop {
 
+    internal val recordsContent: Boolean = onDraw === DefaultOnDraw
+
     override val isCoordinatesDependent: Boolean = true
 
     internal var layerCoordinates: LayoutCoordinates? by mutableStateOf(null)
@@ -53,16 +55,19 @@ class LayerBackdrop internal constructor(
     private val sourceToConsumer = Matrix()
     private val screenToConsumer = Matrix()
     private val sourceObservers = LinkedHashSet<() -> Unit>()
+    private var sourceObserverSnapshot = emptyList<() -> Unit>()
 
     override fun observeSourceChanges(observer: () -> Unit): () -> Unit {
-        sourceObservers.add(observer)
-        return { sourceObservers.remove(observer) }
+        if (sourceObservers.add(observer)) sourceObserverSnapshot = sourceObservers.toList()
+        return {
+            if (sourceObservers.remove(observer)) sourceObserverSnapshot = sourceObservers.toList()
+        }
     }
 
     internal fun notifySourceRecorded() {
-        if (sourceObservers.isEmpty()) return
         // An observer can detach while handling a source change.
-        sourceObservers.toList().forEach { it() }
+        // Rebuild the snapshot on membership changes instead of every recorded frame.
+        sourceObserverSnapshot.forEach { it() }
     }
 
     internal fun clearRecordingCoordinates() {

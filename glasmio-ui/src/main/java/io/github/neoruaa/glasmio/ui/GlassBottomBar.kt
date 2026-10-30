@@ -849,7 +849,7 @@ fun <T> GlasmioNavigationBar(
                 // its own press magnification back into layout bounds.
                 Box(Modifier.matchParentSize()
                     .then(commonTransform)
-                    .then(if (appearance.usesBackdrop && !sharesContactSurface) Modifier.layerBackdrop(ownBarBackdrop) else Modifier)
+                    .then(if (appearance.usesBackdrop && !sharesContactSurface) Modifier.layerBackdrop(ownBarBackdrop, reuseContent = true) else Modifier)
                     .then(navigationGlassModifier)
                     .then(if (sharesContactSurface) Modifier else interactiveHighlight.modifier))
             }

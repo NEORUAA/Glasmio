@@ -38,6 +38,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -116,6 +117,7 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.neoruaa.glasmio.core.GlasmioTheme
+import io.github.neoruaa.glasmio.core.GlassColors
 import io.github.neoruaa.glasmio.core.IosTypography
 import io.github.neoruaa.glasmio.core.GlassAppearance
 import io.github.neoruaa.glasmio.core.LocalGlassColors
@@ -274,6 +276,15 @@ class NavigationRenderingTest {
                                 sourceBlock = { sourceCalls++; drawLayer(source) })
                             assertEquals("Plane-only blur retains three producer recordings", 3, recordings)
                             assertEquals("Plane-only blur records the actual source once", 1, sourceCalls)
+                            recordings = 0
+                            sourceCalls = 0
+                            controlPasses.recordControlBlur(controlAtlas,
+                                record = { layer, targetSize, block ->
+                                    recordings++
+                                    layer.record(this, layoutDirection, targetSize, block)
+                                }, sourceBlock = { sourceCalls++; drawLayer(source) })
+                            assertEquals("A stable blur retains only its private final-pass display list", 2, recordings)
+                            assertEquals("A retained final pass still records its actual source", 1, sourceCalls)
                         } else {
                             effects.forEachIndexed { passIndex, effect ->
                                 val input = previous
@@ -1161,6 +1172,299 @@ half4 main(half4 src, half4 dst) {
     }
 
     @Test
+    fun retainedMipDisplayListsKeepLiveSourcePropertiesAndRecordingEnvironment() {
+        val phase = mutableStateOf(0)
+        val showReference = mutableStateOf(false)
+        val counts = Array(11) { ArrayList<Int>() }
+        val sourceCounts = Array(11) { ArrayList<Pair<Int, Int>>() }
+        var retained: io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses? = null
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                val context = androidx.compose.ui.platform.LocalGraphicsContext.current
+                val cached = remember(context) { io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses(context) }
+                val reference = remember(context) { io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses(context) }
+                val pyramid = remember { io.github.neoruaa.glasmio.glass.NativeGlassMipPyramid(
+                    io.github.neoruaa.glasmio.glass.render.RuntimeShaderCacheImpl()) }
+                SideEffect { retained = cached }
+                DisposableEffect(cached, reference) { onDispose { cached.release(); reference.release() } }
+                Canvas(Modifier.requiredSize(160.dp, 96.dp).testTag("retained-mip-scene")) {
+                    val current = phase.value
+                    val extent = if (current < 6) androidx.compose.ui.unit.IntSize(64, 48)
+                        else androidx.compose.ui.unit.IntSize(65, 49)
+                    val atlas = pyramid.atlas(null, extent, 3f)
+                    // A new identity forces the reference to record every mip each time.
+                    val fresh = io.github.neoruaa.glasmio.glass.NativeGlassMipAtlas(
+                        atlas.baseSize, atlas.size, atlas.rects, null, atlas.colorManaged,
+                        emptyList(), atlas.textureStages, atlas.textureSource,
+                        nativeGammaStorage = atlas.nativeGammaStorage,
+                    )
+                    val recordingDensity = Density(if (current >= 2) 1.25f else 1f,
+                        fontScale = if (current >= 3) 1.3f else 1f)
+                    val direction = if (current >= 4) LayoutDirection.Rtl else LayoutDirection.Ltr
+                    var recordings = 0
+                    val calls = IntArray(2)
+                    fun source(index: Int): androidx.compose.ui.graphics.drawscope.DrawScope.() -> Unit = {
+                        calls[index]++
+                        val layer = requireNotNull(drawContext.graphicsLayer)
+                        layer.topLeft = androidx.compose.ui.unit.IntOffset(current % 3, current % 2)
+                        layer.alpha = if (current % 2 == 0) 1f else .73f
+                        layer.scaleX = if (current % 2 == 0) 1f else .95f
+                        layer.rotationZ = if (current % 3 == 0) 0f else 7f
+                        layer.shadowElevation = if (current % 2 == 0) 0f else 2f
+                        layer.blendMode = if (current % 2 == 0) androidx.compose.ui.graphics.BlendMode.SrcOver
+                            else androidx.compose.ui.graphics.BlendMode.Src
+                        layer.colorFilter = if (current % 3 == 0) null
+                            else ColorFilter.tint(Color(0xFFD8E7F3), androidx.compose.ui.graphics.BlendMode.Modulate)
+                        layer.setRoundRectOutline(size = Size(extent.width.toFloat(), extent.height.toFloat()),
+                            cornerRadius = if (current % 2 == 0) 0f else 9f)
+                        layer.setOutsets(current % 2 * 3, current % 2 * 2, current % 2 * 3, current % 2 * 2)
+                        drawRect(if (current % 2 == 0) Color(0xFF163D74) else Color(0xFFE09B28))
+                        for (x in 0 until extent.width step 7) {
+                            drawRect(Color(0xBBDD3964), Offset(x.toFloat(), 0f), Size(3f, extent.height.toFloat()))
+                        }
+                        drawCircle(Color(0xAABBFF22), 12f, Offset(33f + current, 21f))
+                    }
+                    val actual = cached.recordPyramid(atlas, record = { layer, size, block ->
+                        recordings++
+                        layer.record(recordingDensity, direction, size, block)
+                    }, sourceBlock = source(0))
+                    val expected = reference.recordPyramid(fresh, record = { layer, size, block ->
+                        layer.record(recordingDensity, direction, size, block)
+                    }, sourceBlock = source(1))
+                    drawRect(Color.White)
+                    // Point-light shadows depend on the RenderNode's screen position.
+                    // Compare both pipelines at the same physical coordinates.
+                    drawLayer(if (showReference.value) expected else actual)
+                    counts[current] += recordings
+                    sourceCounts[current] += calls[0] to calls[1]
+                }
+            }
+        }
+        val expectedCounts = listOf(5, 3, 5, 5, 5, 3, 5, 3, 5, 5, 3)
+        for (current in expectedCounts.indices) {
+            if (current > 0) compose.runOnIdle {
+                if (current == 8) requireNotNull(retained).release()
+                if (current == 9) requireNotNull(retained).layers(emptyList())
+                phase.value = current
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals("Only private descendants may reuse their recordings at phase $current",
+                    expectedCounts[current], counts[current].first())
+            }
+            // The phase's first recording has already applied any new outsets. Both
+            // captures below therefore use that same settled recording origin.
+            compose.runOnIdle { showReference.value = true }
+            compose.waitForIdle()
+            val expected = compose.onNodeWithTag("retained-mip-scene").captureToImage().toPixelMap()
+            compose.runOnIdle { showReference.value = false }
+            compose.waitForIdle()
+            val actual = compose.onNodeWithTag("retained-mip-scene").captureToImage().toPixelMap()
+            compose.runOnIdle {
+                sourceCounts[current].forEach { (actualCalls, expectedCalls) ->
+                    assertEquals("Source callbacks must keep the full-recording count at phase $current",
+                        expectedCalls, actualCalls)
+                }
+            }
+            val width = if (current < 6) 64 else 65
+            val height = if (current < 6) 72 else 74
+            for (y in 0 until height) for (x in 0 until width) {
+                assertEquals("Live source and retained mips must match at phase=$current $x,$y",
+                    expected[x, y], actual[x, y])
+            }
+        }
+    }
+
+    @Test
+    fun defaultBackdropRecordsNestedContentOnceAndPreservesPixels() {
+        val capture = mutableStateOf(false)
+        val redraw = mutableFloatStateOf(0f)
+        val angle = mutableFloatStateOf(0f)
+        val opacity = mutableFloatStateOf(1f)
+        var contentDraws = 0
+        compose.setContent {
+            val outer = rememberLayerBackdrop()
+            val middle = rememberLayerBackdrop()
+            val inner = rememberLayerBackdrop()
+            Box(Modifier.size(240.dp, 200.dp).background(Color(0xFFB9CBD7)).testTag("capture-replay-scene")) {
+                Canvas(Modifier.offset(60.dp, 50.dp).size(120.dp, 90.dp)
+                    .graphicsLayer {
+                        rotationZ = angle.floatValue
+                        alpha = opacity.floatValue
+                        scaleX = .91f
+                        scaleY = 1.07f
+                    }
+                    .then(if (capture.value) Modifier.layerBackdrop(outer, reuseContent = true)
+                        .layerBackdrop(middle, reuseContent = true).layerBackdrop(inner, reuseContent = true) else Modifier)) {
+                    redraw.floatValue
+                    contentDraws++
+                    // Include overflow, overlapping alpha and a destination-relative blend.
+                    drawRect(Color(0xFFD52F42), Offset(-12.dp.toPx(), -9.dp.toPx()),
+                        Size(size.width + 24.dp.toPx(), size.height + 18.dp.toPx()))
+                    drawRect(Color.Blue.copy(alpha = .37f), Offset(20.dp.toPx(), 14.dp.toPx()),
+                        Size(80.dp.toPx(), 60.dp.toPx()))
+                    drawCircle(Color.White.copy(alpha = .42f), 28.dp.toPx(),
+                        Offset(54.dp.toPx(), 43.dp.toPx()), blendMode = androidx.compose.ui.graphics.BlendMode.DstOut)
+                }
+            }
+        }
+        listOf(0f to 1f, 17f to .73f).forEach { (rotation, alpha) ->
+            compose.runOnIdle {
+                capture.value = false
+                angle.floatValue = rotation
+                opacity.floatValue = alpha
+            }
+            compose.waitForIdle()
+            val expected = compose.onNodeWithTag("capture-replay-scene").captureToImage().toPixelMap()
+            compose.runOnIdle { capture.value = true }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                contentDraws = 0
+                redraw.floatValue++
+            }
+            compose.waitForIdle()
+            compose.runOnIdle { assertEquals("Nested captures must record the leaf once", 1, contentDraws) }
+            val actual = compose.onNodeWithTag("capture-replay-scene").captureToImage().toPixelMap()
+            for (y in 0 until expected.height) for (x in 0 until expected.width) {
+                assertEquals("Capture replay must preserve rotation=$rotation alpha=$alpha at $x,$y",
+                    expected[x, y], actual[x, y])
+            }
+        }
+    }
+
+    @Test
+    fun customBackdropCapturesAndLayerPropertiesStayIndependentOfVisibleContent() {
+        val redraw = mutableFloatStateOf(0f)
+        val mutateDuringDraw = mutableStateOf(false)
+        val contextSpecific = mutableStateOf(false)
+        val sharedScene = mutableStateOf(false)
+        val separateBackdrops = mutableStateOf(false)
+        val showSecond = mutableStateOf(true)
+        var defaultSource: io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop? = null
+        var visibleDraws = 0
+        var firstSiblingDraws = 0
+        compose.setContent {
+            val source = rememberLayerBackdrop()
+            val alias = rememberLayerBackdrop(graphicsLayer = source.graphicsLayer)
+            val custom = rememberLayerBackdrop(onDraw = { drawRect(Color.Magenta) })
+            SideEffect { defaultSource = source }
+            if (sharedScene.value) {
+                Box(Modifier.size(200.dp, 100.dp).background(Color.White).testTag("shared-capture-scene")) {
+                    Canvas(Modifier.size(100.dp).layerBackdrop(source, reuseContent = true)) {
+                        redraw.floatValue
+                        firstSiblingDraws++
+                        drawRect(Color.Red)
+                    }
+                    if (showSecond.value) {
+                        Canvas(Modifier.offset(100.dp, 0.dp).size(100.dp)
+                            .layerBackdrop(if (separateBackdrops.value) alias else source, reuseContent = true)) {
+                            redraw.floatValue
+                            drawRect(Color.Blue)
+                        }
+                    }
+                }
+            } else {
+                Box(Modifier.size(100.dp).background(Color.White).testTag("custom-capture-scene")) {
+                    Canvas(Modifier.fillMaxSize().then(
+                        if (contextSpecific.value) Modifier.layerBackdrop(source)
+                        else Modifier.layerBackdrop(source, reuseContent = true),
+                    ).layerBackdrop(custom, reuseContent = true)) {
+                        redraw.floatValue
+                        visibleDraws++
+                        if (mutateDuringDraw.value) source.graphicsLayer.alpha = .25f
+                        drawRect(if (contextSpecific.value && drawContext.graphicsLayer === source.graphicsLayer)
+                            Color.Blue else Color.Red)
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        val expected = compose.onNodeWithTag("custom-capture-scene").captureToImage().toPixelMap()
+        compose.runOnIdle {
+            requireNotNull(defaultSource).graphicsLayer.alpha = .25f
+            visibleDraws = 0
+            redraw.floatValue++
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("A modified capture retains its independent drawing path", 2, visibleDraws) }
+        val actual = compose.onNodeWithTag("custom-capture-scene").captureToImage().toPixelMap()
+        assertEquals(Color.Red, actual[actual.width / 2, actual.height / 2])
+        for (y in 0 until expected.height) for (x in 0 until expected.width) {
+            assertEquals("Capture-only layer alpha must not change visible pixels at $x,$y", expected[x, y], actual[x, y])
+        }
+        compose.runOnIdle {
+            requireNotNull(defaultSource).graphicsLayer.alpha = 1f
+            mutateDuringDraw.value = true
+            visibleDraws = 0
+            redraw.floatValue++
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals("A layer changed by its capture callback must draw visible content directly", 2, visibleDraws)
+        }
+        val mutated = compose.onNodeWithTag("custom-capture-scene").captureToImage().toPixelMap()
+        for (y in 0 until expected.height) for (x in 0 until expected.width) {
+            assertEquals("A property changed during capture must not change visible pixels at $x,$y",
+                expected[x, y], mutated[x, y])
+        }
+        compose.runOnIdle {
+            requireNotNull(defaultSource).graphicsLayer.alpha = 1f
+            mutateDuringDraw.value = false
+            contextSpecific.value = true
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            visibleDraws = 0
+            redraw.floatValue++
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals("The public default keeps separate visible and capture draw scopes", 2, visibleDraws)
+        }
+        val contextual = compose.onNodeWithTag("custom-capture-scene").captureToImage().toPixelMap()
+        for (y in 0 until expected.height) for (x in 0 until expected.width) {
+            assertEquals("Capture-specific drawing must not replace public default visible content at $x,$y",
+                expected[x, y], contextual[x, y])
+        }
+        compose.runOnIdle {
+            requireNotNull(defaultSource).graphicsLayer.alpha = 1f
+            mutateDuringDraw.value = false
+            sharedScene.value = true
+        }
+        listOf(false, true).forEach { differentWrappers ->
+            compose.runOnIdle {
+                separateBackdrops.value = differentWrappers
+                showSecond.value = true
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                firstSiblingDraws = 0
+                redraw.floatValue++
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals("Shared GraphicsLayer owners must retain direct visible drawing", 2, firstSiblingDraws)
+            }
+            val siblings = compose.onNodeWithTag("shared-capture-scene").captureToImage().toPixelMap()
+            assertEquals("The first sibling must keep its own content", Color.Red,
+                siblings[siblings.width / 4, siblings.height / 2])
+            assertEquals("The second sibling must keep its own content", Color.Blue,
+                siblings[siblings.width * 3 / 4, siblings.height / 2])
+            compose.runOnIdle {
+                firstSiblingDraws = 0
+                showSecond.value = false
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals("Removing a shared owner must invalidate and restore one-pass recording", 1, firstSiblingDraws)
+            }
+            val remaining = compose.onNodeWithTag("shared-capture-scene").captureToImage().toPixelMap()
+            assertEquals(Color.Red, remaining[remaining.width / 4, remaining.height / 2])
+            assertEquals(Color.White, remaining[remaining.width * 3 / 4, remaining.height / 2])
+        }
+    }
+
+    @Test
     fun sampledLayerRetainsItsAncestorScaleAndRotation() {
         val rotation = mutableFloatStateOf(0f)
         val showSample = mutableStateOf(false)
@@ -1271,10 +1575,13 @@ half4 main(half4 src, half4 dst) {
     @Test
     fun adaptiveGlassAnimatesMaterialAndForegroundContinuouslyAcrossRapidRetargets() {
         data class Frame(val targetDark: Boolean, val fraction: Float, val nestedFraction: Float,
-            val foreground: Color, val nestedOwnsProbe: Boolean, val independentOwnsProbe: Boolean)
+            val foreground: Color, val symbolForeground: Color?, val nestedOwnsProbe: Boolean, val independentOwnsProbe: Boolean)
         val observed = java.util.concurrent.atomic.AtomicReference<Frame>()
         val controlledProbe = java.util.concurrent.atomic.AtomicReference<io.github.neoruaa.glasmio.glass.render.BackdropLuminance>()
         val appearance = GlassAppearance(adaptiveColorScheme = true)
+        var unrelatedCompositions = 0
+        val recordUnrelated = { unrelatedCompositions++; Unit }
+        var initialUnrelatedCompositions: Int? = null
         compose.mainClock.autoAdvance = false
         try {
             compose.setContent {
@@ -1299,13 +1606,15 @@ half4 main(half4 src, half4 dst) {
                             Box(Modifier.offset(4.dp, 26.dp).size(12.dp).background(Color.Red))
                             ProvideGlassMaterialContext(context) {
                                 val foreground = LocalContentColor.current
+                                val symbolForeground = io.github.neoruaa.glasmio.core.LocalGlassContentColor.current
                                 val nested = rememberGlassMaterialContext()
+                                IndependentCompositionProbe(recordUnrelated)
                                 Box(Modifier.offset(144.dp, 26.dp).size(12.dp).background(foreground))
                                 ProvideGlassMaterialContext(rememberGlassMaterialContext(sampleBackdrop = false)) {
                                     val independent = rememberGlassMaterialContext()
                                     SideEffect {
                                         observed.set(Frame(context.isDark, context.darkFraction, nested.darkFraction,
-                                            foreground, nested.luminanceState != null, independent.luminanceState != null))
+                                            foreground, symbolForeground, nested.luminanceState != null, independent.luminanceState != null))
                                     }
                                 }
                             }
@@ -1326,9 +1635,14 @@ half4 main(half4 src, half4 dst) {
                     it.fraction, it.nestedFraction, 0f)
                 assertTrue("An inherited surface has one probe writer", !it.nestedOwnsProbe)
                 assertTrue("An unsampled host must let its descendant own a probe", it.independentOwnsProbe)
+                assertEquals("Symbols and text must resolve the same live adaptive foreground", it.foreground, it.symbolForeground)
+                initialUnrelatedCompositions?.let { initial ->
+                    assertEquals("Adaptive material updates must leave unrelated content composed", initial, unrelatedCompositions)
+                }
             }
             compose.mainClock.advanceTimeByFrame()
             val light = sample()
+            initialUnrelatedCompositions = unrelatedCompositions
             assertEquals(0f, verifySharedFrame().fraction, 0f)
             compose.runOnIdle { requireNotNull(controlledProbe.get()).publish(.1f) }
             compose.mainClock.advanceTimeByFrame()
@@ -2368,6 +2682,70 @@ half4 main(half4 src, half4 dst) {
             assertTrue("Small corners must remain distinguishable from the largest radius: $largestRadiusDifference",
                 largestRadiusDifference > .02f)
         }
+    }
+
+    @Test
+    fun sheetMaterialUpdatesOnlyRecomposeMaterialReaders() {
+        val material = mutableStateOf(IosSheetMaterialContext(false, 1f))
+        var unrelatedCompositions = 0
+        var materialCompositions = 0
+        var observedMaterial: IosSheetMaterialContext? = null
+        var observedColors: GlassColors? = null
+        val recordUnrelated = { unrelatedCompositions++; Unit }
+        val recordMaterial: (IosSheetMaterialContext, GlassColors) -> Unit = { context, colors ->
+            materialCompositions++
+            observedMaterial = context
+            observedColors = colors
+        }
+        compose.setContent {
+            GlasmioTheme(isDark = false) {
+                CompositionLocalProvider(LocalIosSheetMaterialContext provides material.value) {
+                    GlasmioSheetSurface(
+                        modifier = Modifier.size(240.dp, 200.dp),
+                        backdrop = emptyBackdrop(),
+                        interactive = false,
+                        applyDragScale = false,
+                    ) {
+                        IndependentCompositionProbe(recordUnrelated)
+                        SheetMaterialReader(recordMaterial)
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        val initialUnrelated = unrelatedCompositions
+        listOf(
+            IosSheetMaterialContext(false, .5f),
+            IosSheetMaterialContext(false, 0f),
+            IosSheetMaterialContext(true, .25f),
+            IosSheetMaterialContext(false, 1f),
+        ).forEach { context ->
+            val previousMaterialCompositions = materialCompositions
+            compose.runOnIdle { material.value = context }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals("Unrelated content must stay composed during the live material transition",
+                    initialUnrelated, unrelatedCompositions)
+                assertTrue("Material consumers must observe every live transition",
+                    materialCompositions > previousMaterialCompositions)
+                assertEquals(context, observedMaterial)
+                assertEquals(context.tableColor, observedColors?.groupedBackground)
+                assertEquals(context.cellColor, observedColors?.elevatedBackground)
+                assertEquals(context.separatorColor, observedColors?.separator)
+            }
+        }
+    }
+
+    @Composable
+    private fun IndependentCompositionProbe(onComposition: () -> Unit) {
+        SideEffect(onComposition)
+    }
+
+    @Composable
+    private fun SheetMaterialReader(onComposition: (IosSheetMaterialContext, GlassColors) -> Unit) {
+        val material = requireNotNull(LocalIosSheetMaterialContext.current)
+        val colors = LocalGlassColors.current
+        SideEffect { onComposition(material, colors) }
     }
 
     @Test
