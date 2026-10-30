@@ -195,7 +195,15 @@ fun GlasmioNavigationScaffold(
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val backdrop = rememberLayerBackdrop()
-    val frame by motion.frame
+    val rawFrame = motion.frame
+    val frameSource = remember { mutableStateOf(rawFrame, referentialEqualityPolicy()) }
+    frameSource.value = rawFrame
+    val frame by remember {
+        derivedStateOf(structuralEqualityPolicy()) {
+            // Header geometry uses its physical frame clock; public readers keep the full motion.
+            frameSource.value.value.copy(playTimeNanos = 0L, gestureVelocity = 0f)
+        }
+    }
     val source = key(frame.fromEntryKey) { header(frame.fromEntryKey) }
     val target = key(frame.toEntryKey) { header(frame.toEntryKey) }
     val titles = remember { PageTitleRegistry() }

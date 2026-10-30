@@ -261,15 +261,29 @@ class NavigationClockTest {
     @Test fun realSeekClockPublishesTrackingCancelAndCommit() {
         val stack = mutableStateListOf("A")
         val motion = GlasmioNavHeaderMotion("A")
+        var headerCalls = 0
+        var foregroundTime = -1L
+        var pops = 0
+        val actionFrames = mutableListOf<GlasmioNavigationFrame>()
         rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
         rule.setContent {
             GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
                 GlasmioNavigationScaffold(motion, header = { entry ->
+                    headerCalls++
                     GlasmioHeaderSpec("Title $entry", trailing = listOf(GlasmioHeaderGroup("primary", listOf(
-                        GlasmioHeaderAction("same.action", "moon", "Stable action", {}) { Text("M") },
+                        GlasmioHeaderAction("same.action", "moon", "Stable action", {
+                            actionFrames += motion.frame.value
+                        }) {
+                            val raw = motion.frame.value
+                            SideEffect { foregroundTime = raw.playTimeNanos }
+                            Text("M")
+                        },
                     ))))
                 }) {
-                    GlasmioNavDisplay(stack, motion, onBack = { if (stack.size > 1) stack.removeAt(stack.lastIndex) },
+                    GlasmioNavDisplay(stack, motion, onBack = {
+                        pops++
+                        if (stack.size > 1) stack.removeAt(stack.lastIndex)
+                    },
                         entryProvider = { key -> NavEntry(key = key, contentKey = key) {
                             Box(Modifier.fillMaxSize().background(Color.White)) {
                                 Text("Body $key", Modifier.padding(top = 140.dp))
@@ -297,6 +311,19 @@ class NavigationClockTest {
             assertEquals(GlasmioNavigationPhase.Settling, motion.frame.value.phase)
             assertTrue("Publish the real SeekableTransitionState clock", motion.frame.value.playTimeNanos > 0)
         }
+        val beforeClockOnly = headerCalls
+        val beforeTime = motion.frame.value.playTimeNanos
+        rule.mainClock.advanceTimeByFrame()
+        rule.runOnUiThread {
+            assertEquals(GlasmioNavigationPhase.Settling, motion.frame.value.phase)
+            assertTrue(motion.frame.value.playTimeNanos > beforeTime)
+            assertEquals("A real seek clock alone must not invalidate the header specification", beforeClockOnly, headerCalls)
+            assertEquals("A foreground that explicitly reads the public clock must remain live",
+                motion.frame.value.playTimeNanos, foregroundTime)
+        }
+        rule.onNodeWithContentDescription("Stable action")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
+        assertEquals(listOf(motion.frame.value), actionFrames)
         val moving = rule.onNodeWithContentDescription("Stable action").fetchSemanticsNode().boundsInRoot
         assertEquals(anchor.center.x, moving.center.x, .5f)
         assertTitleFollowsPage("A")
@@ -324,6 +351,13 @@ class NavigationClockTest {
         rule.runOnUiThread {
             assertEquals(GlasmioNavigationPhase.Tracking, motion.frame.value.phase)
             assertEquals(.6f, motion.frame.value.gestureProgress, .001f)
+            rule.activity.onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(50f, 100f, .25f, BackEventCompat.EDGE_LEFT))
+        }
+        rule.mainClock.advanceTimeBy(64)
+        rule.runOnUiThread {
+            assertEquals(GlasmioNavigationPhase.Tracking, motion.frame.value.phase)
+            assertEquals(.25f, motion.frame.value.gestureProgress, .001f)
+            assertEquals("Reversing an active gesture cannot commit Back", 0, pops)
             rule.activity.onBackPressedDispatcher.dispatchOnBackCancelled()
         }
         rule.mainClock.advanceTimeBy(700)
@@ -331,6 +365,7 @@ class NavigationClockTest {
         assertEquals("Cancel must restore the current title", settledTitle.center.x, titleBounds("B").center.x, 1f)
         rule.runOnUiThread {
             assertEquals(listOf("A", "B"), stack.toList())
+            assertEquals("Cancel must not commit Back", 0, pops)
             assertEquals(GlasmioNavigationPhase.Idle, motion.frame.value.phase)
             assertEquals("B", motion.frame.value.toEntryKey)
             rule.activity.onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 100f, 0f, BackEventCompat.EDGE_LEFT))
@@ -341,6 +376,7 @@ class NavigationClockTest {
         rule.mainClock.advanceTimeBy(1000)
         rule.runOnUiThread {
             assertEquals(listOf("A"), stack.toList())
+            assertEquals("Committed Back must call the original callback exactly once", 1, pops)
             assertEquals(GlasmioNavigationPhase.Idle, motion.frame.value.phase)
             assertEquals("A", motion.frame.value.toEntryKey)
         }

@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.hasBuiltInCoordinateIndependentSource
 import io.github.neoruaa.glasmio.glass.render.highlight.Highlight
 import io.github.neoruaa.glasmio.glass.render.highlight.HighlightElement
 import io.github.neoruaa.glasmio.glass.render.internal.ShapeProvider
@@ -330,6 +331,11 @@ private class DrawBackdropNode(
     private val effectScope =
         object : BackdropEffectScopeImpl() {
 
+            override val supportsNativeControlLensConsumerSharing: Boolean get() = true
+            override val supportsNativeGlassHardwareLinearSampling: Boolean get() = true
+            override val supportsNativeControlLensPlaneStages: Boolean
+                get() = onDrawBackdrop === DefaultOnDrawBackdrop && layerBlock == null
+
             override val shape: Shape get() = shapeProvider.innerShape
         }
 
@@ -420,7 +426,7 @@ private class DrawBackdropNode(
             drawContext.size = effectScope.fullSize
             drawContext.density = effectScope.sourceDensity
             with(auxiliary) {
-                drawBackdrop(density = effectScope.sourceDensity, coordinates = layoutCoordinates, layerBlock = layerBlock)
+                drawBackdrop(density = effectScope.sourceDensity, coordinates = coordinatesForSource(auxiliary), layerBlock = layerBlock)
             }
         } finally {
             drawContext.size = previousSize
@@ -429,10 +435,22 @@ private class DrawBackdropNode(
         }
     }
 
+    private fun coordinatesForSource(source: Backdrop): LayoutCoordinates? {
+        val defaultDrawing = luminanceState == null && !luminanceOnly && sampleBounds == null &&
+            exportedBackdrop == null && layerBlock == null && samplingScale === FullResolutionSampling &&
+            onDrawBackdrop === DefaultOnDrawBackdrop && onDrawBehind == null &&
+            onDrawSurface == null && onDrawFront == null
+        return if (defaultDrawing && source.hasBuiltInCoordinateIndependentSource() && !source.isCoordinatesDependent) {
+            // Keep the actual argument, suppressing only an irrelevant position subscription.
+            // The source callback and every other captured state read remain observed.
+            androidx.compose.runtime.snapshots.Snapshot.withoutReadObservation { layoutCoordinates }
+        } else layoutCoordinates
+    }
+
     private fun DrawScope.drawSource(source: GraphicsLayer?) {
         if (source == null) {
             with(backdrop) {
-                drawBackdrop(density = effectScope.sourceDensity, coordinates = layoutCoordinates, layerBlock = layerBlock)
+                drawBackdrop(density = effectScope.sourceDensity, coordinates = coordinatesForSource(backdrop), layerBlock = layerBlock)
             }
         } else {
             val canvas = drawContext.canvas
@@ -457,7 +475,7 @@ private class DrawBackdropNode(
     }
     private val recordAtlasBackingBlock: DrawScope.() -> Unit = {
         val atlas = effectScope.materializedMipAtlas
-        if (atlas?.controlBlurPlane != null) atlasPasses?.drawControlBlurAtlas(this, atlas)
+        if (atlas?.hasControlPlanes == true) atlasPasses?.drawControlPlanes(this, atlas)
         else atlasProducerLayer?.let { drawLayer(it) }
     }
     private val recordAtlasConsumerBlock: DrawScope.() -> Unit = { atlasBackingLayer?.let { drawLayer(it) } }
@@ -509,8 +527,8 @@ private class DrawBackdropNode(
             if (mipAtlas != null || producerEffects.isNotEmpty()) {
                 val context = requireGraphicsContext()
                 val passes = atlasPasses ?: NativeGlassAtlasPasses(context).also { atlasPasses = it }
-                val previous = if (mipAtlas?.controlBlurPlane != null) {
-                    passes.recordControlBlur(mipAtlas,
+                val previous = if (mipAtlas?.hasControlPlanes == true) {
+                    passes.recordControlPlanes(mipAtlas,
                         record = { target, targetSize, block ->
                             recordLayer(this@DrawBackdropNode, target, targetSize, block)
                         },

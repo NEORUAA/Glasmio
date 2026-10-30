@@ -9,12 +9,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
@@ -53,6 +57,15 @@ class NavigationHeaderTest {
     private var bodyColor by mutableStateOf(Color.White)
     private var usesIconSlot = false
 
+    private fun rawClockPlacementControl(): Boolean =
+        androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("scaffoldRawBoth") == "true"
+
+    private fun scaffoldProbe(message: String) {
+        android.util.Log.i("ScaffoldFrameProbe", message)
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendStatus(2,
+            android.os.Bundle().apply { putString("stream", "ScaffoldFrameProbe: $message\n") })
+    }
+
     private fun content(usesBackdrop: Boolean = false) {
         rule.setContent {
             GlasmioTheme(appearance = GlassAppearance(reduceTransparency = !usesBackdrop)) {
@@ -74,6 +87,354 @@ class NavigationHeaderTest {
         }
         rule.waitForIdle()
         rule.mainClock.autoAdvance = false
+    }
+
+    @Test fun clockOnlyFramesSkipScaffoldButKeepIndependentPublicReadersLive() {
+        val rawControl = rawClockPlacementControl()
+        var headerCalls = 0
+        var bodyCalls = 0
+        var bottomCalls = 0
+        var dark by mutableStateOf(false)
+        var titleVersion by mutableIntStateOf(0)
+        var clockReaders by mutableIntStateOf(0)
+        var headerTime = -1L
+        var actionTime = -1L
+        var bodyTime = -1L
+        var bottomTime = -1L
+        var headerColor = Color.Unspecified
+        val clicked = mutableListOf<GlasmioNavigationFrame>()
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.setContent {
+            GlasmioTheme(isDark = dark, appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavigationScaffold(motion, header = { entry ->
+                    headerCalls++
+                    if (rawControl || clockReaders and 1 != 0) {
+                        val raw = motion.frame.value
+                        SideEffect { headerTime = raw.playTimeNanos }
+                    }
+                    val colors = LocalGlassColors.current
+                    SideEffect { headerColor = colors.content }
+                    GlasmioHeaderSpec("Title $entry:$titleVersion", colors = colors,
+                        trailing = listOf(GlasmioHeaderGroup("primary", listOf(
+                            GlasmioHeaderAction("action", "stable", "Action $entry", {
+                                clicked += motion.frame.value
+                            }) {
+                                if (clockReaders and 2 != 0) {
+                                    val raw = motion.frame.value
+                                    SideEffect { actionTime = raw.playTimeNanos }
+                                }
+                                Text("M")
+                            },
+                        ))))
+                }, bottomBar = {
+                    SideEffect { bottomCalls++ }
+                    if (clockReaders and 8 != 0) {
+                        val raw = motion.frame.value
+                        SideEffect { bottomTime = raw.playTimeNanos }
+                    }
+                }) {
+                    SideEffect { bodyCalls++ }
+                    if (clockReaders and 4 != 0) {
+                        val raw = motion.frame.value
+                        SideEffect { bodyTime = raw.playTimeNanos }
+                    }
+                    Box(Modifier.fillMaxSize().background(Color.White)) {
+                        GlasmioPageTitle("A", Modifier.testTag("projection-title-A"))
+                        GlasmioPageTitle("B", Modifier.offset(y = 120.dp).testTag("projection-title-B"))
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.mainClock.autoAdvance = false
+        try {
+            val initial = Triple(headerCalls, bodyCalls, bottomCalls)
+            repeat(8) { index ->
+                rule.runOnUiThread {
+                    motion.state.value = motion.state.value.copy(
+                        playTimeNanos = (index + 1L) * 16_000_000L,
+                        gestureVelocity = if (index % 2 == 0) .75f else -.5f,
+                    )
+                }
+                rule.mainClock.advanceTimeByFrame()
+                if (rawControl) {
+                    assertTrue("The raw-clock control must retain the original header subscription", headerCalls > initial.first)
+                } else {
+                    assertEquals("Unused clock/velocity must not invalidate the scaffold or its stable slots",
+                        initial, Triple(headerCalls, bodyCalls, bottomCalls))
+                }
+            }
+
+            // Exercise every retained field independently, including fields with no current visual mapping.
+            val retainedChanges: List<(GlasmioNavigationFrame) -> GlasmioNavigationFrame> = listOf(
+                { it.copy(fromEntryKey = "B") },
+                { it.copy(toEntryKey = "B") },
+                { it.copy(phase = GlasmioNavigationPhase.Tracking) },
+                { it.copy(gestureProgress = .4f) },
+                { it.copy(transitionId = it.transitionId + 1L) },
+                { it.copy(operation = GlasmioNavigationOperation.Pop) },
+                { it.copy(phase = GlasmioNavigationPhase.Canceling) },
+            )
+            retainedChanges.forEachIndexed { index, update ->
+                val before = headerCalls
+                rule.runOnUiThread { motion.state.value = update(motion.state.value) }
+                rule.mainClock.advanceTimeByFrame()
+                assertTrue("Retained frame field $index must still invalidate its consumer", headerCalls > before)
+            }
+            rule.mainClock.advanceTimeBy(1_200)
+            rule.onNodeWithText("Title B:0").assertIsDisplayed()
+            rule.runOnUiThread { titleVersion++ }
+            // Header composition publishes registry data in SideEffect; its title consumer
+            // needs the following frame to compose and place the newly published text.
+            rule.mainClock.advanceTimeByFrame()
+            rule.mainClock.advanceTimeByFrame()
+            rule.onNodeWithText("Title B:1").assertIsDisplayed()
+            rule.onAllNodesWithText("Title B:0").assertCountEquals(0)
+            val light = headerColor
+            rule.runOnUiThread { dark = true }
+            rule.mainClock.advanceTimeByFrame()
+            assertTrue("Palette updates remain independent of the frame projection", light != headerColor)
+
+            // Enable each public reader alone, so a parent clock subscription cannot hide a stale child.
+            listOf(1, 2, 4, 8).forEachIndexed { index, reader ->
+                rule.runOnUiThread { clockReaders = reader }
+                rule.mainClock.advanceTimeByFrame()
+                val before = headerCalls
+                val time = 987_654_318L + index
+                rule.runOnUiThread {
+                    motion.state.value = motion.state.value.copy(playTimeNanos = time, gestureVelocity = -1.75f)
+                }
+                rule.mainClock.advanceTimeByFrame()
+                val observed = when (reader) {
+                    1 -> headerTime
+                    2 -> actionTime
+                    4 -> bodyTime
+                    else -> bottomTime
+                }
+                assertEquals("Public reader $reader must observe the original clock independently", time, observed)
+                if (reader != 1 && !rawControl) assertEquals("A child reader must not invalidate its header specification", before, headerCalls)
+            }
+            rule.onNodeWithContentDescription("Action B")
+                .performSemanticsAction(SemanticsActions.OnClick) { it() }
+            assertEquals(listOf(motion.state.value), clicked)
+            assertEquals("The public motion must retain the exact original clock", 987_654_321L, motion.frame.value.playTimeNanos)
+            assertEquals(-1.75f, motion.frame.value.gestureVelocity, 0f)
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test fun replacingAnEqualFrameStateSwitchesTheLiveSourceImmediately() {
+        class EqualFrameState(initial: GlasmioNavigationFrame) : State<GlasmioNavigationFrame> {
+            private val backing = mutableStateOf(initial)
+            override val value: GlasmioNavigationFrame get() = backing.value
+            fun publish(frame: GlasmioNavigationFrame) { backing.value = frame }
+            override fun equals(other: Any?): Boolean = other is EqualFrameState
+            override fun hashCode(): Int = 0
+        }
+        val first = EqualFrameState(GlasmioNavigationFrame(0, "A", "A"))
+        val second = EqualFrameState(GlasmioNavigationFrame(2, "A", "B"))
+        val source = mutableStateOf<State<GlasmioNavigationFrame>>(first, referentialEqualityPolicy())
+        val switchingMotion = object : GlasmioHeaderMotion {
+            override val frame: State<GlasmioNavigationFrame> get() = source.value
+        }
+        var calls = 0
+        val entries = mutableListOf<Any>()
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavigationScaffold(switchingMotion, header = { entry ->
+                    calls++
+                    entries += entry
+                    GlasmioHeaderSpec("Source $entry")
+                }) {
+                    Box(Modifier.fillMaxSize()) {
+                        GlasmioPageTitle("A")
+                        GlasmioPageTitle("B", Modifier.offset(y = 120.dp))
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        assertEquals(first, second)
+        assertNotSame(first, second)
+        rule.runOnIdle { entries.clear(); source.value = second }
+        rule.waitForIdle()
+        assertEquals("The first composition must already use the replacement source", listOf("A", "B"), entries.take(2))
+        rule.onNodeWithText("Source B").assertIsDisplayed()
+        val afterSwitch = calls
+        rule.runOnIdle { first.publish(GlasmioNavigationFrame(1, "old", "old")) }
+        rule.runOnIdle {
+            assertEquals("A replaced equal source must no longer invalidate the scaffold", afterSwitch, calls)
+        }
+        rule.runOnIdle { second.publish(GlasmioNavigationFrame(3, "B", "B")) }
+        rule.onNodeWithText("Source B").assertIsDisplayed()
+        rule.runOnIdle {
+            assertTrue("The new source must be live in the same composition", calls > afterSwitch)
+            assertEquals("B", switchingMotion.frame.value.toEntryKey)
+        }
+    }
+
+    @Test fun projectedHeaderMatchesRawSubscribedReferenceAtTheSamePresentationTime() {
+        val rawControl = rawClockPlacementControl()
+        val callbacks = List(2) { mutableListOf<Pair<Any, GlasmioNavigationFrame>>() }
+        val headerCalls = IntArray(2)
+        val selectedLane = mutableIntStateOf(0)
+        var direction by mutableStateOf(androidx.compose.ui.unit.LayoutDirection.Ltr)
+        var referenceTime = -1L
+        rule.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        rule.setContent {
+            CompositionLocalProvider(
+                LocalDensity provides androidx.compose.ui.unit.Density(1f),
+                androidx.compose.ui.platform.LocalLayoutDirection provides direction,
+            ) {
+                GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                    val fixtureHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 62.dp + 128.dp
+                    Box(Modifier.requiredSize(240.dp, fixtureHeight).background(Color.White).testTag("projection-comparison")) {
+                        repeat(2) { lane ->
+                            val recording = rememberGraphicsLayer()
+                            GlasmioNavigationScaffold(motion, header = { entry ->
+                                headerCalls[lane]++
+                                if (lane == 1 || rawControl) {
+                                    // Preserve the original raw-clock subscription through a legal public reader.
+                                    // Both lanes use the maintained header renderer and physical spring solver.
+                                    val raw = motion.frame.value
+                                    SideEffect { referenceTime = raw.playTimeNanos }
+                                }
+                                val icon = if (entry == "A") "moon" else symbol
+                                GlasmioHeaderSpec(entry.toString(), trailing = if (!showsGroup) emptyList() else listOf(
+                                    GlasmioHeaderGroup("primary", (0 until if (entry == "A") 1 else count).map { index ->
+                                        GlasmioHeaderAction("action:$index", if (index == 0) icon else "extra:$index",
+                                            "Action $index", { callbacks[lane] += entry to motion.frame.value }) {
+                                            Text(if (index == 0) icon else "X")
+                                        }
+                                    }),
+                                ))
+                            }, modifier = Modifier.fillMaxSize().testTag("projection-lane-$lane").drawWithContent {
+                                // Both trees draw at identical physical coordinates on every redraw.
+                                // Selection changes only replay, preserving each tree's live recordings.
+                                recording.record { this@drawWithContent.drawContent() }
+                                if (selectedLane.intValue == lane) drawLayer(recording)
+                            }) {
+                                Box(Modifier.fillMaxSize().background(Color(0xFF336699)))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.mainClock.autoAdvance = false
+        try {
+            fun lane(index: Int) = rule.onNodeWithTag("projection-lane-$index")
+            fun pixels(index: Int): IntArray {
+                rule.runOnUiThread { selectedLane.intValue = index }
+                rule.waitForIdle()
+                val bitmap = rule.onNodeWithTag("projection-comparison").captureToImage().asAndroidBitmap()
+                return IntArray(bitmap.width * bitmap.height).also {
+                    bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                }
+            }
+            fun compare(stage: String) {
+                val time = rule.mainClock.currentTime
+                val groups = List(2) { laneIndex ->
+                    rule.onAllNodes(hasTestTag("GlasmioHeaderGroup:primary") and
+                        hasAnyAncestor(hasTestTag("projection-lane-$laneIndex")))
+                        .fetchSemanticsNodes().map { node ->
+                            val origin = lane(laneIndex).fetchSemanticsNode().boundsInRoot.topLeft
+                            node.boundsInRoot.translate(Offset(-origin.x, -origin.y))
+                        }
+                }
+                val expected = pixels(1)
+                val actual = pixels(0)
+                val changed = expected.indices.filter { expected[it] != actual[it] }
+                val roots = List(2) { lane(it).fetchSemanticsNode().boundsInRoot }
+                var detail = "rawControl=$rawControl roots=$roots groups=$groups calls=${headerCalls.toList()}"
+                if (changed.isNotEmpty()) {
+                    val width = roots[0].width.toInt()
+                    val maximum = changed.maxOf { index ->
+                        listOf(0, 8, 16, 24).maxOf { shift ->
+                            kotlin.math.abs((expected[index] ushr shift and 255) - (actual[index] ushr shift and 255))
+                        }
+                    }
+                    detail += " changed=${changed.size} maxChannel=$maximum bbox=" +
+                        "${changed.minOf { it % width }},${changed.minOf { it / width }}:" +
+                        "${changed.maxOf { it % width }},${changed.maxOf { it / width }}"
+                    scaffoldProbe("$stage time=$time $detail frame=${motion.frame.value}")
+                }
+                assertArrayEquals("$stage must preserve every RGBA pixel at Compose time $time; $detail", expected, actual)
+                assertEquals("Capturing the reference must not advance its presentation", time, rule.mainClock.currentTime)
+                assertEquals("$stage must retain identical live geometry", groups[1], groups[0])
+            }
+            fun tick(stage: String, elapsed: Long) {
+                val nextTime = (rule.mainClock.currentTime + elapsed) * 1_000_000L
+                rule.runOnUiThread {
+                    motion.state.value = motion.state.value.copy(
+                        playTimeNanos = nextTime,
+                        gestureVelocity = if (elapsed % 2L == 0L) .8f else -.6f,
+                    )
+                }
+                rule.mainClock.advanceTimeBy(elapsed)
+                assertEquals(motion.frame.value.playTimeNanos, referenceTime)
+                compare(stage)
+            }
+            fun assertClickOwner(owner: Any) {
+                repeat(2) { lane ->
+                    rule.onNode(hasContentDescription("Action 0") and
+                        hasAnyAncestor(hasTestTag("projection-lane-$lane")))
+                        .performSemanticsAction(SemanticsActions.OnClick) { it() }
+                    assertEquals(owner to motion.frame.value, callbacks[lane].last())
+                }
+                assertEquals(callbacks[1], callbacks[0])
+            }
+            listOf(androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.LayoutDirection.Rtl).forEach { layout ->
+                rule.runOnUiThread {
+                    direction = layout
+                    symbol = "moon"
+                    count = 1
+                    showsGroup = true
+                    motion.state.value = GlasmioNavigationFrame(0, "A", "A")
+                }
+                rule.mainClock.advanceTimeBy(1_200)
+                compare("$layout initial")
+                val candidateCalls = headerCalls[0]
+                val rawCalls = headerCalls[1]
+                tick("$layout clock-only", 16L)
+                if (rawControl) {
+                    assertTrue("The placement control must subscribe both lanes to the raw clock", headerCalls[0] > candidateCalls)
+                } else {
+                    assertEquals("Clock-only updates must leave the projected lane composed", candidateCalls, headerCalls[0])
+                }
+                assertTrue("The reference must retain the original raw-clock invalidation", headerCalls[1] > rawCalls)
+
+                rule.runOnUiThread {
+                    symbol = "sun"
+                    count = 3
+                    motion.state.value = GlasmioNavigationFrame(1, "A", "B",
+                        phase = GlasmioNavigationPhase.Tracking, gestureProgress = .65f, gestureVelocity = .8f)
+                }
+                listOf(16L, 32L, 64L).forEach { tick("$layout tracking", it) }
+                assertClickOwner("A")
+                rule.runOnUiThread { motion.state.value = motion.state.value.copy(phase = GlasmioNavigationPhase.Canceling) }
+                listOf(16L, 32L, 64L).forEach { tick("$layout cancel", it) }
+                assertClickOwner("A")
+                rule.runOnUiThread {
+                    count = 2
+                    motion.state.value = GlasmioNavigationFrame(2, "A", "B", phase = GlasmioNavigationPhase.Settling)
+                }
+                listOf(16L, 32L, 64L).forEach { tick("$layout retarget", it) }
+                assertClickOwner("B")
+                rule.runOnUiThread {
+                    motion.state.value = GlasmioNavigationFrame(3, "B", "A", operation = GlasmioNavigationOperation.Pop,
+                        phase = GlasmioNavigationPhase.Settling)
+                }
+                listOf(16L, 32L, 64L, 128L, 1_200L).forEach { tick("$layout reverse", it) }
+                assertClickOwner("A")
+                rule.runOnUiThread { showsGroup = false }
+                listOf(16L, 64L, 1_200L).forEach { tick("$layout disappear", it) }
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
     }
 
     @Test fun contentFadeIsLinearAndLeavesTheBackgroundUntouched() {

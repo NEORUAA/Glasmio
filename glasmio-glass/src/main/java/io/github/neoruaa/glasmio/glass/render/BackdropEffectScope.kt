@@ -39,6 +39,11 @@ interface BackdropEffectScope : Density, RuntimeShaderCache {
 
 internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeShaderCache {
 
+    /** Only a library-owned draw node can opt into fully configured consumer snapshots. */
+    internal open val supportsNativeControlLensConsumerSharing: Boolean get() = false
+    internal open val supportsNativeControlLensPlaneStages: Boolean get() = false
+    internal open val supportsNativeGlassHardwareLinearSampling: Boolean get() = false
+
     override var density: Float = 1f
     override var fontScale: Float = 1f
     override var size: Size = Size.Unspecified

@@ -321,7 +321,7 @@ class BottomControlContactMember(
     private var bounds: Rect? by mutableStateOf(null)
 
     val connected: Boolean get() = contact.connected.value
-    val sharesSurface: Boolean get() = contact.surface.value != null
+    val sharesSurface: Boolean get() = contact.hasSurface.value
 
     fun capsule(): LiquidContactCapsule? = if (!active.value()) null else bounds?.let {
         // A resizing source can advance before its global layout registration. Keep
@@ -404,6 +404,8 @@ class BottomControlContact(
     val capturesLensSource = derivedStateOf(structuralEqualityPolicy()) { members.any { it.needsLensSource() } }
 
     val surface = derivedStateOf(referentialEqualityPolicy()) { createSurface() }
+    // Composition selects a material owner; live geometry stays in layout and drawing.
+    internal val hasSurface = derivedStateOf(structuralEqualityPolicy()) { surface.value != null }
     val connected = derivedStateOf(structuralEqualityPolicy()) {
         (surface.value?.shape as? LiquidContactShape)?.isConnected == true
     }

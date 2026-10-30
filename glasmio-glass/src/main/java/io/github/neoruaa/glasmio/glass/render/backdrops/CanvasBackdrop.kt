@@ -27,6 +27,10 @@ fun rememberCanvasBackdrop(
     }
 }
 
+/** Only these private built-in implementations ignore the supplied coordinates argument. */
+internal fun Backdrop.hasBuiltInCoordinateIndependentSource(): Boolean =
+    this is CanvasBackdrop || this === emptyBackdrop()
+
 @Immutable
 private class CanvasBackdrop(
     val onDraw: DrawScope.() -> Unit

@@ -6,6 +6,7 @@ import io.github.neoruaa.glasmio.glass.BottomControlContact
 import io.github.neoruaa.glasmio.glass.BottomControlContactMember
 import io.github.neoruaa.glasmio.glass.GlassPressHighlight
 import io.github.neoruaa.glasmio.glass.LiquidContactCapsule
+import io.github.neoruaa.glasmio.glass.completeNativeFilteredGlass
 import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
@@ -175,6 +176,503 @@ import org.junit.runner.RunWith
 class NavigationRenderingTest {
     @get:Rule val compose = createComposeRule()
     private val library = GlasmioTabItem("library", "Library", SfSymbol.MusicNoteList)
+
+    @Test
+    fun controlLensConsumerPoolRetainsFullSourceSnapshotsAcrossEvictionAndFailedLeases() {
+        data class Snapshot(val label: String, val actual: android.graphics.RenderEffect,
+            val reference: android.graphics.RenderEffect)
+        val selected = mutableStateOf(0 to false)
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                val snapshots = remember {
+                    val source = """
+                        uniform shader content;
+                        uniform float4 fillColor;
+                        half4 main(float2 p) {
+                            return half4(float4(content.eval(p)) * .375 + fillColor * .625);
+                        }
+                    """.trimIndent()
+                    val a = source + "\n/*Aa*/"
+                    val b = source + "\n/*BB*/"
+                    assertTrue("The collision fixture needs different complete sources", a != b)
+                    assertEquals("The fixture must exercise an actual String hash collision", a.hashCode(), b.hashCode())
+                    var factoryCalls = 0
+                    var privateCalls = 0
+                    val constructions = mutableMapOf<String, Int>()
+                    val pool = io.github.neoruaa.glasmio.glass.NativeControlLensConsumerPool(8) { program ->
+                        factoryCalls++
+                        constructions[program] = (constructions[program] ?: 0) + 1
+                        android.graphics.RuntimeShader(program)
+                    }
+                    fun effect(shader: android.graphics.RuntimeShader, color: Color): android.graphics.RenderEffect {
+                        shader.setFloatUniform("fillColor", color.red * color.alpha, color.green * color.alpha,
+                            color.blue * color.alpha, color.alpha)
+                        return android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
+                    }
+                    fun pooled(program: String, color: Color) = pool.snapshot(program,
+                        privateShader = { privateCalls++; android.graphics.RuntimeShader(program) },
+                        configure = { effect(it, color) })
+                    fun pair(label: String, program: String, color: Color) = Snapshot(label,
+                        pooled(program, color), effect(android.graphics.RuntimeShader(program), color))
+                    val retained = arrayListOf(
+                        pair("first A red", a, Color(.8f, .1f, .2f, .7f)),
+                        pair("same A blue", a, Color(.1f, .2f, .8f, .4f)),
+                        pair("colliding B green", b, Color(.1f, .8f, .2f, .9f)),
+                    )
+                    assertEquals("Equal complete sources reuse a constructor", 1, constructions[a])
+                    assertEquals("Hash collisions retain a separate program", 1, constructions[b])
+                    assertEquals(2, factoryCalls)
+                    assertEquals(2, pool.retainedSourceCount)
+                    val extra = (0..8).map { source + "\n/*capacity-$it*/" }
+                    extra.forEach { program -> pooled(program, Color(.2f, .3f, .4f, .5f)) }
+                    assertEquals("The pool keeps at most eight complete sources", 8, pool.retainedSourceCount)
+                    assertEquals("Every new complete source invokes the real constructor once", 11, factoryCalls)
+                    assertEquals("Eviction never needs an owner fallback without an active lease", 0, privateCalls)
+                    val newest = extra.last()
+                    val callsBeforeFailure = factoryCalls
+                    val expectedFailure = IllegalStateException("Expected failed configuration")
+                    var observedFailure: Throwable? = null
+                    try {
+                        pool.snapshot(newest, privateShader = {
+                            privateCalls++; android.graphics.RuntimeShader(newest)
+                        }) { shader ->
+                            shader.setFloatUniform("fillColor", 1f, 0f, 1f, 1f)
+                            throw expectedFailure
+                        }
+                    } catch (failure: Throwable) { observedFailure = failure }
+                    assertTrue("Configuration failures must propagate", observedFailure === expectedFailure)
+                    retained += pair("released failed lease", newest, Color(.7f, .6f, .1f, .6f))
+                    assertEquals("A failed lease becomes idle without replacing its source", callsBeforeFailure, factoryCalls)
+                    assertEquals("A failed lease must not force later owner fallback", 0, privateCalls)
+                    retained
+                }
+                val input = rememberGraphicsLayer()
+                val output = rememberGraphicsLayer()
+                Box(Modifier.requiredSize(64.dp).background(Color.Black).testTag("control-consumer-pool-snapshot")
+                    .drawWithContent {
+                        val (index, reference) = selected.value
+                        input.clip = true
+                        input.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                        input.record(this, layoutDirection, androidx.compose.ui.unit.IntSize(64, 64)) {
+                            drawRect(Color(.2f, .4f, .7f, .65f))
+                            drawRect(Color(.9f, .3f, .1f, .5f), topLeft = Offset(9f, 7f), size = Size(27f, 41f))
+                        }
+                        output.clip = true
+                        output.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                        output.renderEffect = (if (reference) snapshots[index].reference else snapshots[index].actual).asComposeRenderEffect()
+                        output.record(this, layoutDirection, androidx.compose.ui.unit.IntSize(64, 64)) { drawLayer(input) }
+                        drawLayer(output)
+                    })
+            }
+        }
+        repeat(4) { index ->
+            compose.runOnIdle { selected.value = index to true }
+            compose.waitForIdle()
+            val reference = compose.onNodeWithTag("control-consumer-pool-snapshot").captureToImage()
+            compose.runOnIdle { selected.value = index to false }
+            compose.waitForIdle()
+            val actual = compose.onNodeWithTag("control-consumer-pool-snapshot").captureToImage()
+            assertEquals("An old snapshot must remain exact after same-source updates, eviction and failure: $index",
+                0f, lensPoolPixelDifference(reference, actual), 0f)
+        }
+    }
+
+    @Test
+    fun nativeControlLensPooledConsumersRetainIndependentOwnerSnapshots() {
+        val tabPlaneDiagnostic = androidx.test.platform.app.InstrumentationRegistry.getArguments()
+            .getString("glasmioTabPlaneDiagnostic") == "true"
+        class FixtureScope(sharing: Boolean) : BackdropEffectScopeImpl() {
+            override val supportsNativeControlLensConsumerSharing = sharing
+            override val shape = com.kyant.shapes.Capsule()
+        }
+        data class Case(
+            val role: NativeControlLensStyle,
+            val lift: Float,
+            val managed: Boolean,
+            val content: Boolean,
+            val density: Float = 1f,
+            val samplingScale: Float = 1f,
+            val firstSize: Size = Size(80f, 40f),
+            val secondSize: Size = Size(43f, 27f),
+        )
+        val cases = listOf(
+            Case(NativeControlLensStyle.SwitchThumb, 0f, true, false),
+            Case(NativeControlLensStyle.SwitchThumb, 1f, true, true),
+            Case(NativeControlLensStyle.SliderThumb, 0f, false, false),
+            Case(NativeControlLensStyle.SliderThumb, 1f, false, false),
+            Case(NativeControlLensStyle.SegmentedIndicator, 1f, true, true),
+            Case(NativeControlLensStyle.SegmentedIndicator, 1f, false, true),
+            Case(NativeControlLensStyle.TabBarIndicator, .65f, true, true),
+            Case(NativeControlLensStyle.TabBarIndicator, .65f, false, true),
+            Case(NativeControlLensStyle.TabBarIndicator, 0f, true, true),
+            Case(NativeControlLensStyle.TabBarIndicator, 0f, false, true),
+            Case(NativeControlLensStyle.SwitchThumb, -.25f, false, false),
+            Case(NativeControlLensStyle.SwitchThumb, -0f, false, false),
+            Case(NativeControlLensStyle.SwitchThumb, Float.MIN_VALUE, false, true),
+            Case(NativeControlLensStyle.SwitchThumb, .5f, true, true),
+            Case(NativeControlLensStyle.SwitchThumb, 1.25f, false, true),
+            Case(NativeControlLensStyle.SwitchThumb, Float.NaN, false, false),
+            Case(NativeControlLensStyle.SwitchThumb, Float.POSITIVE_INFINITY, false, false),
+            Case(NativeControlLensStyle.SwitchThumb, Float.NEGATIVE_INFINITY, false, false),
+            Case(NativeControlLensStyle.SegmentedIndicator, Float.MIN_VALUE, true, true),
+            Case(NativeControlLensStyle.SegmentedIndicator, Float.MIN_VALUE, false, true),
+            Case(NativeControlLensStyle.TabBarIndicator, Float.MIN_VALUE, true, true),
+            Case(NativeControlLensStyle.TabBarIndicator, Float.MIN_VALUE, false, true),
+            Case(NativeControlLensStyle.SegmentedIndicator, 1.25f, true, true),
+            Case(NativeControlLensStyle.SegmentedIndicator, 1.25f, false, true),
+            Case(NativeControlLensStyle.TabBarIndicator, .65f, true, true, density = 3.25f,
+                firstSize = Size(80.25f, 40.5f), secondSize = Size(43.75f, 27.25f)),
+            Case(NativeControlLensStyle.TabBarIndicator, .65f, true, true, samplingScale = .65f,
+                firstSize = Size(80.25f, 40.5f), secondSize = Size(43.75f, 27.25f)),
+            Case(NativeControlLensStyle.TabBarIndicator, 0f, true, false, density = 3.25f, samplingScale = .5f,
+                firstSize = Size(80.25f, 40.5f), secondSize = Size(43.75f, 27.25f)),
+            Case(NativeControlLensStyle.TabBarIndicator, 1.25f, true, false, density = 3.25f, samplingScale = .5f,
+                firstSize = Size(80.25f, 40.5f), secondSize = Size(43.75f, 27.25f)),
+        )
+        val selected = mutableStateOf(0 to false)
+        val diagnosticView = mutableStateOf<Pair<Int, Int>?>(null)
+        compose.setContent {
+            val caseDensity = cases[selected.value.first / 2].density
+            CompositionLocalProvider(LocalDensity provides Density(caseDensity)) {
+                val snapshots = remember { arrayOfNulls<List<Pair<LensPoolFrame, LensPoolFrame>>>(cases.size) }
+                val input = rememberGraphicsLayer()
+                val output = rememberGraphicsLayer()
+                val producers = List(4) { rememberGraphicsLayer() }
+                val graphicsContext = androidx.compose.ui.platform.LocalGraphicsContext.current
+                val controlPasses = remember(graphicsContext) {
+                    io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses(graphicsContext)
+                }
+                DisposableEffect(controlPasses) { onDispose { controlPasses.release() } }
+                Box(Modifier.requiredSize(if (tabPlaneDiagnostic) 240.dp else 160.dp,
+                    if (tabPlaneDiagnostic) 200.dp else 120.dp)
+                    .background(Color.Black).testTag("control-consumer-owner-snapshot")
+                    .drawWithContent {
+                        val (index, reference) = selected.value
+                        val caseIndex = index / 2
+                        val ownerIndex = index % 2
+                        val case = cases[caseIndex]
+                        val pairs = snapshots[caseIndex] ?: run {
+                            val privateOwner = FixtureScope(false)
+                            val secondPrivateOwner = FixtureScope(false)
+                            val firstOwner = FixtureScope(true)
+                            val secondOwner = FixtureScope(true)
+                            val expected = lensPoolFrame(privateOwner, case.firstSize, case.role, case.lift,
+                                false, case.managed, case.content, Color(.8f, .25f, .15f, .8f), Color(0xFF34C759), samplingScale = case.samplingScale)
+                            val actual = lensPoolFrame(firstOwner, case.firstSize, case.role, case.lift,
+                                false, case.managed, case.content, Color(.8f, .25f, .15f, .8f), Color(0xFF34C759), samplingScale = case.samplingScale)
+                            // This owner uses exactly the same source, after A's effect was retained.
+                            val expectedSecond = lensPoolFrame(secondPrivateOwner, case.secondSize, case.role, case.lift,
+                                true, case.managed, !case.content, Color(.1f, .8f, .3f, .25f), Color(0xFFFF3B30), samplingScale = case.samplingScale)
+                            val actualSecond = lensPoolFrame(secondOwner, case.secondSize, case.role, case.lift,
+                                true, case.managed, !case.content, Color(.1f, .8f, .3f, .25f), Color(0xFFFF3B30), samplingScale = case.samplingScale)
+                            val finiteLift = case.lift.takeIf { it.isFinite() } ?: 0f
+                            val small = case.role == NativeControlLensStyle.SwitchThumb ||
+                                case.role == NativeControlLensStyle.SliderThumb
+                            val hasProducers = if (small) finiteLift > 0f && finiteLift < 1f
+                                else case.role == NativeControlLensStyle.TabBarIndicator || finiteLift > 0f
+                            listOf(expected, actual, expectedSecond, actualSecond).forEach { frame ->
+                                assertEquals("The fixture must retain every real scene/blur producer: $case",
+                                    hasProducers, frame.producerEffects.isNotEmpty())
+                            }
+                            if (case.role == NativeControlLensStyle.TabBarIndicator && case.managed) {
+                                listOf(expected, expectedSecond).forEach { frame ->
+                                    assertEquals("The custom-scope reference must retain its original full-atlas chain", null, frame.controlAtlas)
+                                }
+                                listOf(actual, actualSecond).forEach { frame ->
+                                    val optimized = requireNotNull(frame.controlAtlas)
+                                    assertEquals("Tab blur must use the real production control-plane renderer",
+                                        if (finiteLift > 0f) 4 else 3, optimized.producerStages.size)
+                                    assertEquals("The scene stays on the fourth rect at positive lift",
+                                        finiteLift > 0f, optimized.rects.size == 4)
+                                }
+                            }
+                            // Reconfigure A after B; both earlier effects are rendered only afterward.
+                            lensPoolFrame(firstOwner, Size(91f, 51f), case.role, case.lift,
+                                true, case.managed, !case.content, Color(.2f, .1f, .9f, .4f), Color(0xFFFF9500), samplingScale = case.samplingScale)
+                            listOf(actual to expected, actualSecond to expectedSecond)
+                                .also { snapshots[caseIndex] = it }
+                        }
+                        val pair = pairs[ownerIndex]
+                        val probe = if (tabPlaneDiagnostic) diagnosticView.value else null
+                        lensPoolDraw(if (reference) pair.second else pair.first, input, output, producers, controlPasses,
+                            diagnostic = probe,
+                            diagnosticRects = if (probe == null) emptyList() else requireNotNull(pair.first.controlAtlas).rects)
+                    })
+            }
+        }
+        if (tabPlaneDiagnostic) {
+            val index = cases.indexOfFirst { it.role == NativeControlLensStyle.TabBarIndicator &&
+                it.lift == .65f && it.managed && it.content && it.density == 1f && it.samplingScale == 1f }
+            assertTrue("The diagnostic must retain the original failing Tab case", index >= 0)
+            val probes = listOf(
+                "consumer-before" to null,
+                "extract/raw" to (0 to 0), "extract/portal" to (0 to 1), "extract/blur" to (0 to 2),
+                "gaussian-x/raw" to (1 to 0), "gaussian-x/portal" to (1 to 1), "gaussian-x/blur" to (1 to 2),
+                "gaussian-y/raw" to (2 to 0), "gaussian-y/portal" to (2 to 1), "gaussian-y/blur" to (2 to 2),
+                "scene" to (3 to 3), "consumer-after" to null,
+            )
+            var changedViews = 0
+            probes.forEach { (label, probe) ->
+                compose.runOnIdle { diagnosticView.value = probe; selected.value = index * 2 to true }
+                compose.waitForIdle()
+                val reference = compose.onNodeWithTag("control-consumer-owner-snapshot").captureToImage()
+                compose.runOnIdle { selected.value = index * 2 to false }
+                compose.waitForIdle()
+                val actual = compose.onNodeWithTag("control-consumer-owner-snapshot").captureToImage()
+                if (lensPoolReportPixelDifference(label, reference, actual) != 0f) changedViews++
+            }
+            assertEquals("Diagnostic-only stage report; the full default case matrix is still required", 0, changedViews)
+            return
+        }
+        cases.forEachIndexed { index, case ->
+            repeat(2) { owner ->
+                compose.runOnIdle { selected.value = index * 2 + owner to true }
+                compose.waitForIdle()
+                val reference = compose.onNodeWithTag("control-consumer-owner-snapshot").captureToImage()
+                compose.runOnIdle { selected.value = index * 2 + owner to false }
+                compose.waitForIdle()
+                val actual = compose.onNodeWithTag("control-consumer-owner-snapshot").captureToImage()
+                assertEquals("Both retained owners must ignore later A/B/A uniform changes: owner=$owner, $case",
+                    0f, lensPoolPixelDifference(reference, actual), 0f)
+            }
+        }
+    }
+
+    @Test
+    fun nativeControlLensConsumerPoolLeasesSurviveShapeReentry() {
+        val selected = mutableStateOf(0 to 0)
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                val snapshots = remember { Array(2) { arrayOfNulls<LensPoolFrame>(3) } }
+                val input = rememberGraphicsLayer()
+                val output = rememberGraphicsLayer()
+                Box(Modifier.requiredSize(160.dp, 120.dp).background(Color.Black).testTag("control-consumer-shape-reentry")
+                    .drawWithContent {
+                        val (case, mode) = selected.value
+                        val frame = snapshots[case][mode] ?: run {
+                            val unsafeShaders = mutableMapOf<String, io.github.neoruaa.glasmio.glass.render.RuntimeShader>()
+                            class FixtureScope(val outer: Boolean) : BackdropEffectScopeImpl() {
+                                var outline: (() -> Unit)? = null
+                                var privateCalls = 0
+                                override val supportsNativeControlLensConsumerSharing = mode == 1
+                                override val shape: androidx.compose.ui.graphics.Shape = if (!outer) com.kyant.shapes.Capsule()
+                                    else object : androidx.compose.ui.graphics.Shape {
+                                        override fun createOutline(size: Size, layoutDirection: LayoutDirection,
+                                            density: Density): androidx.compose.ui.graphics.Outline {
+                                            outline?.invoke()
+                                            return com.kyant.shapes.Capsule().createOutline(size, layoutDirection, density)
+                                        }
+                                    }
+                                override fun obtainRuntimeShader(key: String, string: String): io.github.neoruaa.glasmio.glass.render.RuntimeShader {
+                                    privateCalls++
+                                    return if (mode == 2) unsafeShaders.getOrPut(string) {
+                                        io.github.neoruaa.glasmio.glass.render.RuntimeShader(string)
+                                    } else super.obtainRuntimeShader(key, string)
+                                }
+                            }
+                            val outer = FixtureScope(true)
+                            val inner = FixtureScope(false)
+                            var callbacks = 0
+                            val recordingScope = this
+                            outer.outline = {
+                                callbacks++
+                                // The outer atlas and size have already been written at this point.
+                                recordingScope.lensPoolFrame(inner, Size(30f, 12f), NativeControlLensStyle.SwitchThumb,
+                                    case.toFloat(), true, true, true, Color(.1f, .8f, .2f, .3f), Color(0xFFFF3B30))
+                            }
+                            val actual = lensPoolFrame(outer, Size(80f, 40f), NativeControlLensStyle.SwitchThumb,
+                                case.toFloat(), false, true, false, Color(.8f, .25f, .15f, .8f), Color(0xFF34C759))
+                            assertEquals("The custom shape must synchronously enter the second owner", 1, callbacks)
+                            if (mode == 1) {
+                                assertEquals("The outer consumer uses the pool", 0, outer.privateCalls)
+                                assertEquals("Same-source reentry must use the inner owner cache", 1, inner.privateCalls)
+                            }
+                            actual.also { snapshots[case][mode] = it }
+                        }
+                        lensPoolDraw(frame, input, output)
+                    })
+            }
+        }
+        repeat(2) { case ->
+            compose.runOnIdle { selected.value = case to 0 }
+            compose.waitForIdle()
+            val reference = compose.onNodeWithTag("control-consumer-shape-reentry").captureToImage()
+            compose.runOnIdle { selected.value = case to 1 }
+            compose.waitForIdle()
+            val pooled = compose.onNodeWithTag("control-consumer-shape-reentry").captureToImage()
+            assertEquals("A pooled lease must preserve the outer geometry through shape reentry: lift=$case",
+                0f, lensPoolPixelDifference(reference, pooled), 0f)
+            compose.runOnIdle { selected.value = case to 2 }
+            compose.waitForIdle()
+            val unsafe = compose.onNodeWithTag("control-consumer-shape-reentry").captureToImage()
+            assertTrue("The no-lease negative control must reveal outer size/atlas pollution: lift=$case",
+                lensPoolPixelDifference(reference, unsafe) > 1f / 255f)
+        }
+    }
+
+    private data class LensPoolFrame(
+        val effect: androidx.compose.ui.graphics.RenderEffect,
+        val extent: androidx.compose.ui.unit.IntSize,
+        val base: Size,
+        val producerExtent: androidx.compose.ui.unit.IntSize,
+        val producerEffects: List<androidx.compose.ui.graphics.RenderEffect>,
+        val controlAtlas: io.github.neoruaa.glasmio.glass.NativeGlassMipAtlas?,
+    )
+
+    private fun androidx.compose.ui.graphics.drawscope.DrawScope.lensPoolFrame(
+        scope: BackdropEffectScopeImpl,
+        measuredSize: Size,
+        role: NativeControlLensStyle,
+        lift: Float,
+        dark: Boolean,
+        managed: Boolean,
+        content: Boolean,
+        resting: Color,
+        tint: Color,
+        samplingScale: Float = 1f,
+    ): LensPoolFrame {
+        val originalSize = drawContext.size
+        try {
+            drawContext.size = measuredSize
+            scope.update(this, samplingScale)
+        } finally { drawContext.size = originalSize }
+        scope.colorManagedNativeGlass = managed
+        scope.nativeGlassHeadroom = if (managed) 1.2f else 1f
+        scope.apply {
+            nativeControlLens(role, lift, dark, liftedContent = if (content) emptyBackdrop() else null,
+                restingColor = resting, tint = tint)
+        }
+        val controlAtlas = scope.materializedMipAtlas
+        assertTrue("The control-lens fixture must retain a supported atlas renderer",
+            controlAtlas == null || controlAtlas.controlBlurPlane != null)
+        val atlasExtent = requireNotNull(scope.effectTextureSize)
+        val outputExtent = requireNotNull(scope.materialOutputSize)
+        val recordingExtent = androidx.compose.ui.unit.IntSize(
+            maxOf(atlasExtent.width, outputExtent.width), maxOf(atlasExtent.height, outputExtent.height))
+        return LensPoolFrame(requireNotNull(scope.renderEffect), recordingExtent,
+            Size(scope.size.width + 2f * scope.padding, scope.size.height + 2f * scope.padding),
+            atlasExtent, (controlAtlas?.composeProducerStages ?: scope.materializedInputEffects).toList(), controlAtlas)
+    }
+
+    private fun androidx.compose.ui.graphics.drawscope.DrawScope.lensPoolDraw(
+        frame: LensPoolFrame,
+        input: androidx.compose.ui.graphics.layer.GraphicsLayer,
+        output: androidx.compose.ui.graphics.layer.GraphicsLayer,
+        producers: List<androidx.compose.ui.graphics.layer.GraphicsLayer> = emptyList(),
+        controlPasses: io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses? = null,
+        diagnostic: Pair<Int, Int>? = null,
+        diagnosticRects: List<androidx.compose.ui.unit.IntRect> = emptyList(),
+    ) {
+        assertTrue("The fixture must materialize every retained producer", producers.size >= frame.producerEffects.size)
+        val sourceExtent = if (frame.producerEffects.isEmpty()) frame.extent else frame.producerExtent
+        input.clip = true
+        input.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+        input.record(this, layoutDirection, sourceExtent) {
+            drawRect(Color(.16f, .25f, .42f, .7f), size = frame.base)
+            for (x in 0 until frame.base.width.roundToInt() step 7) {
+                drawRect(Color(.85f, .33f, .08f, .6f), topLeft = Offset(x.toFloat(), 0f), size = Size(3f, frame.base.height))
+            }
+            for (x in 0 until frame.base.width.roundToInt() step 13) {
+                drawRect(Color(.92f, .12f, .46f, .65f), topLeft = Offset(x.toFloat(), frame.base.height),
+                    size = Size(4f, frame.base.height))
+            }
+        }
+        val controlAtlas = frame.controlAtlas
+        // Diagnostic-only access to the real production layers also forces their command
+        // lists fresh. The uninstrumented consumer probes keep the original retained path.
+        val diagnosticLayers = if (diagnostic != null && controlAtlas != null)
+            requireNotNull(controlPasses).layers(frame.producerEffects) else producers
+        var consumerInput = input
+        if (controlAtlas != null) {
+            // Exercise the production extract and plane-sized Gaussian passes, including
+            // the raw/portal planes retained alongside the independently blurred plane.
+            assertEquals("Plane-only blur must retain Gaussian snapshots and any fourth scene snapshot",
+                if (controlAtlas.rects.size == 4) 4 else 3, frame.producerEffects.size)
+            requireNotNull(controlPasses).recordControlBlur(controlAtlas,
+                record = { layer, targetSize, block ->
+                    layer.record(this, layoutDirection, targetSize, block)
+                },
+                sourceBlock = { drawLayer(input) })
+        } else {
+            frame.producerEffects.forEachIndexed { index, effect ->
+                val producer = producers[index]
+                val previous = consumerInput
+                producer.clip = true
+                producer.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                producer.renderEffect = effect
+                producer.record(this, layoutDirection, sourceExtent) { drawLayer(previous) }
+                consumerInput = producer
+            }
+        }
+        output.clip = true
+        output.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+        output.renderEffect = frame.effect
+        output.record(this, layoutDirection, frame.extent) {
+            if (controlAtlas != null) requireNotNull(controlPasses).drawControlBlurAtlas(this, controlAtlas)
+            else drawLayer(consumerInput)
+        }
+        if (diagnostic == null) drawLayer(output)
+        else {
+            val (stage, plane) = diagnostic
+            val fullRect = diagnosticRects[plane]
+            // In the optimized chain the raw/portal inputs are the extract itself;
+            // Gaussian layers contain only a local-origin third plane.
+            val selectedStage = if (controlAtlas != null && stage in 1..2 && plane < 2) 0 else stage
+            val rect = if (controlAtlas != null && stage in 1..2 && plane == 2)
+                androidx.compose.ui.unit.IntRect(0, 0, fullRect.width, fullRect.height) else fullRect
+            clipRect(0f, 0f, rect.width.toFloat(), rect.height.toFloat()) {
+                withTransform({ translate(-rect.left.toFloat(), -rect.top.toFloat()) }) {
+                    drawLayer(diagnosticLayers[selectedStage])
+                }
+            }
+        }
+    }
+
+    private fun lensPoolReportPixelDifference(label: String, reference: ImageBitmap, actual: ImageBitmap): Float {
+        assertEquals(reference.width, actual.width)
+        assertEquals(reference.height, actual.height)
+        val expected = reference.toPixelMap()
+        val observed = actual.toPixelMap()
+        var maximum = 0f
+        var changed = 0
+        var minX = actual.width
+        var minY = actual.height
+        var maxX = -1
+        var maxY = -1
+        var first = "none"
+        repeat(actual.height) { y -> repeat(actual.width) { x ->
+            val a = expected[x, y]
+            val b = observed[x, y]
+            val delta = maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue), abs(a.alpha - b.alpha))
+            maximum = maxOf(maximum, delta)
+            if (delta != 0f) {
+                if (changed == 0) first = "$x,$y:$a->$b"
+                changed++
+                minX = minOf(minX, x); minY = minOf(minY, y)
+                maxX = maxOf(maxX, x); maxY = maxOf(maxY, y)
+            }
+        } }
+        val message = "TabPlaneProbe: diagnosticOnly=true view=$label width=${actual.width} height=${actual.height} " +
+            "changed=$changed maxRgba=$maximum bbox=$minX,$minY:$maxX,$maxY first=$first"
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendStatus(0,
+            android.os.Bundle().apply { putString("stream", message + "\n") })
+        return maximum
+    }
+
+    private fun lensPoolPixelDifference(reference: ImageBitmap, actual: ImageBitmap): Float {
+        assertEquals(reference.width, actual.width)
+        assertEquals(reference.height, actual.height)
+        val expected = reference.toPixelMap()
+        val observed = actual.toPixelMap()
+        var maximum = 0f
+        repeat(actual.height) { y -> repeat(actual.width) { x ->
+            val a = expected[x, y]
+            val b = observed[x, y]
+            maximum = maxOf(maximum, abs(a.red - b.red), abs(a.green - b.green),
+                abs(a.blue - b.blue), abs(a.alpha - b.alpha))
+        } }
+        return maximum
+    }
 
     @Test
     fun controlLensMaterializedGaussianPassesMatchLegacyProducer() {
@@ -1172,6 +1670,76 @@ half4 main(half4 src, half4 dst) {
     }
 
     @Test
+    fun completionSourcesRetainFullFieldVariantsAndResetWithTheirScope() {
+        val fieldA = "float3 navigationGlassField(float2 p) { return float3(-4.0, 1.0, 0.0); }\n//Aa\n"
+        val fieldB = "float3 navigationGlassField(float2 p) { return float3(-4.0, 1.0, 0.0); }\n//BB\n"
+        assertEquals("The fixture must exercise the runtime shader key's field-hash collision", fieldA.hashCode(), fieldB.hashCode())
+        val lruFields = List(8) { fieldA + "// LRU entry $it\n" }
+        val variants = listOf(Triple(fieldA, false, false), Triple(fieldA, false, false),
+            Triple(fieldA, true, false), Triple(fieldA, true, false),
+            Triple(fieldA, true, true), Triple(fieldA, true, true),
+            Triple(fieldB, true, true), Triple(fieldB, true, true),
+            Triple(fieldA, true, true), Triple(fieldA, false, false), Triple(fieldA, false, false)) +
+            lruFields.take(7).map { Triple(it, false, false) } + listOf(
+                Triple(fieldA, false, false), Triple(lruFields[7], false, false),
+                Triple(fieldA, false, false), Triple(lruFields[6], false, false), Triple(lruFields[0], false, false))
+        val selected = mutableStateOf(0)
+        val sources = Array(variants.size) { ArrayList<String>() }
+        class FixtureScope : BackdropEffectScopeImpl() {
+            override val shape = RectangleShape
+            var variant = 0
+            override fun obtainRuntimeShader(key: String, string: String): io.github.neoruaa.glasmio.glass.render.RuntimeShader {
+                sources[variant] += string
+                return super.obtainRuntimeShader(key, string)
+            }
+        }
+        val fixture = FixtureScope()
+        compose.setContent {
+            Canvas(Modifier.requiredSize(64.dp, 40.dp)) {
+                val index = selected.value
+                val (functions, managed, raw) = variants[index]
+                fixture.variant = index
+                fixture.update(this)
+                fixture.colorManagedNativeGlass = managed
+                fixture.apply {
+                    completeNativeFilteredGlass(androidx.compose.ui.unit.IntSize(64, 40), null, false,
+                        io.github.neoruaa.glasmio.glass.NavigationGlassMaterial.RegularMedium, 1f,
+                        field = io.github.neoruaa.glasmio.glass.NativeGlassFilterField(functions) {},
+                        filteredIsNativeRaw = raw)
+                }
+                drawRect(Color.White)
+            }
+        }
+        for (index in variants.indices) {
+            if (index > 0) compose.runOnIdle {
+                if (index == 10) fixture.reset()
+                selected.value = index
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue("Each variant must build or obtain a shader", sources[index].isNotEmpty())
+                sources[index].forEach { source ->
+                    assertTrue("Repeated effect updates must retain the same complete source", source === sources[index].first())
+                }
+            }
+        }
+        compose.runOnIdle {
+            listOf(0 to 1, 2 to 3, 4 to 5, 6 to 7, 4 to 8, 0 to 9).forEach { (first, next) ->
+                assertTrue("Identical full source variants must reuse the immutable string", sources[first].first() === sources[next].first())
+            }
+            assertTrue("Managed and raw-storage modes retain distinct programs", sources[2].first() != sources[4].first())
+            assertTrue("Colliding field hashes must retain distinct complete sources", sources[4].first() != sources[6].first())
+            assertEquals("Reset preserves program contents", sources[0].first(), sources[10].first())
+            assertTrue("Reset releases the scope-owned source instance", sources[0].first() !== sources[10].first())
+            assertTrue("Accessing an older entry must keep it in the eight-entry LRU", sources[10].first() === sources[18].first())
+            assertTrue("The recently accessed entry must survive overflow", sources[10].first() === sources[20].first())
+            assertTrue("A recent distinct field must remain cached after overflow", sources[17].first() === sources[21].first())
+            assertEquals("Eviction does not change the rebuilt source", sources[11].first(), sources[22].first())
+            assertTrue("Overflow must release and rebuild the least recently used source", sources[11].first() !== sources[22].first())
+        }
+    }
+
+    @Test
     fun retainedMipDisplayListsKeepLiveSourcePropertiesAndRecordingEnvironment() {
         val phase = mutableStateOf(0)
         val showReference = mutableStateOf(false)
@@ -1924,12 +2492,111 @@ half4 main(half4 src, half4 dst) {
     }
 
     @Test
+    fun contactSharingOnlyRecomposesWhenSurfaceAvailabilityChanges() {
+        val active = mutableStateOf(false)
+        val translation = mutableFloatStateOf(0f)
+        val owner = BottomControlContact(4f).apply { nativeSmoothness = 6f }
+        val member = BottomControlContactMember(
+            contact = owner,
+            active = mutableStateOf({ active.value }),
+            visualBounds = mutableStateOf({ size: Size ->
+                Rect(translation.floatValue, 0f, translation.floatValue + size.width, size.height)
+            }),
+            materialPressProgress = mutableStateOf({ 0f }),
+            highlight = mutableStateOf({ _: Size -> GlassPressHighlight() }),
+            lensSourceActive = mutableStateOf(null), lensSourceScale = mutableStateOf(null),
+            lensSourcePress = mutableStateOf(null),
+        )
+        owner.members.add(member)
+        var sharingCompositions = 0
+        var observedSharing = true
+        var observedSurface: Any? = null
+        var observedBounds: Rect? = null
+        var geometryDraws = 0
+        val marker = Color(0xFF18A35C)
+        val recordSharing: (Boolean) -> Unit = {
+            sharingCompositions++
+            observedSharing = it
+        }
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                Box(Modifier.size(160.dp, 80.dp).testTag("contact-sharing-scene")
+                    .onGloballyPositioned(owner::updateCoordinates)
+                    .drawWithContent {
+                        val surface = owner.surface.value
+                        observedSurface = surface
+                        observedBounds = surface?.bounds
+                        geometryDraws++
+                        drawRect(Color.White)
+                        drawContent()
+                        surface?.bounds?.let { drawRect(marker, it.topLeft, it.size) }
+                    }) {
+                    Box(Modifier.size(100.dp, 40.dp).onGloballyPositioned(member::updateCoordinates))
+                    ContactSharingCompositionProbe(member, recordSharing)
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertTrue(!observedSharing)
+            assertEquals(null, observedSurface)
+        }
+        val absentCompositions = sharingCompositions
+        compose.runOnIdle { active.value = true }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertTrue("An available surface must reach Boolean consumers", observedSharing)
+            assertTrue(sharingCompositions > absentCompositions)
+        }
+        val presentCompositions = sharingCompositions
+        var previousSurface = observedSurface
+        listOf(1f, 7f, 13f).forEach { x ->
+            val previousDraws = geometryDraws
+            compose.runOnIdle { translation.floatValue = x }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue("Geometry must publish a new live surface snapshot", observedSurface !== previousSurface)
+                assertEquals(Rect(x, 0f, x + 100f, 40f), observedBounds)
+                assertTrue("Geometry updates must still invalidate drawing", geometryDraws > previousDraws)
+                assertEquals("A non-null surface's geometry must not recompose Boolean consumers",
+                    presentCompositions, sharingCompositions)
+                previousSurface = observedSurface
+            }
+            val pixels = compose.onNodeWithTag("contact-sharing-scene").captureToImage().toPixelMap()
+            assertEquals(marker, pixels[(x + 10f).toInt(), 20])
+            assertEquals(Color.White, pixels[(x + 110f).toInt(), 20])
+        }
+        compose.runOnIdle { active.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertTrue("Removing the surface must reach Boolean consumers", !observedSharing)
+            assertEquals(null, observedSurface)
+            assertTrue(sharingCompositions > presentCompositions)
+        }
+        val removedCompositions = sharingCompositions
+        compose.runOnIdle { active.value = true }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertTrue("Restoring the surface must reach Boolean consumers", observedSharing)
+            assertTrue(sharingCompositions > removedCompositions)
+        }
+    }
+
+    @Composable
+    private fun ContactSharingCompositionProbe(member: BottomControlContactMember, onComposition: (Boolean) -> Unit) {
+        val sharing = member.sharesSurface
+        SideEffect { onComposition(sharing) }
+    }
+
+    @Test
     fun separatedAndJoinedNavigationKeepOneMaterialAndTheSameDividerAnchor() {
         val direction = mutableStateOf(LayoutDirection.Ltr)
         val appearance = mutableStateOf(GlassAppearance())
         val compact = mutableFloatStateOf(0f)
         var contact: BottomControlContact? = null
         var density = 1f
+        var sharingCompositions = 0
+        val recordSharing: (Boolean) -> Unit = { sharingCompositions++ }
         compose.setContent {
             density = LocalDensity.current.density
             GlasmioTheme(isDark = false, appearance = appearance.value) {
@@ -1979,6 +2646,9 @@ half4 main(half4 src, half4 dst) {
                                         style = GlassSurfaceStyle.Navigation,
                                         modifier = Modifier.size(NavigationBarSurfaceHeight),
                                     ) { }
+                                }
+                                owner.members.firstOrNull()?.let {
+                                    ContactSharingCompositionProbe(it, recordSharing)
                                 }
                             }
                         },
@@ -2040,12 +2710,18 @@ half4 main(half4 src, half4 dst) {
                             hasContentDescription("Home"),
                     )
                     compose.mainClock.autoAdvance = false
+                    val initialSurface = owner.surface.value
+                    val initialSharingCompositions = sharingCompositions
+                    var changedSurface = false
                     home.performTouchInput { down(center) }
                     listOf(16L, 16L, 16L, 16L, 64L, 256L).forEach { elapsed ->
                         compose.mainClock.advanceTimeBy(elapsed)
                         compose.runOnIdle {
                             assertTrue(owner.materialBackdrop === source)
                             assertTrue(owner.members.all { it.sharesSurface })
+                            changedSurface = changedSurface || owner.surface.value !== initialSurface
+                            assertEquals("Press geometry must not recompose a surface-availability consumer",
+                                initialSharingCompositions, sharingCompositions)
                         }
                         if (!mode.reduceTransparency) {
                             assertEquals("The central ruler stays anchored while contact changes",
@@ -2053,6 +2729,7 @@ half4 main(half4 src, half4 dst) {
                         }
                     }
                     compose.runOnIdle {
+                        assertTrue("The real navigation press must still update its live surface", changedSurface)
                         assertTrue("Held navigation must join its neighbor: mode=$mode, direction=$layoutDirection, " +
                             "members=${owner.members.map { it.capsule() }}, transform=${owner.lensTransform.value}, " +
                             "press=${owner.pressProgress()}", owner.connected.value)

@@ -14,6 +14,7 @@ import io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
 import io.github.neoruaa.glasmio.glass.render.optics.glassCornerRadii
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSdfFunctions
+import java.util.LinkedHashMap
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -65,6 +66,14 @@ internal fun BackdropEffectScope.nativeControlGlassImpl(
         field = field, completion = completion)
 }
 
+private data class NativeControlCompletionSourceKey(
+    val functions: String,
+    val colorManaged: Boolean,
+    val filteredIsNativeRaw: Boolean,
+    val topology: NativeGlassCompletionTopology,
+    val samplingLayoutKey: String,
+)
+
 /** Raw and explicitly filtered regions have identical grids, rather than native mip dimensions. */
 internal fun BackdropEffectScope.completeNativeFilteredGlass(
     base: IntSize,
@@ -80,27 +89,38 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
     filteredIsNativeRaw: Boolean = false,
 ): RenderEffect {
     val storage = this as BackdropEffectScopeImpl
+    val resolvedCompletion = completion ?: NativeGlassCompletion(NavigationMaterialRecipe.resolve(isDark, material), isDark,
+        if (material == NavigationGlassMaterial.Clear) 1f else 0f,
+        materialAlpha = alpha, edgeAlpha = alpha,
+        idleColor = idleColor, overlayColor = overlayColor)
+    val topology = resolvedCompletion.programTopology()
     val atlas = NativeGlassMipAtlas(base, IntSize(base.width, base.height * 2), listOf(
         IntRect(0, 0, base.width, base.height), IntRect(0, base.height, base.width, base.height * 2)),
         producer, storage.colorManagedNativeGlass)
     val functions = field?.shaderFunctions ?: NativeDefaultFieldShader
-    val shader = obtainRuntimeShader("Glasmio.NativeControl.complete.${atlas.colorManaged}.$filteredIsNativeRaw.${functions.hashCode()}",
+    val sources = storage.cachedResource("Glasmio.NativeControl.complete.sources") {
+        object : LinkedHashMap<NativeControlCompletionSourceKey, String>(8, .75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<NativeControlCompletionSourceKey, String>?): Boolean =
+                size > 8
+        }
+    }
+    val source = sources.getOrPut(NativeControlCompletionSourceKey(functions, atlas.colorManaged, filteredIsNativeRaw, topology,
+        samplingLayoutKey = atlas.samplingLayoutKey)) {
         nativeGlassCompletionFieldFunctions(functions) +
             (if (!functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") + atlas.samplingFunctions +
             (if (atlas.colorManaged) "" else GlassColorSpaceShaderFunctions) +
             (if (filteredIsNativeRaw) NativeControlFilteredRawFunctions else NativeControlFilteredFunctions) +
-            NativeGlassCompletionShader).asAndroidRuntimeShader()
+            nativeGlassCompletionShader(topology)
+    }
+    val shader = obtainRuntimeShader("Glasmio.NativeControl.complete.${atlas.colorManaged}.$filteredIsNativeRaw.${topology.cacheKey}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
+        source).asAndroidRuntimeShader()
     atlas.configure(shader)
     if (field == null) {
         shader.setFloatUniform("size", size.width, size.height)
         shader.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, layoutDirection, this))
     } else field.configure(shader)
     storage.materializeNativeGlassAtlas(atlas)
-    configureNativeGlassCompletion(shader,
-        completion ?: NativeGlassCompletion(NavigationMaterialRecipe.resolve(isDark, material), isDark,
-            if (material == NavigationGlassMaterial.Clear) 1f else 0f,
-            materialAlpha = alpha, edgeAlpha = alpha,
-            idleColor = idleColor, overlayColor = overlayColor), storage, origin)
+    configureNativeGlassCompletion(shader, resolvedCompletion, storage, origin)
     return RenderEffect.createRuntimeShaderEffect(shader, "content").also { renderEffect = it.asComposeRenderEffect() }
 }
 

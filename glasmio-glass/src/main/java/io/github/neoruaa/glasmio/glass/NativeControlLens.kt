@@ -55,6 +55,8 @@ fun BackdropEffectScope.nativeControlLens(
     val height = size.height
     val tab = style == NativeControlLensStyle.TabBarIndicator
     val blurScale = if (tab) .25f else 1f
+    val tabPlaneOnlyBlur = tab && scope.supportsNativeControlLensConsumerSharing
+    val planeOnlyBlur = small || tabPlaneOnlyBlur
     val belowAmount = when (style) {
         NativeControlLensStyle.SliderThumb -> 0f
         NativeControlLensStyle.SwitchThumb -> 50f + (9f - 50f) * lift
@@ -72,13 +74,17 @@ fun BackdropEffectScope.nativeControlLens(
         tab -> 2.dp.toPx()
         else -> 0f
     }
+    // Only held/overshooting private Tab bodies have zero idle-backdrop opacity.
+    val heldTab = tab && !fullyResting && rest == 0f &&
+        scope.supportsNativeControlLensPlaneStages && scope.supportsNativeControlLensConsumerSharing
+    val producesBlur = blur > 0f && !heldTab
     // CA gaussianBlur is an independent layer, not the regular material's variable-blur
     // pyramid. HWUI supplies this sampler adapter; the two native optical kernels below
     // retain their own recovered signed displacement and spectral sampling equations.
     val blurredSize = IntSize(ceil(base.width * blurScale).toInt().coerceAtLeast(1),
         ceil(base.height * blurScale).toInt().coerceAtLeast(1))
     val producerStages = mutableListOf<RenderEffect>()
-    val producer = if (blur > 0f && scope.colorManagedNativeGlass) {
+    val producer = if (producesBlur && scope.colorManagedNativeGlass) {
         val colorFunctions = NativeControlProducerManagedColor
         val atlasExtract = obtainRuntimeShader("Glasmio.ControlLens.extractAtlas.true",
             scope.cachedResource("Glasmio.ControlLens.extractAtlas.true.source") {
@@ -95,23 +101,26 @@ fun BackdropEffectScope.nativeControlLens(
         producerStages += RenderEffect.createRuntimeShaderEffect(atlasExtract, "content")
         val weights = scope.cachedResource("Glasmio.ControlLens.GaussianWeights") { NativeControlGaussianWeights() }
         weights.update(blur * blurScale)
-        val gaussianSource = scope.cachedResource("Glasmio.ControlLens.gaussianAtlas.${weights.tapLimit}.$small.source") {
-            colorFunctions + nativeControlManagedAtlasGaussian(weights.tapLimit, planeOnly = small)
+        val gaussianMode = if (tabPlaneOnlyBlur) "tabPlaneOnly" else "$small"
+        val gaussianSource = scope.cachedResource("Glasmio.ControlLens.gaussianAtlas.${weights.tapLimit}.$gaussianMode.source") {
+            colorFunctions + nativeControlManagedAtlasGaussian(weights.tapLimit, planeOnly = planeOnlyBlur)
         }
         for (axis in 0..1) {
-            val pass = obtainRuntimeShader("Glasmio.ControlLens.gaussianAtlas.${weights.tapLimit}.$axis.$small",
+            val pass = obtainRuntimeShader("Glasmio.ControlLens.gaussianAtlas.${weights.tapLimit}.$axis.$gaussianMode",
                 gaussianSource).asAndroidRuntimeShader()
             pass.setFloatUniform("gaussianAxis", if (axis == 0) 1f else 0f, if (axis == 1) 1f else 0f)
             pass.setFloatUniform("gaussianRadius", weights.radius.toFloat())
             pass.setFloatUniform("gaussianWeights", weights.values)
             pass.setFloatUniform("gaussianTotal", weights.total)
             pass.setFloatUniform("gaussianSize", blurredSize.width.toFloat(), blurredSize.height.toFloat())
-            if (!small) pass.setFloatUniform("planeSize", base.width.toFloat(), base.height.toFloat())
+            if (!planeOnlyBlur) pass.setFloatUniform("planeSize", base.width.toFloat(), base.height.toFloat())
             producerStages += RenderEffect.createRuntimeShaderEffect(pass, "content")
         }
         null
-    } else if (blur > 0f) nativeControlLensReferenceProducer(style, liftProgress) else null
+    } else if (producesBlur) nativeControlLensReferenceProducer(style, liftProgress) else null
     val precomposedScene = !fullyResting && !small
+    val separateSceneOutput = precomposedScene && scope.colorManagedNativeGlass &&
+        scope.supportsNativeControlLensPlaneStages
     val sceneTop = base.height * 2 + blurredSize.height
     val sceneSize = IntSize(ceil(base.width / scope.samplingScale).toInt(),
         ceil(base.height / scope.samplingScale).toInt())
@@ -126,7 +135,8 @@ fun BackdropEffectScope.nativeControlLens(
     val atlas = NativeGlassMipAtlas(base, storageSize, rects,
         producer, scope.colorManagedNativeGlass,
         producerStages = stages,
-        controlBlurPlane = rects.getOrNull(2).takeIf { small && blur > 0f && scope.colorManagedNativeGlass })
+        controlBlurPlane = rects.getOrNull(2).takeIf { planeOnlyBlur && producesBlur && scope.colorManagedNativeGlass },
+        controlScenePlane = rects.getOrNull(3).takeIf { separateSceneOutput })
     fun configureLens(shader: android.graphics.RuntimeShader, highlight: Boolean) {
         atlas.configure(shader)
         shader.setFloatUniform("size", size.width, size.height)
@@ -166,27 +176,63 @@ fun BackdropEffectScope.nativeControlLens(
         if (highlight) NativeVibrantColorMatrix.RegularHighlight.configure(shader::setFloatUniform)
     }
     if (precomposedScene) {
-        val sceneShader = obtainRuntimeShader("Glasmio.ControlLens.scene.${atlas.colorManaged}",
-            scope.cachedResource("Glasmio.ControlLens.scene.${atlas.colorManaged}.source") {
-                GlassSdfShader + atlas.samplingFunctions + NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
-                    NativeControlDisplacementFunctions + NativeControlLensSceneFunctions + NativeControlSceneAtlasMain
+        val sceneBaseKey = if (separateSceneOutput) "Glasmio.ControlLens.scenePlane.${atlas.colorManaged}.$small.$tab.layout=${atlas.samplingLayoutKey}"
+            else "Glasmio.ControlLens.scene.${atlas.colorManaged}.layout=${atlas.samplingLayoutKey}"
+        val sceneKey = if (heldTab) "$sceneBaseKey.held" else sceneBaseKey
+        val sceneShader = obtainRuntimeShader(sceneKey,
+            scope.cachedResource("$sceneKey.source") {
+                if (separateSceneOutput) nativeControlScenePlaneProgram(atlas.samplingFunctions, heldTab, style)
+                else GlassSdfShader + atlas.samplingFunctions + NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
+                    NativeControlDisplacementFunctions +
+                    (if (heldTab) NativeControlHeldTabSceneFunctions else NativeControlLensSceneFunctions) +
+                    NativeControlSceneAtlasMain
             }).asAndroidRuntimeShader()
         configureLens(sceneShader, highlight = false)
-        stages += RenderEffect.createRuntimeShaderEffect(sceneShader, "content")
+        val sceneEffect = RenderEffect.createRuntimeShaderEffect(sceneShader, "content")
+        if (separateSceneOutput) atlas.controlSceneEffect = sceneEffect else stages += sceneEffect
     }
-    val lensKey = "Glasmio.ControlLens.${atlas.colorManaged}.$fullyResting.$small.$tab.$precomposedScene"
-    val shader = obtainRuntimeShader(lensKey, scope.cachedResource("$lensKey.source") {
-        nativeControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene)
-    }).asAndroidRuntimeShader()
-    configureLens(shader, highlight = !fullyResting)
-    scope.materializeNativeGlassAtlas(atlas)
-    val guard = ceil(25.dp.toPx() / scope.samplingScale)
-    scope.materialOutputOrigin = Offset(guard, guard)
-    scope.materialOutputSize = IntSize(ceil(scope.fullSize.width + guard * 2f).toInt(), ceil(scope.fullSize.height + guard * 2f).toInt())
-    scope.nativeMaterialCompleted = true
-    shader.setFloatUniform("lensOutputOrigin", guard, guard)
-    shader.setFloatUniform("lensOutputSize", scope.fullSize.width, scope.fullSize.height)
-    renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "content").asComposeRenderEffect()
+    val lensBaseKey = "Glasmio.ControlLens.${atlas.colorManaged}.$fullyResting.$small.$tab.$precomposedScene.layout=${atlas.samplingLayoutKey}"
+    val lensKey = if (heldTab) "$lensBaseKey.held" else lensBaseKey
+    val builtInConsumer = scope.supportsNativeControlLensConsumerSharing
+    val sourceKey = if (builtInConsumer) "$lensKey.builtin.source" else "$lensKey.source"
+    val lensSource = scope.cachedResource(sourceKey) {
+        if (builtInConsumer) {
+            nativeBuiltInControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene, heldTab)
+        } else nativeControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene)
+    }
+    fun privateConsumer() = obtainRuntimeShader(lensKey, lensSource).asAndroidRuntimeShader()
+    fun snapshotConsumer(shader: android.graphics.RuntimeShader): RenderEffect {
+        configureLens(shader, highlight = !fullyResting)
+        scope.materializeNativeGlassAtlas(atlas)
+        val guard = ceil(25.dp.toPx() / scope.samplingScale)
+        scope.materialOutputOrigin = Offset(guard, guard)
+        scope.materialOutputSize = IntSize(ceil(scope.fullSize.width + guard * 2f).toInt(), ceil(scope.fullSize.height + guard * 2f).toInt())
+        scope.nativeMaterialCompleted = true
+        shader.setFloatUniform("lensOutputOrigin", guard, guard)
+        shader.setFloatUniform("lensOutputSize", scope.fullSize.width, scope.fullSize.height)
+        return RenderEffect.createRuntimeShaderEffect(shader, "content")
+    }
+    val consumer = if (scope.supportsNativeControlLensConsumerSharing) {
+        NativeControlLensConsumerShaders.snapshot(lensSource, ::privateConsumer, ::snapshotConsumer)
+    } else snapshotConsumer(privateConsumer())
+    renderEffect = consumer.asComposeRenderEffect()
+}
+
+/** The private renderer places this local output at the unchanged fourth atlas rectangle. */
+internal fun nativeControlScenePlaneProgram(
+    samplingFunctions: String,
+    heldTab: Boolean = false,
+    style: NativeControlLensStyle? = null,
+): String {
+    val sceneFunctions = if (style == null) {
+        if (heldTab) NativeControlHeldTabSceneFunctions else NativeControlLensSceneFunctions
+    } else nativeControlStyleSceneFunctions(
+        style == NativeControlLensStyle.SwitchThumb || style == NativeControlLensStyle.SliderThumb,
+        style == NativeControlLensStyle.TabBarIndicator,
+        heldTab,
+    )
+    return GlassSdfShader + samplingFunctions + NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
+        NativeControlDisplacementFunctions + sceneFunctions + NativeControlScenePlaneMain
 }
 
 /** Explicit analytic fixture; production managed lenses only build their materialized stages. */
@@ -302,6 +348,25 @@ internal fun nativeControlLensProgram(
             else (if (precomposedScene) NativeControlPrecomposedSource else NativeControlAnalyticSource) +
                 NativeControlForegroundFunctions + NativeControlLensMain
     }
+    return GlassSdfShader + samplingFunctions + scene
+}
+
+/** Active built-in snapshots always write lensFullyResting=0 before creating their effect. */
+private fun nativeBuiltInControlLensProgram(
+    samplingFunctions: String,
+    fullyResting: Boolean,
+    small: Boolean,
+    tab: Boolean,
+    precomposedScene: Boolean,
+    heldTab: Boolean,
+): String {
+    if (fullyResting) return nativeControlLensProgram(samplingFunctions, true, small, tab, precomposedScene)
+    val scene = NativeGlassRefractionFunctions + NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
+        NativeVibrantColorMatrixFunctions + NativeControlDisplacementFunctions +
+        nativeControlStyleSceneFunctions(small, tab, heldTab) +
+        if (small) NativeControlSmallForegroundFunctions + NativeControlBuiltInSmallLensMain
+        else (if (precomposedScene) NativeControlPrecomposedSource else NativeControlAnalyticSource) +
+            NativeControlForegroundFunctions + NativeControlBuiltInLensMain
     return GlassSdfShader + samplingFunctions + scene
 }
 
@@ -522,7 +587,7 @@ uniform float4 lensIdleRow1;
 uniform float4 lensIdleRow2;
 """
 
-private const val NativeControlLensSceneFunctions = NativeControlLensUniforms + """
+private const val NativeControlLensScenePrefix = NativeControlLensUniforms + """
 float4 nativeControlOver(float4 source, float4 destination) {
     return source + destination * (1.0 - source.a);
 }
@@ -562,7 +627,9 @@ float4 nativeControlPortal(float2 p) {
     float2 q = p + map.rg * (-17.5 * lensDensity * lensMaterialProgress);
     return nativeAtlasBilinear(lensOrigin + q, 1) * map.b;
 }
-float4 nativeControlBelow(float2 p) {
+"""
+
+private const val NativeControlBelowFunctions = """float4 nativeControlBelow(float2 p) {
     float4 map = nativeControlMap(p, 36.0 * lensDensity);
     float4 original = nativeControlNatural(p, false);
     // SmallVariant's filter order is map -> Gaussian; the producer has already
@@ -583,7 +650,19 @@ float4 nativeControlBelow(float2 p) {
     body = float4(body.rgb * body.a, body.a) * lensRest * coverage;
     return nativeControlOver(body, natural);
 }
-float4 nativeControlClearContent(float2 p) {
+"""
+
+private const val NativeControlHeldTabBelowFunctions = """float4 nativeControlBelow(float2 p) {
+    float4 map = nativeControlMap(p, 36.0 * lensDensity);
+    float4 original = nativeControlNatural(p, false);
+    float4 warped = nativeControlNatural(p + map.rg * lensBelowAmount, false) * map.b;
+    float4 natural = nativeControlOver(warped * lensMaterialOpacity, original);
+    // Held Tab has lensSmall=0 and lensRest=0; its idle body never reads the blur plane.
+    return nativeControlOver(float4(0.0), natural);
+}
+"""
+
+private const val NativeControlLensSceneSuffix = """float4 nativeControlClearContent(float2 p) {
     float coverage = nativeControlCoverage(glassField(p, 0.0));
     // Clear content is the source of the provider's color portal. The provider wrapper
     // has zPosition -1 and hides the ordinary Clear source layer; BG must not sample it.
@@ -665,6 +744,17 @@ float4 nativeControlResting(float2 p) {
 }
 """
 
+private const val NativeControlLensSceneFunctions =
+    NativeControlLensScenePrefix + NativeControlBelowFunctions + NativeControlLensSceneSuffix
+private const val NativeControlHeldTabSceneFunctions =
+    NativeControlLensScenePrefix + NativeControlHeldTabBelowFunctions + NativeControlLensSceneSuffix
+
+private fun nativeControlStyleSceneFunctions(small: Boolean, tab: Boolean, heldTab: Boolean): String =
+    NativeControlLensScenePrefix +
+        ((if (heldTab) NativeControlHeldTabBelowFunctions else NativeControlBelowFunctions) + NativeControlLensSceneSuffix)
+            .replace("lensSmall", if (small) "1.0" else "0.0")
+            .replace("lensTab", if (tab) "1.0" else "0.0")
+
 private const val NativeControlAnalyticSource = """
 float4 nativeControlForegroundSource(float2 p) { return nativeControlBeforeForeground(p); }
 """
@@ -680,6 +770,16 @@ half4 main(float2 p) {
     if (local.x < 0.0 || local.y < 0.0 || local.x >= rect.z || local.y >= rect.w) return content.eval(p);
     // Scene geometry stays on the device raster even when backdrop capture is reduced.
     float2 point = local * nativeAtlasBaseSize / rect.zw - lensOrigin;
+    return half4(nativeAtlasEncode(nativeControlBeforeForeground(point)));
+}
+"""
+
+private const val NativeControlScenePlaneMain = """
+half4 main(float2 p) {
+    float4 rect = nativeAtlasRect(3);
+    if (p.x < 0.0 || p.y < 0.0 || p.x >= rect.z || p.y >= rect.w) return half4(0.0);
+    // Preserve the device-raster geometry and encoding of the packed scene producer.
+    float2 point = p * nativeAtlasBaseSize / rect.zw - lensOrigin;
     return half4(nativeAtlasEncode(nativeControlBeforeForeground(point)));
 }
 """
@@ -733,8 +833,23 @@ private const val NativeControlLensMainSuffix = """
 }
 """
 
+private const val NativeControlBuiltInLensMainPrefix = """
+uniform float2 lensOutputOrigin;
+uniform float2 lensOutputSize;
+half4 main(float2 coordinate) {
+    if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= lensOutputSize.x + lensOutputOrigin.x * 2.0
+        || coordinate.y >= lensOutputSize.y + lensOutputOrigin.y * 2.0) return half4(0.0);
+    float2 p = (coordinate - lensOutputOrigin) * lensScale;
+    float3 f = glassField(p, 0.0);
+    float4 source = nativeControlNatural(p, false);
+    float4 background = nativeControlBackground(p);
+    float4 actual = nativeControlAfterBackground(p, background);
+"""
+
 private const val NativeControlLensMain = NativeControlLensMainPrefix + NativeControlFullForegroundMain + NativeControlLensMainSuffix
 private const val NativeControlSmallLensMain = NativeControlLensMainPrefix + NativeControlSmallForegroundMain + NativeControlLensMainSuffix
+private const val NativeControlBuiltInLensMain = NativeControlBuiltInLensMainPrefix + NativeControlFullForegroundMain + NativeControlLensMainSuffix
+private const val NativeControlBuiltInSmallLensMain = NativeControlBuiltInLensMainPrefix + NativeControlSmallForegroundMain + NativeControlLensMainSuffix
 
 /** SmallVariant's zero refraction/aberration reads the already reconstructed scene once. */
 private const val NativeControlSmallForegroundFunctions = """

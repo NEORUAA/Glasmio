@@ -160,7 +160,8 @@ private data class NativeAtlasMaterialSourceKey(
     val functions: String,
     val colorManaged: Boolean,
     val nativeGammaStorage: Boolean,
-    val complete: Boolean,
+    val completionTopology: NativeGlassCompletionTopology?,
+    val samplingLayoutKey: String,
 )
 
 /** The producer is materialized before this single sampled material program evaluates its ROI. */
@@ -182,21 +183,24 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
 ): Boolean {
     val storage = this as? BackdropEffectScopeImpl ?: return false
     val atlas = pyramid.atlas(source, IntSize(ceil(sourceSize.width).toInt(), ceil(sourceSize.height).toInt()),
-        maximumLod, NativeGlassMipKernel.Compute13Tap, colorManaged = storage.colorManagedNativeGlass)
+        maximumLod, NativeGlassMipKernel.Compute13Tap, colorManaged = storage.colorManagedNativeGlass,
+        allowHardwareLinearSampling = storage.supportsNativeGlassHardwareLinearSampling)
     val functions = field?.shaderFunctions ?: NativeDefaultFieldShader
+    val completionTopology = completion?.programTopology()
     // Keep the full field source in the key so hash collisions retain source validation.
     val sources = storage.cachedResource("Glasmio.NativeAtlas.material.sources") {
         mutableMapOf<NativeAtlasMaterialSourceKey, String>()
     }
     val program = sources.getOrPut(NativeAtlasMaterialSourceKey(
-        functions, atlas.colorManaged, atlas.nativeGammaStorage, completion != null,
+        functions, atlas.colorManaged, atlas.nativeGammaStorage, completionTopology, atlas.samplingLayoutKey,
     )) {
         (if (completion != null) nativeGlassCompletionFieldFunctions(functions) else functions) +
             (if (completion != null && !functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") +
             atlas.samplingFunctions + NativeAtlasMaterialFunctions + if (completion == null) NativeAtlasMaterialMain
-        else (if (!atlas.colorManaged) GlassColorSpaceShaderFunctions else "") + NativeGlassCompletionShader
+        else (if (!atlas.colorManaged) GlassColorSpaceShaderFunctions else "") +
+            nativeGlassCompletionShader(requireNotNull(completionTopology))
     }
-    val shader = obtainRuntimeShader("Glasmio.NativeAtlas.material.${atlas.colorManaged}.${atlas.nativeGammaStorage}.${completion != null}.${functions.hashCode()}",
+    val shader = obtainRuntimeShader("Glasmio.NativeAtlas.material.${atlas.colorManaged}.${atlas.nativeGammaStorage}.${completion != null}.${completionTopology?.cacheKey ?: 0}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
         program).asAndroidRuntimeShader()
     atlas.configure(shader)
     if (field == null) {
