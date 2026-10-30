@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.unit.Density
 import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.hasBuiltInGlassLayerBlockIndependentSource
 
 @Composable
 fun rememberCombinedBackdrop(
@@ -46,11 +47,23 @@ fun rememberCombinedBackdrop(vararg backdrops: Backdrop): Backdrop {
     }
 }
 
+/** These captures use actual coordinates without interpreting the presentation layer block. */
+internal fun Backdrop.hasBuiltInLayerBlockIndependentSource(): Boolean = when (this) {
+    is LayerBackdrop -> true
+    is Combined2Backdrops -> hasLayerBlockIndependentSources()
+    is Combined3Backdrops -> hasLayerBlockIndependentSources()
+    is CombinedBackdrops -> hasLayerBlockIndependentSources()
+    else -> hasBuiltInCoordinateIndependentSource() || hasBuiltInGlassLayerBlockIndependentSource()
+}
+
 @Immutable
 private class Combined2Backdrops(
     val backdrop1: Backdrop,
     val backdrop2: Backdrop
 ) : Backdrop {
+
+    internal fun hasLayerBlockIndependentSources(): Boolean =
+        backdrop1.hasBuiltInLayerBlockIndependentSource() && backdrop2.hasBuiltInLayerBlockIndependentSource()
 
     override val isCoordinatesDependent: Boolean =
         backdrop1.isCoordinatesDependent || backdrop2.isCoordinatesDependent
@@ -77,6 +90,10 @@ private class Combined3Backdrops(
     val backdrop2: Backdrop,
     val backdrop3: Backdrop
 ) : Backdrop {
+
+    internal fun hasLayerBlockIndependentSources(): Boolean =
+        backdrop1.hasBuiltInLayerBlockIndependentSource() && backdrop2.hasBuiltInLayerBlockIndependentSource() &&
+            backdrop3.hasBuiltInLayerBlockIndependentSource()
 
     override val isCoordinatesDependent: Boolean =
         backdrop1.isCoordinatesDependent ||
@@ -105,6 +122,9 @@ private class Combined3Backdrops(
 private class CombinedBackdrops(
     vararg val backdrops: Backdrop
 ) : Backdrop {
+
+    internal fun hasLayerBlockIndependentSources(): Boolean =
+        backdrops.all { it.hasBuiltInLayerBlockIndependentSource() }
 
     override val isCoordinatesDependent: Boolean =
         backdrops.any { it.isCoordinatesDependent }

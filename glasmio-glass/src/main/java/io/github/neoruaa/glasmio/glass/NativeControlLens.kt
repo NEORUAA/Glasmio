@@ -119,8 +119,7 @@ fun BackdropEffectScope.nativeControlLens(
         null
     } else if (producesBlur) nativeControlLensReferenceProducer(style, liftProgress) else null
     val precomposedScene = !fullyResting && !small
-    val separateSceneOutput = precomposedScene && scope.colorManagedNativeGlass &&
-        scope.supportsNativeControlLensPlaneStages
+    val separateSceneOutput = precomposedScene && scope.supportsNativeControlLensPlaneStages
     val sceneTop = base.height * 2 + blurredSize.height
     val sceneSize = IntSize(ceil(base.width / scope.samplingScale).toInt(),
         ceil(base.height / scope.samplingScale).toInt())

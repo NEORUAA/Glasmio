@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.hasBuiltInCoordinateIndependentSource
+import io.github.neoruaa.glasmio.glass.render.backdrops.hasBuiltInLayerBlockIndependentSource
 import io.github.neoruaa.glasmio.glass.render.highlight.Highlight
 import io.github.neoruaa.glasmio.glass.render.highlight.HighlightElement
 import io.github.neoruaa.glasmio.glass.render.internal.ShapeProvider
@@ -334,7 +335,9 @@ private class DrawBackdropNode(
             override val supportsNativeControlLensConsumerSharing: Boolean get() = true
             override val supportsNativeGlassHardwareLinearSampling: Boolean get() = true
             override val supportsNativeControlLensPlaneStages: Boolean
-                get() = onDrawBackdrop === DefaultOnDrawBackdrop && layerBlock == null
+                get() = onDrawBackdrop === DefaultOnDrawBackdrop &&
+                    (layerBlock == null || (backdrop.hasBuiltInLayerBlockIndependentSource() &&
+                        (this.auxiliaryBackdrop?.hasBuiltInLayerBlockIndependentSource() ?: true)))
 
             override val shape: Shape get() = shapeProvider.innerShape
         }

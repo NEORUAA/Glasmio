@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.hasBuiltInLayerBlockIndependentSource
 import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import java.util.WeakHashMap
@@ -297,6 +298,13 @@ interface ViewportBackdrop : Backdrop {
     fun DrawScope.drawViewport(density: Density, coordinates: LayoutCoordinates, viewport: Rect)
 }
 
+/** Only these final wrappers map actual coordinates without evaluating the layer block. */
+internal fun Backdrop.hasBuiltInGlassLayerBlockIndependentSource(): Boolean = when (this) {
+    is CrossWindowBackdrop -> true
+    is SharedGlassBackdrop -> hasLayerBlockIndependentBase()
+    else -> false
+}
+
 private val BottomCaptureHeight = 240.dp
 
 private class SharedGlassBackdrop(
@@ -308,6 +316,8 @@ private class SharedGlassBackdrop(
     private val full = CrossWindowBackdrop(source, fullLayer, renderScale = 0.5f)
     private val bottom = CrossWindowBackdrop(source, bottomLayer, renderScale = 0.5f,
         captureHeight = BottomCaptureHeight)
+
+    internal fun hasLayerBlockIndependentBase(): Boolean = base.hasBuiltInLayerBlockIndependentSource()
 
     override val isCoordinatesDependent: Boolean get() = true
 

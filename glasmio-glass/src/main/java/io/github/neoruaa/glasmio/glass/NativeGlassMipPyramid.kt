@@ -225,9 +225,11 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         }
         recordedPyramid = null
         val scene = atlas.controlScenePlane
+        val rawProducer = if (atlas.controlBlurPlane == null) atlas.composeProducerStages.singleOrNull() else null
+        val captureBottom = if (rawProducer != null) atlas.rects[2].bottom else atlas.rects[1].bottom
         val supportSize = IntSize(
             maxOf(atlas.baseSize.width, scene.width),
-            maxOf(atlas.rects[1].bottom, atlas.controlBlurPlane?.bottom ?: 0, scene.height),
+            maxOf(captureBottom, atlas.controlBlurPlane?.bottom ?: 0, scene.height),
         )
         if (atlas.controlBlurPlane != null) {
             recordControlBlur(atlas, record, sourceBlock)
@@ -235,7 +237,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
             val raw = controlSource ?: context.createGraphicsLayer().also { controlSource = it }
             raw.clip = true
             raw.compositingStrategy = CompositingStrategy.Offscreen
-            raw.renderEffect = null
+            raw.renderEffect = rawProducer
             record(raw, supportSize, sourceBlock)
         }
         val input = sceneInput ?: context.createGraphicsLayer().also { sceneInput = it }
@@ -265,8 +267,12 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
 
     private fun drawControlInputs(scope: DrawScope, atlas: NativeGlassMipAtlas) = with(scope) {
         if (atlas.controlBlurPlane != null) drawControlBlurPlanes(this, atlas)
-        else clipRect(0f, 0f, atlas.baseSize.width.toFloat(), atlas.rects[1].bottom.toFloat()) {
-            drawLayer(requireNotNull(controlSource))
+        else {
+            val captureBottom = if (atlas.composeProducerStages.singleOrNull() != null)
+                atlas.rects[2].bottom else atlas.rects[1].bottom
+            clipRect(0f, 0f, atlas.baseSize.width.toFloat(), captureBottom.toFloat()) {
+                drawLayer(requireNotNull(controlSource))
+            }
         }
     }
 
