@@ -485,7 +485,10 @@ class NavigationRenderingTest {
                             assertEquals("The custom shape must synchronously enter the second owner", 1, callbacks)
                             if (mode == 1) {
                                 assertEquals("The outer consumer uses the pool", 0, outer.privateCalls)
-                                assertEquals("Same-source reentry must use the inner owner cache", 1, inner.privateCalls)
+                                // At rest, outer packed1 and inner packed4 have different sources.
+                                // Lifted owners share packed4 and still require the lease fallback.
+                                assertEquals("Only same-source reentry uses the inner owner cache",
+                                    if (case == 0) 0 else 1, inner.privateCalls)
                             }
                             actual.also { snapshots[case][mode] = it }
                         }
