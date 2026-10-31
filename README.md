@@ -1,14 +1,44 @@
 # Glasmio
 
-An Android-first Jetpack Compose UI framework with Liquid Glass materials, continuous corners, and iOS-style controls. Glasmio owns presentation and interaction. Your application owns data, navigation, preferences, and font resources.
+**English** | [简体中文](README.zh-CN.md)
 
-![Glasmio component catalog](docs/images/catalog.webp)
+A Jetpack Compose UI framework bringing a faithful 1:1 recreation of iOS 27 Liquid Glass, animations, controls, and interactions to Android.
+
+Glasmio is an independent third-party implementation built from research into iOS UI and interaction. It recreates glass rendering and optical refraction, motion and navigation transitions, gestures, and component behavior. Glasmio owns presentation and interaction; your application owns data, navigation, preferences, and font resources.
+
+## Research and recreation
+
+Glasmio combines iOS runtime analysis, UIKit and SwiftUI inspection, design references, and physical-device captures to reconstruct the visual and interactive behavior of iOS 27 on Android.
+
+- **Liquid Glass:** An Android rendering pipeline translates recovered material equations and measured recipes into backdrop sampling, blur, optical refraction, highlights, shadows, tint, and HDR-aware effects. Control lenses and liquid menu morphs have their own material behavior. See [native material rendering](docs/native-materials.md).
+- **Motion and interaction:** Navigation transitions, collapsing headers, gestures, menus, and sheets use motion and interaction models informed by native analysis and captures, including spring response and gesture release behavior. See the [navigation](docs/ios-navigation-motion.md), [sheet](docs/ios-sheet-motion.md), and [menu](docs/dropdown-motion.md) references.
+- **Components:** Controls, lists, typography, text selection, and other surfaces bring the researched geometry and behavior into Jetpack Compose. See the [design reference](docs/design-reference.md) and [component catalog](docs/components.md).
+
+Glasmio implements these effects and interactions independently for Android; it does not execute Apple's Metal binaries. Host applications can supply their own fonts and symbols.
+
+## Showcase
+
+| Component catalog | Materials · Light | Materials · Dark |
+| --- | --- | --- |
+| ![Glasmio component catalog](docs/images/showcase/home-light.webp) | ![Liquid Glass materials in light mode](docs/images/showcase/materials-light.webp) | ![Liquid Glass materials in dark mode](docs/images/showcase/materials-dark.webp) |
+
+| Controls | Lists | Sheet |
+| --- | --- | --- |
+| ![Switches and sliders](docs/images/showcase/controls.webp) | ![Grouped lists](docs/images/showcase/lists.webp) | ![Glasmio sheet](docs/images/showcase/sheet-open.webp) |
+
+| Home to Lists | Navigation drag | Navigation scroll · fast and slow |
+| --- | --- | --- |
+| ![Header transition between Home and Lists](docs/images/showcase/header-transition.gif) | ![Navigation selection drag and contact with Search](docs/images/showcase/navigation-drag.gif) | ![Navigation bar collapsing and expanding during fast and slow scrolls](docs/images/showcase/navigation-scroll.gif) |
+
+| Sheet gestures | Text selection toolbar | Liquid menu |
+| --- | --- | --- |
+| ![Sheet opening, expanding and dismissing](docs/images/showcase/sheet-motion.gif) | ![Text selection and expanded editing toolbar](docs/images/showcase/text-toolbar.gif) | ![Liquid menu opening and closing](docs/images/showcase/menu.gif) |
 
 All six libraries share version `0.1.0` and the Maven group `io.github.neoruaa.glasmio`.
 
 ## Demo app
 
-[Download the Demo APK](https://github.com/NEORUAA/Glasmio/releases/download/demo-2026-10-27/Glasmio-demo.apk)
+[Download the Demo APK](https://github.com/NEORUAA/Glasmio/releases/download/demo-2026-10-31/Glasmio-demo.apk)
 
 Requires Android 13 (API 33) or newer. The Demo includes SF Pro, SF Symbols, and real italic faces. Library artifacts contain no font files.
 
