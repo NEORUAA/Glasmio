@@ -8,11 +8,20 @@ Performance changes must preserve the existing motion, live layout, contour tole
 
 A regular material source depends on the **complete field source**, managed-color flag, native-gamma-storage flag and completion mode. Keep full field strings in the source-cache key: the existing runtime-shader key contains only a field hash, and its full source comparison must continue to distinguish collisions. Dimensions, material values and completion parameters are uniforms, not source variants.
 
-Control sources depend on their resting/small/tab/precomposed/color variants; generated Gaussian sources also depend on tap limit and plane mode. Each Gaussian axis retains its own shader and uniforms while sharing its immutable source.
+Control sources depend on their resting/small/tab/precomposed/color variants and shared-stage capability; generated Gaussian sources also depend on tap limit and plane mode. Each Gaussian axis retains its own shader and uniforms while sharing its immutable source.
 
 Atlas sampling sources are initialized only for the selected layout, lookup capacity, sampler and color mode. Keep the fixed variant set and preserve the complete generated source.
 
 Active Tab scene and consumer programs share their source across the held endpoint. At zero rest, the background transfer returns the original zero-body composition before reading the omitted blur plane. Keep blur production, source uniforms and the resting program unchanged.
+
+Control scene composition passes the same-coordinate field, raw source and below-glass result through the background and portal stages. Displaced points evaluate their own field and source. Keep raw source and below-glass color distinct: background completion consumes the latter, while relative output uses the former. These are float values within one program, with no new storage or color conversion.
+
+Active built-in Tab scene and consumer passes use the same complete program. `lensScenePass` selects their original coordinate mapping and output; the pointwise scene calculation is shared in the program body. The scene still writes its encoded image before foreground sampling, and the consumer still reconstructs its unquantized scene values. Both passes keep separate shader instances and frozen RenderEffect snapshots. Every configuration must set the stage uniform, and the source-cache key must include the shared-stage capability because a modifier can change its backdrop or layer callback without replacing its scope.
+
+```text
+live capture -> Gaussian H/V -> scene image -> lens output
+                               [same shader program]
+```
 
 ## Capture and effect ownership
 
@@ -42,6 +51,8 @@ Cascading-menu width remains measured during composition with the current collec
 
 Draw-only menu press backgrounds and adaptive geometry/running-state caching were evaluated and reverted. Menu opening tails did not improve consistently, and the adaptive experiment encountered a callback regression test failure. Neither experiment is part of the implementation; immutable shader source reuse from that investigation is retained.
 
+Explicit `noinline` boundaries on atlas samplers or control-scene functions did not reduce first-use compilation on the physical device and were removed. Enlarging the scene input to the full consumer atlas also lacked a clear benefit. Preserve normal compiler specialization and the original input extents; image bounds and target state can still require distinct Skia pipelines for the shared source.
+
 Do not defer all effect invalidation to drawing: `nativeMaterialCompleted` changes the owning layout layer's clip and compositing strategy. A path clip may already be recorded before the draw callback runs, so a draw-time update can leave the first frame using the previous material's clipping.
 
 ## Evidence
@@ -50,6 +61,10 @@ Cold-process comparisons and supporting probes for capture replay, native arithm
 
 The physical-device follow-up for lazy atlas sources and unified Tab programs retains [source and APK identities](../.local-research/performance/device-20261101/accepted-source.json), the [Demo comparison](../.local-research/performance/device-20261101/analysis/accepted-demo-summary.md) and the [MeiloX comparison](../.local-research/performance/device-20261101/analysis/accepted-mei-comparison.md). The measured benefit is concentrated in first-use navigation dragging; it does not establish a general menu, sheet or whole-app improvement.
 
+The [AndroidLiquidGlass shader review](../.local-research/performance/kyant-20261101/kyant-shader-review.md) identifies small reachable shader graphs and fixed source families as useful organizational patterns. Glasmio retains its own optical kernels and color math. The [shared-scene comparison](../.local-research/performance/kyant-20261101/shared-scene-summary.md) measures explicit reuse of identical intermediate values against `7a484a6`, separately from the earlier gains.
+
+The [Compose/HWUI boundary audit](../.local-research/performance/render-architecture-20261101/production-graph.md) grounds the shared Tab program in the existing materialized passes. Its [Demo confirmation](../.local-research/performance/render-architecture-20261101/shared-tab-confirmation-comparison.md) and [MeiloX comparison](../.local-research/performance/render-architecture-20261101/shared-tab-program-mei-comparison.md) retain complete cold interaction sequences, including compilation that moves between actions and startup or frame-tail regressions. First-use stalls remain; the improvement is specific to navigation.
+
 The interaction benchmark excludes route preparation and retains popup-dismissal frames through Perfetto after their windows are destroyed. Keep app SurfaceFrame latency separate from UI and RenderThread scope durations. This HyperOS device sets frame flag bit 32 during ordinary rendering; do not discard all nonzero flags or trust its malformed frame-deadline counters. Retain raw frame timestamps and report UI, Draw and RenderThread costs separately.
 
-Supplemental pre-launch traces include the first app draw and shared-shader compilation. Treat nonzero Perfetto buffer-overwrite statistics as data loss even when the service labels them informational. The current cold AVD results are mixed: reduced recording and reader work does not establish consistently lower interaction latency. Keep algorithm microbenchmarks, scheduled CPU time, frame latency and physical-device acceptance separate.
+Supplemental pre-launch traces include the first app draw and shared-shader compilation. Treat nonzero Perfetto buffer-overwrite statistics as data loss even when the service labels them informational. Keep algorithm microbenchmarks, scheduled CPU time, frame latency and physical-device acceptance separate.

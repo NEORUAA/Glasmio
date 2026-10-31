@@ -285,7 +285,7 @@ class NavigationRenderingTest {
             .getString("glasmioUnifiedTabOnly") == "true"
         check(!tabPlaneDiagnostic || !unifiedTabOnly) { "Select one independent renderer diagnostic at a time" }
         val heldProgram = io.github.neoruaa.glasmio.glass.nativeControlScenePlaneProgram("", heldTab = true)
-        val belowStart = "float4 nativeControlBelow(float2 p) {"
+        val belowStart = "float4 nativeControlBelow(float2 p, float3 field, float4 original) {"
         val heldStart = heldProgram.indexOf(belowStart)
         val heldBelow = heldProgram.substring(heldStart, heldProgram.indexOf("\n}", heldStart) + 2)
         val heldGuard = "    if (lensRest == 0.0) return nativeControlOver(float4(0.0), natural);\n"
@@ -296,7 +296,8 @@ class NavigationRenderingTest {
             private val held: Boolean = false,
         ) : BackdropEffectScopeImpl() {
             override val supportsNativeControlLensConsumerSharing = sharing
-            override val supportsNativeControlLensPlaneStages = planes
+            var planeStages = planes
+            override val supportsNativeControlLensPlaneStages get() = planeStages
             override val shape = com.kyant.shapes.Capsule()
             var restoredPrograms = 0
 
@@ -395,12 +396,21 @@ class NavigationRenderingTest {
                                 second, case.managed, if (second) !case.content else case.content,
                                 if (second) Color(.1f, .8f, .3f, .25f) else Color(.8f, .25f, .15f, .8f),
                                 if (second) Color(0xFFFF3B30) else Color(0xFF34C759), samplingScale = case.samplingScale)
+                            if (activeTab) {
+                                // A modifier can change its backdrop/layer capabilities without
+                                // replacing the scope. Both program families must remain reusable.
+                                for (planes in listOf(false, true, false)) {
+                                    firstOwner.planeStages = planes
+                                    frame(firstOwner, false)
+                                }
+                                firstOwner.planeStages = true
+                            }
                             val actual = frame(firstOwner, false)
                             val actualSecond = frame(secondOwner, true)
                             fun reference(owner: FixtureScope, producer: FixtureScope, actual: LensPoolFrame, second: Boolean): LensPoolFrame {
                                 if (!activeTab) return frame(owner, second)
                                 val sourceKey = "Glasmio.ControlLens.${case.managed}.false.false.true.true.layout=" +
-                                    requireNotNull(actual.controlAtlas).samplingLayoutKey + ".builtin.source"
+                                    requireNotNull(actual.controlAtlas).samplingLayoutKey + ".shared=true.builtin.source"
                                 val source = producer.cachedResource<String>(sourceKey) { error("Missing production Tab source") }
                                 var result: LensPoolFrame? = null
                                 // A real busy lease invokes the existing private-builder fallback,
