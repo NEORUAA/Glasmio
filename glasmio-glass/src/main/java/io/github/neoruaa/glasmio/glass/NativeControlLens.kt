@@ -175,9 +175,8 @@ fun BackdropEffectScope.nativeControlLens(
         if (highlight) NativeVibrantColorMatrix.RegularHighlight.configure(shader::setFloatUniform)
     }
     if (precomposedScene) {
-        val sceneBaseKey = if (separateSceneOutput) "Glasmio.ControlLens.scenePlane.${atlas.colorManaged}.$small.$tab.layout=${atlas.samplingLayoutKey}"
+        val sceneKey = if (separateSceneOutput) "Glasmio.ControlLens.scenePlane.${atlas.colorManaged}.$small.$tab.layout=${atlas.samplingLayoutKey}"
             else "Glasmio.ControlLens.scene.${atlas.colorManaged}.layout=${atlas.samplingLayoutKey}"
-        val sceneKey = if (heldTab) "$sceneBaseKey.held" else sceneBaseKey
         val sceneShader = obtainRuntimeShader(sceneKey,
             scope.cachedResource("$sceneKey.source") {
                 if (separateSceneOutput) nativeControlScenePlaneProgram(atlas.samplingFunctions, heldTab, style)
@@ -190,8 +189,7 @@ fun BackdropEffectScope.nativeControlLens(
         val sceneEffect = RenderEffect.createRuntimeShaderEffect(sceneShader, "content")
         if (separateSceneOutput) atlas.controlSceneEffect = sceneEffect else stages += sceneEffect
     }
-    val lensBaseKey = "Glasmio.ControlLens.${atlas.colorManaged}.$fullyResting.$small.$tab.$precomposedScene.layout=${atlas.samplingLayoutKey}"
-    val lensKey = if (heldTab) "$lensBaseKey.held" else lensBaseKey
+    val lensKey = "Glasmio.ControlLens.${atlas.colorManaged}.$fullyResting.$small.$tab.$precomposedScene.layout=${atlas.samplingLayoutKey}"
     val builtInConsumer = scope.supportsNativeControlLensConsumerSharing
     val sourceKey = if (builtInConsumer) "$lensKey.builtin.source" else "$lensKey.source"
     val lensSource = scope.cachedResource(sourceKey) {
@@ -748,11 +746,18 @@ private const val NativeControlLensSceneFunctions =
 private const val NativeControlHeldTabSceneFunctions =
     NativeControlLensScenePrefix + NativeControlHeldTabBelowFunctions + NativeControlLensSceneSuffix
 
-private fun nativeControlStyleSceneFunctions(small: Boolean, tab: Boolean, heldTab: Boolean): String =
-    NativeControlLensScenePrefix +
-        ((if (heldTab) NativeControlHeldTabBelowFunctions else NativeControlBelowFunctions) + NativeControlLensSceneSuffix)
-            .replace("lensSmall", if (small) "1.0" else "0.0")
-            .replace("lensTab", if (tab) "1.0" else "0.0")
+private fun nativeControlStyleSceneFunctions(small: Boolean, tab: Boolean, heldTab: Boolean): String {
+    val below = if (tab && !small) {
+        // Active Tab states share one program. The held endpoint retains its exact
+        // zero-body transfer without sampling the blur plane omitted by its producer.
+        NativeControlBelowFunctions.replace("    float3 f = glassField(p, 0.0);",
+            "    if (lensRest == 0.0) return nativeControlOver(float4(0.0), natural);\n" +
+                "    float3 f = glassField(p, 0.0);")
+    } else if (heldTab) NativeControlHeldTabBelowFunctions else NativeControlBelowFunctions
+    return NativeControlLensScenePrefix + (below + NativeControlLensSceneSuffix)
+        .replace("lensSmall", if (small) "1.0" else "0.0")
+        .replace("lensTab", if (tab) "1.0" else "0.0")
+}
 
 private const val NativeControlAnalyticSource = """
 float4 nativeControlForegroundSource(float2 p) { return nativeControlBeforeForeground(p); }

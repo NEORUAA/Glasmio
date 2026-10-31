@@ -10,6 +10,10 @@ A regular material source depends on the **complete field source**, managed-colo
 
 Control sources depend on their resting/small/tab/precomposed/color variants; generated Gaussian sources also depend on tap limit and plane mode. Each Gaussian axis retains its own shader and uniforms while sharing its immutable source.
 
+Atlas sampling sources are initialized only for the selected layout, lookup capacity, sampler and color mode. Keep the fixed variant set and preserve the complete generated source.
+
+Active Tab scene and consumer programs share their source across the held endpoint. At zero rest, the background transfer returns the original zero-body composition before reading the omitted blur plane. Keep blur production, source uniforms and the resting program unchanged.
+
 ## Capture and effect ownership
 
 `layerBackdrop(backdrop)` retains independent visible and capture draws, including content that reads `drawContext.graphicsLayer`. The explicit `layerBackdrop(backdrop, reuseContent = true)` overload may record content once and replay that live display list only when the capture uses the default callback **by identity**, its public `GraphicsLayer` has exactly one attached recording owner, and the layer preserves ordinary content drawing. Recheck ownership and properties after recording: a drawing callback can mutate the public layer. Custom captures, shared layers, clipping, transforms, opacity, filters and non-default blending retain direct visible drawing followed by independent capture. Opt in only for content audited to draw identically in both scopes. Preserve ancestor transforms, overflow and destination blending in both paths.
@@ -38,9 +42,13 @@ Cascading-menu width remains measured during composition with the current collec
 
 Draw-only menu press backgrounds and adaptive geometry/running-state caching were evaluated and reverted. Menu opening tails did not improve consistently, and the adaptive experiment encountered a callback regression test failure. Neither experiment is part of the implementation; immutable shader source reuse from that investigation is retained.
 
+Do not defer all effect invalidation to drawing: `nativeMaterialCompleted` changes the owning layout layer's clip and compositing strategy. A path clip may already be recorded before the draw callback runs, so a draw-time update can leave the first frame using the previous material's clipping.
+
 ## Evidence
 
 Cold-process comparisons and supporting probes for capture replay, native arithmetic and reader invalidation are retained under [`.local-research/performance/cold-20261030/`](../.local-research/performance/cold-20261030/REPORT.md). Use runs with cleared shader caches as primary performance evidence, and report repeated interactions separately.
+
+The physical-device follow-up for lazy atlas sources and unified Tab programs retains [source and APK identities](../.local-research/performance/device-20261101/accepted-source.json), the [Demo comparison](../.local-research/performance/device-20261101/analysis/accepted-demo-summary.md) and the [MeiloX comparison](../.local-research/performance/device-20261101/analysis/accepted-mei-comparison.md). The measured benefit is concentrated in first-use navigation dragging; it does not establish a general menu, sheet or whole-app improvement.
 
 The interaction benchmark excludes route preparation and retains popup-dismissal frames through Perfetto after their windows are destroyed. Keep app SurfaceFrame latency separate from UI and RenderThread scope durations. This HyperOS device sets frame flag bit 32 during ordinary rendering; do not discard all nonzero flags or trust its malformed frame-deadline counters. Retain raw frame timestamps and report UI, Draw and RenderThread costs separately.
 

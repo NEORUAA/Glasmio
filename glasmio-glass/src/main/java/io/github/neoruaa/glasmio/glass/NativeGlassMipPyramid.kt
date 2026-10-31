@@ -136,12 +136,12 @@ internal class NativeGlassMipAtlas(
     val samplingLayoutKey: String = (if (regularMipRow == null) "packed$lookupCapacity" else "mip") +
         ".linear=$hardwareLinearSampling"
     val samplingFunctions: String = (if (regularMipRow == null)
-        NativeAtlasSamplingFunctionBuckets.getValue(lookupCapacity)
+        NativeAtlasSamplingFunctionBuckets.getValue(lookupCapacity).value
     else NativeAtlasRegularSamplingFunctions)[if (hardwareLinearSampling) 1 else 0][when {
         nativeGammaStorage -> 2
         colorManaged -> 1
         else -> 0
-    }]
+    }].value
 
     private val packedRects = FloatArray(32 * 4).apply {
         rects.forEachIndexed { index, rect ->
@@ -999,28 +999,23 @@ private const val NativeGlassAtlasManagedSamplingFunctions = NativeAtlasManagedC
 private const val NativeGlassAtlasNativeGammaSamplingFunctions = NativeAtlasNativeGammaColorFunctions + NativeAtlasSamplingFunctions
 
 /** Unused packed slots are zero, including slot 31 whenever a smaller bucket is selected. */
-private val NativeAtlasSamplingFunctionBuckets: Map<Int, Array<Array<String>>> by lazy {
+private val NativeAtlasSamplingFunctionBuckets: Map<Int, Lazy<Array<Array<Lazy<String>>>>> by lazy {
     listOf(1, 2, 4, 8, 16, 32).associateWith { capacity ->
-        val lookup = if (capacity == 32) NativeAtlasRectLookup else buildString {
+        lazy {
+            val lookup = if (capacity == 32) NativeAtlasRectLookup else buildString {
                 append("float4 nativeAtlasRect(int level) {\n")
                 repeat(capacity) { level ->
                     append("    if (level == $level) return nativeAtlasRects[$level];\n")
                 }
                 append("    return nativeAtlasRects[31];\n}\n")
+            }
+            nativeAtlasSamplingVariants(lookup)
         }
-        val manual = NativeAtlasSamplingUniforms + lookup + NativeAtlasSamplingBody
-        val linear = NativeAtlasSamplingUniforms + lookup + NativeAtlasHardwareLinearSamplingBody
-        arrayOf(
-            arrayOf(NativeAtlasRawColorFunctions + manual, NativeAtlasManagedColorFunctions + manual,
-                NativeAtlasNativeGammaColorFunctions + manual),
-            arrayOf(NativeAtlasRawColorFunctions + linear, NativeAtlasManagedColorFunctions + linear,
-                NativeAtlasNativeGammaColorFunctions + linear),
-        )
     }
 }
 
 /** One program addresses either strip orientation without specializing on mip count or shape. */
-private val NativeAtlasRegularSamplingFunctions: Array<Array<String>> by lazy {
+private val NativeAtlasRegularSamplingFunctions: Array<Array<Lazy<String>>> by lazy {
     val lookup = """
 float4 nativeAtlasRect(int level) {
     if (level == 0) return nativeAtlasRects[0];
@@ -1036,12 +1031,21 @@ float4 nativeAtlasRect(int level) {
     return float4(origin, mipSize);
 }
 """
-    val manual = NativeAtlasSamplingUniforms + lookup + NativeAtlasSamplingBody
-    val linear = NativeAtlasSamplingUniforms + lookup + NativeAtlasHardwareLinearSamplingBody
-    arrayOf(
-        arrayOf(NativeAtlasRawColorFunctions + manual, NativeAtlasManagedColorFunctions + manual,
-            NativeAtlasNativeGammaColorFunctions + manual),
-        arrayOf(NativeAtlasRawColorFunctions + linear, NativeAtlasManagedColorFunctions + linear,
-            NativeAtlasNativeGammaColorFunctions + linear),
-    )
+    nativeAtlasSamplingVariants(lookup)
 }
+
+/** Build only the selected immutable source; shader instances remain owned by their consumer. */
+private fun nativeAtlasSamplingVariants(lookup: String): Array<Array<Lazy<String>>> =
+    Array(2) { sampling ->
+        Array(3) { color ->
+            lazy {
+                val colors = when (color) {
+                    0 -> NativeAtlasRawColorFunctions
+                    1 -> NativeAtlasManagedColorFunctions
+                    else -> NativeAtlasNativeGammaColorFunctions
+                }
+                val body = if (sampling == 0) NativeAtlasSamplingBody else NativeAtlasHardwareLinearSamplingBody
+                colors + NativeAtlasSamplingUniforms + lookup + body
+            }
+        }
+    }
