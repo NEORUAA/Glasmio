@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.1.0 — Unreleased
+## 0.1.1
+
+- Reduce active navigation tab rendering work by sharing scene and lens programs.
+- Reuse tab programs and build atlas shader sources lazily.
+
+## 0.1.0
 
 Initial Android Compose framework extraction from MeiloX.
 

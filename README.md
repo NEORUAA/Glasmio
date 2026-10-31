@@ -34,11 +34,11 @@ Glasmio implements these effects and interactions independently for Android; it 
 | --- | --- | --- |
 | ![Sheet opening, expanding and dismissing](docs/images/showcase/sheet-motion.gif) | ![Text selection and expanded editing toolbar](docs/images/showcase/text-toolbar.gif) | ![Liquid menu opening and closing](docs/images/showcase/menu.gif) |
 
-All six libraries share version `0.1.0` and the Maven group `io.github.neoruaa.glasmio`.
+All six libraries share version `0.1.1` and the Maven group `io.github.neoruaa.glasmio`.
 
 ## Demo app
 
-[Download the Demo APK](https://github.com/NEORUAA/Glasmio/releases/download/demo-2026-10-31/Glasmio-demo.apk)
+[Download the Demo APK](https://github.com/NEORUAA/Glasmio/releases/download/demo-2026-11-01/Glasmio-demo.apk)
 
 Requires Android 13 (API 33) or newer. The Demo includes SF Pro, SF Symbols, and real italic faces. Library artifacts contain no font files.
 
@@ -104,8 +104,8 @@ Then declare the modules you need:
 
 ```kotlin
 dependencies {
-    implementation("io.github.neoruaa.glasmio:glasmio-scaffold:0.1.0")
-    implementation("io.github.neoruaa.glasmio:glasmio-preference:0.1.0")
+    implementation("io.github.neoruaa.glasmio:glasmio-scaffold:0.1.1")
+    implementation("io.github.neoruaa.glasmio:glasmio-preference:0.1.1")
 }
 ```
 
