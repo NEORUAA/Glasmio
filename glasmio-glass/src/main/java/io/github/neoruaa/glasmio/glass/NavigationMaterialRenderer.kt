@@ -86,12 +86,16 @@ internal data class NavigationMaterialRecipe(
     }
 }
 
+internal fun NavigationMaterialRecipe.hasFillLayers(): Boolean =
+    fills.isNotEmpty() || appearanceAlternate?.hasFillLayers() == true
+
 /**
  * Cached material program. Modern HWUI can consume the destination directly; older HWUI applies
  * the identical function to the already sampled backdrop with a RenderEffect.
  */
 internal class NavigationMaterialRenderer {
-    private val shader = RuntimeShader(NavigationMaterialEffectShader)
+    private val shaderWithFills by lazy { RuntimeShader(NavigationMaterialEffectShader) }
+    private val shaderWithoutFills by lazy { RuntimeShader(NavigationMaterialEffectNoFillShader) }
     private var effectRecipe: NavigationMaterialRecipe? = null
     private var effectOpacity = Float.NaN
     private var cachedEffect: RenderEffect? = null
@@ -115,6 +119,7 @@ internal class NavigationMaterialRenderer {
 
     fun effect(value: NavigationMaterialRecipe, opacity: Float = 1f, minimumDimension: Float = Float.NaN): RenderEffect {
         val recipe = recipeForSize(value, minimumDimension)
+        val shader = if (recipe.hasFillLayers()) shaderWithFills else shaderWithoutFills
         val alpha = opacity.coerceIn(0f, 1f)
         if (!recipe.matches(effectRecipe) || effectOpacity != alpha || cachedEffect == null) {
             if (!recipe.matches(effectRecipe)) updateNavigationMaterialUniforms(recipe, alpha, shader::setFloatUniform)
@@ -141,7 +146,8 @@ internal class NavigationMaterialRenderer {
 
     @RequiresApi(36)
     private class MaterialBlender {
-        private val blender = RuntimeXfermode(NavigationMaterialBlenderShader)
+        private val blenderWithFills by lazy { RuntimeXfermode(NavigationMaterialBlenderShader) }
+        private val blenderWithoutFills by lazy { RuntimeXfermode(NavigationMaterialBlenderNoFillShader) }
         val paint = Paint().apply { color = android.graphics.Color.WHITE }
         private var recipe: NavigationMaterialRecipe? = null
         private var opacity = Float.NaN
@@ -149,6 +155,7 @@ internal class NavigationMaterialRenderer {
         fun prepare(value: NavigationMaterialRecipe, alpha: Float) {
             val nextOpacity = alpha.coerceIn(0f, 1f)
             if (!value.matches(recipe) || opacity != nextOpacity) {
+                val blender = if (value.hasFillLayers()) blenderWithFills else blenderWithoutFills
                 if (!value.matches(recipe)) updateNavigationMaterialUniforms(value, nextOpacity, blender::setFloatUniform)
                 else {
                     blender.setFloatUniform("materialOpacity", nextOpacity)
@@ -523,6 +530,45 @@ internal val NavigationMaterialSourceShaderFunctions = run {
             "navigationMaterialFinishForAppearance", "navigationMaterialTintForAppearance")
     Regex("\\b(" + names.joinToString("|") + ")\\b").replace(NavigationMaterialNativeShaderFunctions) { "source_" + it.value }
 }
+
+/** Keep every uniform while excluding unreachable general fill operations from known recipes. */
+private fun String.withoutNavigationMaterialFills(namespace: String = ""): String {
+    var functions = this
+    for (appearance in listOf("", "appearance_")) {
+        val prefix = namespace + appearance
+        repeat(4) { index ->
+            val threshold = if (index == 0) ".5" else "$index.5"
+            val channel = "xyzw"[index]
+            functions = functions.replace(
+                "    if (${prefix}fillCount > $threshold) color = ${prefix}materialFill(color, ${prefix}fill$index, ${prefix}fillModes.$channel);\n",
+                "",
+            )
+        }
+    }
+    return functions
+}
+
+private val NavigationMaterialNativeNoFillShaderFunctions by lazy {
+    NavigationMaterialNativeShaderFunctions.withoutNavigationMaterialFills()
+}
+
+private val NavigationMaterialSourceNoFillShaderFunctions by lazy {
+    NavigationMaterialSourceShaderFunctions.withoutNavigationMaterialFills("source_")
+}
+
+private val NavigationMaterialEffectNoFillShader by lazy {
+    NavigationMaterialEffectShader.withoutNavigationMaterialFills()
+}
+
+private val NavigationMaterialBlenderNoFillShader by lazy {
+    NavigationMaterialBlenderShader.withoutNavigationMaterialFills()
+}
+
+internal fun navigationMaterialNativeShaderFunctions(hasFills: Boolean): String =
+    if (hasFills) NavigationMaterialNativeShaderFunctions else NavigationMaterialNativeNoFillShaderFunctions
+
+internal fun navigationMaterialSourceShaderFunctions(hasFills: Boolean): String =
+    if (hasFills) NavigationMaterialSourceShaderFunctions else NavigationMaterialSourceNoFillShaderFunctions
 
 private const val NavigationMaterialBlenderShader = NavigationMaterialShaderFunctions + """
 half4 main(half4 src, half4 dst) {

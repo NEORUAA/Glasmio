@@ -284,33 +284,20 @@ class NavigationRenderingTest {
         val unifiedTabOnly = androidx.test.platform.app.InstrumentationRegistry.getArguments()
             .getString("glasmioUnifiedTabOnly") == "true"
         check(!tabPlaneDiagnostic || !unifiedTabOnly) { "Select one independent renderer diagnostic at a time" }
-        val heldProgram = io.github.neoruaa.glasmio.glass.nativeControlScenePlaneProgram("", heldTab = true)
-        val belowStart = "float4 nativeControlBelow(float2 p, float3 field, float4 original) {"
-        val heldStart = heldProgram.indexOf(belowStart)
-        val heldBelow = heldProgram.substring(heldStart, heldProgram.indexOf("\n}", heldStart) + 2)
-        val heldGuard = "    if (lensRest == 0.0) return nativeControlOver(float4(0.0), natural);\n"
-        class FixtureScope(
-            sharing: Boolean,
-            planes: Boolean = false,
-            private val legacyTab: Boolean = false,
-            private val held: Boolean = false,
-        ) : BackdropEffectScopeImpl() {
-            override val supportsNativeControlLensConsumerSharing = sharing
+        class FixtureScope(planes: Boolean = false) : BackdropEffectScopeImpl() {
+            override val supportsNativeControlLensConsumerSharing = true
             var planeStages = planes
             override val supportsNativeControlLensPlaneStages get() = planeStages
             override val shape = com.kyant.shapes.Capsule()
-            var restoredPrograms = 0
+            var privateConsumerCalls = 0
+            var privateConsumerSource: String? = null
 
             override fun obtainRuntimeShader(key: String, string: String): io.github.neoruaa.glasmio.glass.render.RuntimeShader {
-                val referenceSource = if (legacyTab && heldGuard in string) {
-                    restoredPrograms++
-                    // Preserve the old active or held program on the same real pass topology.
-                    if (held) {
-                        val start = string.indexOf(belowStart)
-                        string.replaceRange(start, string.indexOf("\n}", start) + 2, heldBelow)
-                    } else string.replace(heldGuard, "")
-                } else string
-                return super.obtainRuntimeShader(key, referenceSource)
+                if (key.startsWith("Glasmio.ControlLens.true.") || key.startsWith("Glasmio.ControlLens.false.")) {
+                    privateConsumerCalls++
+                    privateConsumerSource = string
+                }
+                return super.obtainRuntimeShader(key, string)
             }
         }
         data class Case(
@@ -384,13 +371,19 @@ class NavigationRenderingTest {
                         val ownerIndex = index % 2
                         val case = cases[caseIndex]
                         val pairs = snapshots[caseIndex] ?: run {
+                            val finiteLift = case.lift.takeIf { it.isFinite() } ?: 0f
+                            val fullyResting = finiteLift <= 0f
+                            val small = case.role == NativeControlLensStyle.SwitchThumb ||
+                                case.role == NativeControlLensStyle.SliderThumb
+                            val tab = case.role == NativeControlLensStyle.TabBarIndicator
+                            val precomposedScene = !fullyResting && !small
                             val tabPlanes = unifiedTabOnly && case.role == NativeControlLensStyle.TabBarIndicator
                             val activeTab = tabPlanes && case.lift > 0f
                             val heldTab = tabPlanes && case.lift >= 1f
-                            val privateOwner = FixtureScope(unifiedTabOnly, tabPlanes, activeTab, heldTab)
-                            val secondPrivateOwner = FixtureScope(unifiedTabOnly, tabPlanes, activeTab, heldTab)
-                            val firstOwner = FixtureScope(true, tabPlanes)
-                            val secondOwner = FixtureScope(true, tabPlanes)
+                            val privateOwner = FixtureScope(tabPlanes)
+                            val secondPrivateOwner = FixtureScope(tabPlanes)
+                            val firstOwner = FixtureScope(tabPlanes)
+                            val secondOwner = FixtureScope(tabPlanes)
                             fun frame(owner: FixtureScope, second: Boolean) = lensPoolFrame(owner,
                                 if (second) case.secondSize else case.firstSize, case.role, case.lift,
                                 second, case.managed, if (second) !case.content else case.content,
@@ -408,25 +401,30 @@ class NavigationRenderingTest {
                             val actual = frame(firstOwner, false)
                             val actualSecond = frame(secondOwner, true)
                             fun reference(owner: FixtureScope, producer: FixtureScope, actual: LensPoolFrame, second: Boolean): LensPoolFrame {
-                                if (!activeTab) return frame(owner, second)
-                                val sourceKey = "Glasmio.ControlLens.${case.managed}.false.false.true.true.layout=" +
-                                    requireNotNull(actual.controlAtlas).samplingLayoutKey + ".shared=true.builtin.source"
-                                val source = producer.cachedResource<String>(sourceKey) { error("Missing production Tab source") }
+                                val content = if (second) !case.content else case.content
+                                val layout = actual.controlAtlas?.samplingLayoutKey ?: (
+                                    if (small && fullyResting && !content) "packed1" else "packed4") + ".linear=false"
+                                val sourceKey = "Glasmio.ControlLens.${case.managed}.$fullyResting.$small.$tab.$precomposedScene.layout=" +
+                                    "$layout.sampledScene=${tabPlanes && precomposedScene}.builtin.source"
+                                val source = producer.cachedResource<String>(sourceKey) { error("Missing production consumer source") }
                                 var result: LensPoolFrame? = null
-                                // A real busy lease invokes the existing private-builder fallback,
-                                // allowing the reference to restore its old source without changing passes.
+                                val privateCalls = owner.privateConsumerCalls
+                                // Hold the same complete source busy so the reference uses an
+                                // independent private shader without changing its optical graph.
                                 io.github.neoruaa.glasmio.glass.NativeControlLensConsumerShaders.snapshot(source,
                                     privateShader = { android.graphics.RuntimeShader(source) }) {
                                     frame(owner, second).also { result = it }.effect.asAndroidRenderEffect()
                                 }
-                                assertEquals("Both scene and consumer must use their original Tab source", 2, owner.restoredPrograms)
+                                assertEquals("A busy same-source lease must use the independent owner cache once",
+                                    privateCalls + 1, owner.privateConsumerCalls)
+                                assertEquals("The private reference must retain the same complete built-in source",
+                                    source, owner.privateConsumerSource)
                                 return requireNotNull(result)
                             }
                             val expected = reference(privateOwner, firstOwner, actual, false)
                             val expectedSecond = reference(secondPrivateOwner, secondOwner, actualSecond, true)
-                            val finiteLift = case.lift.takeIf { it.isFinite() } ?: 0f
-                            val small = case.role == NativeControlLensStyle.SwitchThumb ||
-                                case.role == NativeControlLensStyle.SliderThumb
+                            assertEquals("An idle pool must not use the first owner's private consumer", 0, firstOwner.privateConsumerCalls)
+                            assertEquals("An idle pool must not use the second owner's private consumer", 0, secondOwner.privateConsumerCalls)
                             val hasProducers = if (heldTab) false else if (small) finiteLift > 0f && finiteLift < 1f
                                 else case.role == NativeControlLensStyle.TabBarIndicator || finiteLift > 0f
                             listOf(expected, actual, expectedSecond, actualSecond).forEach { frame ->
@@ -434,19 +432,11 @@ class NavigationRenderingTest {
                                     hasProducers, frame.producerEffects.isNotEmpty())
                             }
                             if (case.role == NativeControlLensStyle.TabBarIndicator && case.managed) {
-                                if (!unifiedTabOnly) {
-                                    listOf(expected, expectedSecond).forEach { frame ->
-                                        assertEquals("The custom-scope reference must retain its original full-atlas chain", null, frame.controlAtlas)
-                                    }
-                                } else {
-                                    listOf(expected to actual, expectedSecond to actualSecond).forEach { (reference, optimized) ->
-                                        assertEquals("Unified Tab programs must keep the same atlas geometry",
-                                            requireNotNull(reference.controlAtlas).rects, requireNotNull(optimized.controlAtlas).rects)
-                                    }
+                                listOf(expected to actual, expectedSecond to actualSecond).forEach { (reference, optimized) ->
+                                    assertEquals("Independent built-in consumers must keep the same atlas geometry",
+                                        requireNotNull(reference.controlAtlas).rects, requireNotNull(optimized.controlAtlas).rects)
                                 }
-                                val planeFrames = if (unifiedTabOnly) listOf(expected, actual, expectedSecond, actualSecond)
-                                    else listOf(actual, actualSecond)
-                                planeFrames.forEach { frame ->
+                                listOf(expected, actual, expectedSecond, actualSecond).forEach { frame ->
                                     val optimized = requireNotNull(frame.controlAtlas)
                                     assertEquals("Tab blur must use the real production control-plane renderer",
                                         if (heldTab) 0 else if (tabPlanes) 3 else if (finiteLift > 0f) 4 else 3,

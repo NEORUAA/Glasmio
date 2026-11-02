@@ -95,6 +95,7 @@ import io.github.neoruaa.glasmio.scaffold.navigation.iosPopTransitionSpec
 import io.github.neoruaa.glasmio.scaffold.navigation.iosPredictivePopTransitionSpec
 import com.kyant.capsule.ContinuousRoundedRectangle
 import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.LocalGlassAdaptiveLuminanceRange
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
 import com.kyant.shapes.Capsule
@@ -893,6 +894,7 @@ private fun AdaptiveGlassDemo(bottomPadding: Dp) {
         val verticalTravel = with(density) { (maxHeight - height).toPx().coerceAtLeast(0f) }
         CompositionLocalProvider(
             LocalGlassAppearance provides LocalGlassAppearance.current.copy(adaptiveColorScheme = true),
+            LocalGlassAdaptiveLuminanceRange provides (0.2f..0.5f),
         ) {
         GlassSurface(
             modifier = Modifier

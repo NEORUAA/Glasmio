@@ -18,6 +18,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.RenderEffect
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -42,7 +43,8 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
     /** Only a library-owned draw node can opt into fully configured consumer snapshots. */
     internal open val supportsNativeControlLensConsumerSharing: Boolean get() = false
     internal open val supportsNativeControlLensPlaneStages: Boolean get() = false
-    internal open val supportsNativeGlassHardwareLinearSampling: Boolean get() = false
+    // Keep this getter unmangled for renderer subclasses in consuming modules.
+    open val supportsNativeGlassHardwareLinearSampling: Boolean get() = false
 
     override var density: Float = 1f
     override var fontScale: Float = 1f
@@ -56,6 +58,7 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
     internal var materializedInputEffects: List<RenderEffect> = emptyList()
     internal var materializedMipAtlas: NativeGlassMipAtlas? = null
     internal var colorManagedNativeGlass: Boolean = false
+    internal var nativeGlassHardwareRendering: Boolean = false
     internal var nativeGlassHeadroom: Float = 1f
     /** Final material pixels use the device raster, independently of the sampled atlas. */
     internal var materialOutputSize: IntSize? = null
@@ -92,8 +95,9 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
         val newFullSize = scope.size
         val newSize = Size(newFullSize.width * newScale, newFullSize.height * newScale)
         val newLayoutDirection = scope.layoutDirection
+        val hardware = scope.drawContext.canvas.nativeCanvas.isHardwareAccelerated
 
-        val changed = newDensity != density ||
+        val changed = hardware != nativeGlassHardwareRendering || newDensity != density ||
                 newFontScale != fontScale ||
                 newSize != size ||
                 newFullSize != fullSize ||
@@ -102,6 +106,7 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
                 newLayoutDirection != layoutDirection
 
         if (changed) {
+            nativeGlassHardwareRendering = hardware
             density = newDensity
             fontScale = newFontScale
             size = newSize
@@ -146,6 +151,7 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
         auxiliaryBackdrop = null
         resources.clear()
         colorManagedNativeGlass = false
+        nativeGlassHardwareRendering = false
         nativeGlassHeadroom = 1f
         runtimeShaderCache.clear()
     }

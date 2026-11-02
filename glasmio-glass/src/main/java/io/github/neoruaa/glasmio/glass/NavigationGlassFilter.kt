@@ -30,11 +30,17 @@ internal class NativeGlassFilterField(
 
 internal fun nativeGlassCompletionFieldFunctions(functions: String): String {
     var result = functions
-    if (!functions.contains("navigationGlassShapeField(")) result += """
+    val hasShapeField = functions.contains("navigationGlassShapeField(")
+    if (!hasShapeField) result += """
 float3 navigationGlassShapeField(float2 point) { return navigationGlassField(point); }
 """
     if (!functions.contains("navigationGlassShadowDistance(")) result += """
 float navigationGlassShadowDistance(float2 point) { return navigationGlassField(point).x; }
+"""
+    if (!functions.contains("navigationGlassOpticalFieldFromShape(")) result += """
+float3 navigationGlassOpticalFieldFromShape(float2 point, float3 rawShapeField) {
+    return ${if (hasShapeField) "navigationGlassField(point)" else "rawShapeField"};
+}
 """
     return result
 }
@@ -195,7 +201,8 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
         functions, atlas.colorManaged, atlas.nativeGammaStorage, completionTopology, atlas.samplingLayoutKey,
     )) {
         (if (completion != null) nativeGlassCompletionFieldFunctions(functions) else functions) +
-            (if (completion != null && !functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") +
+            (if (completionTopology?.hasSourceShadow == true &&
+                !functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") +
             atlas.samplingFunctions + NativeAtlasMaterialFunctions + if (completion == null) NativeAtlasMaterialMain
         else (if (!atlas.colorManaged) GlassColorSpaceShaderFunctions else "") +
             nativeGlassCompletionShader(requireNotNull(completionTopology))
@@ -234,6 +241,7 @@ internal fun nativeNavigationGlassLod(radius: Float): Float {
 
 internal const val NativeDefaultFieldShader = GlassSdfShader + """
 float3 navigationGlassField(float2 point) { return glassField(point, 0.0); }
+float3 navigationGlassOpticalFieldFromShape(float2 point, float3 rawShapeField) { return rawShapeField; }
 """
 
 private const val NativeRayShader = NativeGlassMipSamplingFunctions + NativeGlassRefractionFunctions + """

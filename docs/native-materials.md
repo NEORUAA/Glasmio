@@ -135,6 +135,14 @@ The mip producer uses progressively smaller intermediate textures with an offscr
 
 Glasmio uses code-derived default hysteresis ranges: `[0.2, 0.5]` in a light environment and `[0.6, 0.9]` in a dark environment. The environment selects the range; the material's resolved scheme supplies the retained state. These thresholds were recovered from native code, not physically verified as active UIKit thresholds. Public regular UIKit and SwiftUI probes, including inherited appearance, kept `tracksLuma = false` and followed their effective traits. No public invocation enabling UIKit's optional adaptive-scheme gate was established by those probes.
 
+`LocalGlassAdaptiveLuminanceRange` optionally supplies local bounds for both host appearances. Its default `null` retains the native ranges; non-finite, reversed or out-of-range bounds are ignored. The Adaptive Glass demo uses this override:
+
+```kotlin
+CompositionLocalProvider(LocalGlassAdaptiveLuminanceRange provides (0.2f..0.5f)) {
+    GlassSurface { /* content */ }
+}
+```
+
 A separate iPhone 13 mini probe enabled raw `CABackdropLayer` luminance tracking: sRGB gray values `0.25`, `0.5`, and `0.75` returned those same luminance values, rather than their linear-light equivalents. Glasmio retains the alpha-weighted, gamma-encoded Rec.709 sample and the recovered regular-material ranges. Native HDR normalization corrects the sampled surface's encoding scale; physical display headroom must not divide an already unscaled SDR sample. The native `[0.5, 0.5]` range belongs to an explicit override or selected clear-material roles, rather than the ordinary adaptive regular default.
 
 The native adaptive transaction uses the modern `Animation.default`: a fluid spring with response `0.5`, damping fraction `1`, blend duration `0`, and delay `0` (unit-mass stiffness `157.91367`). Glasmio applies that retargetable presentation to independently resolved light/dark material contributions and semantic foregrounds. The native transaction's `1/30` animation-frame interval is not an animation duration. The Android snapshot budget is an independent implementation choice. Private Core Animation filter internals and emitted HDR brightness are not established by this adaptation.

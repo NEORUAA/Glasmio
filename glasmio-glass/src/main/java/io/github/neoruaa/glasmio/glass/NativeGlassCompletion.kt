@@ -43,10 +43,13 @@ internal data class NativeGlassCompletionTopology(
     val hasTargetAppearance: Boolean,
     val hasSourceAppearance: Boolean,
     val hasSourceShadow: Boolean = true,
+    val hasTargetFills: Boolean = true,
+    val hasSourceFills: Boolean = true,
 ) {
     val cacheKey: Int
         get() = (if (hasSourceRecipe) 4 else 0) or (if (hasTargetAppearance) 2 else 0) or
-            (if (hasSourceAppearance) 1 else 0) or (if (hasSourceShadow) 8 else 0)
+            (if (hasSourceAppearance) 1 else 0) or (if (hasSourceShadow) 8 else 0) or
+            (if (hasTargetFills) 16 else 0) or (if (hasSourceFills) 32 else 0)
 }
 
 internal fun NativeGlassCompletion.programTopology(): NativeGlassCompletionTopology =
@@ -55,6 +58,8 @@ internal fun NativeGlassCompletion.programTopology(): NativeGlassCompletionTopol
         hasTargetAppearance = recipe.appearanceAlternate != null,
         hasSourceAppearance = sourceRecipe?.appearanceAlternate != null,
         hasSourceShadow = sourceShadow != null,
+        hasTargetFills = recipe.hasFillLayers(),
+        hasSourceFills = sourceRecipe?.hasFillLayers() == true,
     )
 
 internal data class NativeGlassSourceShadow(
@@ -143,8 +148,7 @@ internal fun navigationGlassKeyThreshold(darkFraction: Float, clear: Float, head
  * AIR glass_background_all_lpf coverage, stroke_mode, ring and backdrop-relative completion.
  * Geometry is evaluated on the final device raster; only texture addresses use capture scale.
  */
-private val NativeGlassCompletionShaderPrefix = NavigationMaterialNativeShaderFunctions +
-    NavigationMaterialSourceShaderFunctions + NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
+private val NativeGlassCompletionShaderPrefix = NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
     NativeVibrantColorMatrixFunctions + """
 uniform float2 nativeOutputOrigin;
 uniform float2 nativeOutputSize;
@@ -179,15 +183,15 @@ float nativeCompletionTintMask(float3 field) {
     // Native ramp stops [-1,0,10] keep their first two white stops. Only the exterior
     // [0,10] interval uses the captured cubic Bezier easing before the DestIn fill.
     float x = clamp(field.x / (10.0 * nativeOutputDensity), 0.0, 1.0);
-    float lo = 0.0;
-    float hi = 1.0;
-    for (int i = 0; i < 12; i++) {
-        float t = (lo + hi) * .5;
+    float t = x;
+    // The captured x curve has derivative >= .6429 throughout [0,1].
+    for (int i = 0; i < 4; i++) {
         float s = 1.0 - t;
         float q = 3.0 * s * s * t * .60938 + 3.0 * s * t * t * .47124 + t * t * t;
-        if (q < x) lo = t; else hi = t;
+        float derivative = 3.0 * s * s * .60938 + 6.0 * s * t * (.47124 - .60938)
+            + 3.0 * t * t * (1.0 - .47124);
+        t = clamp(t - (q - x) / derivative, 0.0, 1.0);
     }
-    float t = (lo + hi) * .5;
     float s = 1.0 - t;
     float eased = 3.0 * s * s * t * .00663 + 3.0 * s * t * t * .99115 + t * t * t;
     return mask * (1.0 - eased);
@@ -223,7 +227,8 @@ half4 main(float2 coordinate) {
         coordinate.x >= nativeOutputSize.x + nativeOutputOrigin.x * 2.0 ||
         coordinate.y >= nativeOutputSize.y + nativeOutputOrigin.y * 2.0) return half4(0.0);
     float2 p = coordinate - nativeOutputOrigin;
-    float3 field = nativeCompletionField(p);
+    float3 rawShapeField = navigationGlassShapeField(p * nativeOutputScale);
+    float3 field = float3(rawShapeField.x / nativeOutputScale, rawShapeField.yz);
     float coverage = nativeGlassShapeCoverage(field, 1.0);
     float key = nativeGlassStrokeKeyFill(field, nativeOutputDensity, 1.0, nativeKeyThreshold) * nativeEdgeAlpha;
     float shifted = nativeCompletionField(p - float2(0.0, 8.0 * nativeOutputDensity)).x;
@@ -247,7 +252,7 @@ private const val NativeGlassCompletionShaderBodySuffix = """
     float4 originalRaw = nativeAtlasBilinear(samplePoint, 0);
     float3 original = nativeAtlasFlush(originalRaw.rgb / max(originalRaw.a, .000001));
     float4 filtered = coverage > 0.0 ? nativeAtlasFiltered(samplePoint,
-        navigationGlassField(p * nativeOutputScale)) : float4(original, 1.0);
+        navigationGlassOpticalFieldFromShape(p * nativeOutputScale, rawShapeField)) : float4(original, 1.0);
     float4 shadowResult = float4(original * (1.0 - nativeShadow.w) * shadow, shadow);
     if (originalRaw.a < 1.0) {
         // A caller may deliberately provide no captured backdrop (emptyBackdrop). Keep
@@ -285,10 +290,13 @@ internal fun nativeGlassCompletionShader(topology: NativeGlassCompletionTopology
         "float4(0.0) + destination * (1.0 - source_materialOpacity)"
     }
     val targetAlternate = if (topology.hasTargetAppearance) "alternate" else "false"
-    return NativeGlassCompletionShaderPrefix + """
+    return navigationMaterialNativeShaderFunctions(topology.hasTargetFills) +
+        navigationMaterialSourceShaderFunctions(topology.hasSourceFills) + NativeGlassCompletionShaderPrefix + """
 float4 nativeCompletionFaceForAppearance(float4 sampled, bool targetAlternate, bool sourceAlternate) {
-    float4 result = mix(sampled, $sourceFace, source_materialOpacity);
-    return mix(result, $targetFace, materialOpacity);
+    float4 result = sampled;
+    if (source_materialOpacity > 0.0) result = mix(sampled, $sourceFace, source_materialOpacity);
+    if (materialOpacity > 0.0) result = mix(result, $targetFace, materialOpacity);
+    return result;
 }
 float4 nativeCompletionTint(float4 destination, float3 original, float mask, float coverage, bool source, bool alternate) {
     return source ? $sourceTint

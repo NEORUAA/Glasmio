@@ -319,6 +319,7 @@ float3 navigationGlassShapeField(float2 point) {
     return float3(a.x * smallest, a.yz * smallest / unionScale);
 }
 float3 navigationGlassField(float2 point) { return navigationGlassShapeField(point); }
+float3 navigationGlassOpticalFieldFromShape(float2 point, float3 rawShapeField) { return rawShapeField; }
 """
 
 private const val NavigationNativeMultipleUnionShader = NativeGlassSdfFunctions + """
@@ -346,4 +347,5 @@ float3 navigationGlassShapeField(float2 point) {
     return float3(a.x * smallest, a.yz * smallest / unionScale);
 }
 float3 navigationGlassField(float2 point) { return navigationGlassShapeField(point); }
+float3 navigationGlassOpticalFieldFromShape(float2 point, float3 rawShapeField) { return rawShapeField; }
 """

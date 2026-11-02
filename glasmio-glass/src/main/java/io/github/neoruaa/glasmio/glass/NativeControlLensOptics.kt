@@ -104,3 +104,42 @@ float4 nativeControlForeground(float2 p, float4 field, float4 matrix,
         aberration, aberrationDirection, edge, colorGain, 1.0);
 }
 """
+
+
+/** Active scalar-radius Tab fields use a private SDR data plane, never a color sampler. */
+internal const val NativeControlLensFieldUniforms = """
+uniform float2 size;
+uniform float4 cornerRadii;
+uniform float2 lensFieldOrigin;
+uniform float2 lensFieldRectOrigin;
+uniform float lensFieldRange;
+"""
+
+// The atlas sampler fragment declares content before these functions are appended.
+internal const val NativeControlLensFieldSamplingFunctions = """
+float3 glassField(float2 p, float normalMix) {
+    float4 encoded = float4(content.eval(lensFieldRectOrigin + (p - lensFieldOrigin)));
+    float distance = (encoded.r * 65280.0 + encoded.g * 255.0) / 65535.0
+        * (2.0 * lensFieldRange) - lensFieldRange;
+    float2 positive = float2(encoded.b, 1.0 - encoded.b);
+    positive /= max(length(positive), .000001);
+    float2 signs = float2(p.x < size.x * .5 ? -1.0 : 1.0, p.y < size.y * .5 ? -1.0 : 1.0);
+    return float3(distance, positive * signs);
+}
+float glassDistance(float2 p) { return glassField(p, 0.0).x; }
+float2 glassNormal(float2 p) { return glassField(p, 0.0).yz; }
+float2 glassDepthNormal(float2 p, float normalMix) { return glassField(p, normalMix).yz; }
+"""
+
+internal const val NativeControlLensFieldProducerMain = """
+uniform float2 fieldOrigin;
+uniform float fieldRange;
+half4 main(float2 coordinate) {
+    float3 field = glassField(coordinate + fieldOrigin, 0.0);
+    float code = floor((field.x / fieldRange * .5 + .5) * 65535.0 + .5);
+    float high = floor(code / 256.0);
+    float low = code - high * 256.0;
+    float ratio = abs(field.y) / max(abs(field.y) + abs(field.z), .000001);
+    return half4(high / 255.0, low / 255.0, ratio, 1.0);
+}
+"""

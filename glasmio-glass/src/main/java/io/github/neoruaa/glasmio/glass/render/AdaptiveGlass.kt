@@ -22,6 +22,18 @@ import io.github.neoruaa.glasmio.glass.adaptiveGlassContentColors
 internal val LocalBackdropLuminance = staticCompositionLocalOf<BackdropLuminance?> { null }
 private val LocalGlassMaterialContext = compositionLocalOf<GlassMaterialContext?> { null }
 
+/** Optional local hysteresis bounds shared by light and dark host appearances. */
+val LocalGlassAdaptiveLuminanceRange = compositionLocalOf<ClosedFloatingPointRange<Float>?> { null }
+
+private fun validAdaptiveLuminanceRange(
+    range: ClosedFloatingPointRange<Float>?,
+): ClosedFloatingPointRange<Float>? {
+    val lower = range?.start ?: return null
+    val upper = range.endInclusive
+    return if (lower.isFinite() && upper.isFinite() && lower >= 0f && upper <= 1f && lower <= upper)
+        lower..upper else null
+}
+
 /** One surface's appearance and foreground share the same retained local luminance sample. */
 @Stable
 class GlassMaterialContext internal constructor(
@@ -36,6 +48,7 @@ class GlassMaterialContext internal constructor(
     private val ownsLuminance: Boolean,
     /** Presentation weight: zero is the light recipe and one is the dark recipe. */
     val darkFraction: Float = if (isDark) 1f else 0f,
+    internal val luminanceRange: ClosedFloatingPointRange<Float>? = null,
 ) {
     /** Custom renderers sample their raw backing here; an inherited surface has one writer. */
     val luminanceState: BackdropLuminance? get() = probe.takeIf { adaptive && ownsLuminance }
@@ -87,10 +100,13 @@ internal fun rememberResolvedGlassMaterialContext(
     sampleBackdrop: Boolean,
 ): GlassMaterialContext {
     val adaptive = appearance.adaptiveColorScheme && appearance.usesBackdrop && sampleBackdrop
+    val luminanceRange = validAdaptiveLuminanceRange(LocalGlassAdaptiveLuminanceRange.current)
     val parent = LocalGlassMaterialContext.current
     val environmentColors = if (parent != null && colors == parent.colors) parent.environmentColors else colors
-    val sharedPresentation = parent?.takeIf { adaptive && it.adaptive && it.probe === probe }
-    val dark = sharedPresentation?.isDark ?: rememberAdaptiveGlassDark(probe, environmentDark, adaptive)
+    val sharedPresentation = parent?.takeIf {
+        adaptive && it.adaptive && it.probe === probe && it.luminanceRange == luminanceRange
+    }
+    val dark = sharedPresentation?.isDark ?: rememberAdaptiveGlassDark(probe, environmentDark, adaptive, luminanceRange)
     val darkFraction = if (!adaptive) {
         if (environmentDark) 1f else 0f
     } else if (sharedPresentation != null) sharedPresentation.darkFraction else {
@@ -103,10 +119,10 @@ internal fun rememberResolvedGlassMaterialContext(
         )
         fraction
     }
-    return remember(environmentColors, environmentDark, probe, ownsLuminance, adaptive, dark, darkFraction) {
+    return remember(environmentColors, environmentDark, probe, ownsLuminance, adaptive, dark, darkFraction, luminanceRange) {
         GlassMaterialContext(environmentDark, dark,
             adaptiveGlassContentColors(environmentColors, dark, adaptive, darkFraction),
-            environmentColors, probe, adaptive, ownsLuminance, darkFraction)
+            environmentColors, probe, adaptive, ownsLuminance, darkFraction, luminanceRange)
     }
 }
 
@@ -129,14 +145,20 @@ fun ProvideGlassMaterialContext(context: GlassMaterialContext, content: @Composa
 internal class GlassLuminanceHysteresis(initialEnvironmentDark: Boolean) {
     private var resolvedDark = initialEnvironmentDark
 
-    fun resolve(luminance: Float?, environmentDark: Boolean, enabled: Boolean = true): Boolean {
+    fun resolve(
+        luminance: Float?,
+        environmentDark: Boolean,
+        enabled: Boolean = true,
+        range: ClosedFloatingPointRange<Float>? = null,
+    ): Boolean {
         if (!enabled) {
             resolvedDark = environmentDark
             return environmentDark
         }
         if (luminance == null || !luminance.isFinite()) return resolvedDark
-        val lower = if (environmentDark) .6f else .2f
-        val upper = if (environmentDark) .9f else .5f
+        val custom = validAdaptiveLuminanceRange(range)
+        val lower = custom?.start ?: if (environmentDark) .6f else .2f
+        val upper = custom?.endInclusive ?: if (environmentDark) .9f else .5f
         if (luminance < lower) resolvedDark = true
         else if (luminance > upper) resolvedDark = false
         return resolvedDark
@@ -148,7 +170,8 @@ internal fun rememberAdaptiveGlassDark(
     luminance: BackdropLuminance,
     environmentDark: Boolean,
     enabled: Boolean,
+    range: ClosedFloatingPointRange<Float>? = null,
 ): Boolean {
     val hysteresis = remember { GlassLuminanceHysteresis(environmentDark) }
-    return hysteresis.resolve(luminance.value, environmentDark, enabled)
+    return hysteresis.resolve(luminance.value, environmentDark, enabled, range)
 }

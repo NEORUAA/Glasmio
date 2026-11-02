@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.GraphicsLayerScope
+import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Path
@@ -37,6 +38,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
+import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.GlobalPositionAwareModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
@@ -64,9 +66,11 @@ import io.github.neoruaa.glasmio.glass.render.shadow.Shadow
 import io.github.neoruaa.glasmio.glass.render.shadow.ShadowElement
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.ceil
 
 private val DefaultHighlight = { Highlight.Default }
@@ -360,6 +364,17 @@ private class DrawBackdropNode(
     private var luminanceLogicalSize = Size.Zero
     private var luminanceLogicalDensity: Density = Density(1f)
     private var luminanceLayoutDirection = LayoutDirection.Ltr
+    private var luminanceSampleRegion: Rect? = null
+    private var luminanceSampleDensity = Float.NaN
+    private var luminanceSampleFontScale = Float.NaN
+    private var luminanceSampleDirection = LayoutDirection.Ltr
+    private val luminanceSourceToConsumer = Matrix()
+    private val luminanceScreenToConsumer = Matrix()
+    private var luminanceSampleTransform: FloatArray? = null
+    private var luminanceSampleSourceAlpha = Float.NaN
+    private var luminanceSampleSourceEffect: Any? = null
+    private var luminanceSampleSourceColorFilter: Any? = null
+    private var luminanceSampleSourceBlendMode: Any? = null
     private val onBackdropSourceChanged: () -> Unit = {
         if (isAttached && luminanceState != null) {
             luminanceRevision++
@@ -594,6 +609,7 @@ private class DrawBackdropNode(
                 luminanceLogicalDensity = Density(density, fontScale)
             }
             luminanceLayoutDirection = layoutDirection
+            updateLuminanceRegion()
         }
         if (luminanceOnly) {
             recordStandaloneLuminanceProbe()
@@ -674,7 +690,9 @@ private class DrawBackdropNode(
         luminanceJob?.cancel()
         luminanceJob = null
         luminanceCapturing = false
+        luminancePixels = null
         lastLuminanceStartNanos = 0L
+        luminanceSampleRegion = null
         backdrop = value
         observeBackdropSource()
         onBackdropSourceChanged()
@@ -692,13 +710,87 @@ private class DrawBackdropNode(
         luminanceJob?.cancel()
         luminanceJob = null
         luminanceCapturing = false
+        luminancePixels = null
         luminanceState = state
         luminanceSourceDirty = false
         luminanceRevision = 0L
         luminanceProbeRevision = 0L
         lastLuminanceStartNanos = 0L
+        luminanceSampleRegion = null
         observeBackdropSource()
         if (state == null && isAttached) releaseLuminanceLayers()
+    }
+
+    /** Material-only redraws do not change a recorded backdrop's raw sample. */
+    private fun updateLuminanceRegion() {
+        val region = if (luminanceOnly) sampleBounds?.invoke() ?: Rect(Offset.Zero, luminanceLogicalSize)
+            else Rect(Offset.Zero, luminanceLogicalSize)
+        // Custom sources can read arbitrary draw state without source notifications.
+        // Their existing draw-driven sampling remains necessary.
+        val coordinates = layoutCoordinates?.takeIf { it.isAttached }
+        val source = backdrop as? LayerBackdrop
+        val sourceCoordinates = source?.layerCoordinates?.takeIf { it.isAttached }
+        val observedSource = sourceCoordinates != null && coordinates != null
+        var changed = !observedSource || region != luminanceSampleRegion ||
+            luminanceLogicalDensity.density != luminanceSampleDensity ||
+            luminanceLogicalDensity.fontScale != luminanceSampleFontScale ||
+            luminanceLayoutDirection != luminanceSampleDirection
+        if (observedSource) {
+            try {
+                val consumer = requireNotNull(coordinates)
+                val recorded = requireNotNull(sourceCoordinates)
+                luminanceSourceToConsumer.reset()
+                if (recorded.findRootCoordinates() === consumer.findRootCoordinates()) {
+                    consumer.transformFrom(recorded, luminanceSourceToConsumer)
+                } else {
+                    recorded.transformToScreen(luminanceSourceToConsumer)
+                    luminanceScreenToConsumer.reset()
+                    consumer.transformToScreen(luminanceScreenToConsumer)
+                    luminanceScreenToConsumer.invert()
+                    luminanceSourceToConsumer *= luminanceScreenToConsumer
+                }
+                val layer = requireNotNull(source).graphicsLayer
+                // Public layer transforms, clipping and shadows can change without
+                // recording its display list. Keep those sources draw-driven.
+                if (layer.clip || layer.shadowElevation != 0f || layer.topLeft != IntOffset.Zero ||
+                    layer.scaleX != 1f || layer.scaleY != 1f ||
+                    layer.translationX != 0f || layer.translationY != 0f ||
+                    layer.rotationX != 0f || layer.rotationY != 0f || layer.rotationZ != 0f ||
+                    layer.compositingStrategy != androidx.compose.ui.graphics.layer.CompositingStrategy.Auto) changed = true
+                if (layer.alpha != luminanceSampleSourceAlpha ||
+                    layer.renderEffect !== luminanceSampleSourceEffect ||
+                    layer.colorFilter !== luminanceSampleSourceColorFilter ||
+                    layer.blendMode != luminanceSampleSourceBlendMode) changed = true
+                luminanceSampleSourceAlpha = layer.alpha
+                luminanceSampleSourceEffect = layer.renderEffect
+                luminanceSampleSourceColorFilter = layer.colorFilter
+                luminanceSampleSourceBlendMode = layer.blendMode
+                val values = luminanceSourceToConsumer.values
+                val previous = luminanceSampleTransform
+                if (values.any { !it.isFinite() }) {
+                    luminanceSampleTransform = null
+                    changed = true
+                }
+                else if (previous == null) {
+                    luminanceSampleTransform = values.copyOf()
+                    changed = true
+                } else if (!previous.contentEquals(values)) {
+                    values.copyInto(previous)
+                    changed = true
+                }
+            } catch (_: Exception) {
+                luminanceSampleTransform = null
+                changed = true
+            }
+        } else luminanceSampleTransform = null
+        luminanceSampleRegion = region
+        luminanceSampleDensity = luminanceLogicalDensity.density
+        luminanceSampleFontScale = luminanceLogicalDensity.fontScale
+        luminanceSampleDirection = luminanceLayoutDirection
+        if (changed) {
+            luminanceRevision++
+            luminanceSourceDirty = true
+        }
     }
 
     private fun DrawScope.recordLuminanceProbe(source: GraphicsLayer) {
@@ -706,7 +798,7 @@ private class DrawBackdropNode(
         val width = effectScope.size.width
         val height = effectScope.size.height
         if (!width.isFinite() || !height.isFinite() || width <= 0f || height <= 0f) return
-        luminanceRevision++
+        if (!luminanceSourceDirty && luminanceProbeRevision == luminanceRevision && luminanceProbeLayer != null) return
         if (luminanceCapturing) return
 
         val probe = luminanceProbeLayer ?: requireGraphicsContext().createGraphicsLayer().also {
@@ -725,7 +817,7 @@ private class DrawBackdropNode(
 
     private fun DrawScope.recordStandaloneLuminanceProbe() {
         val state = luminanceState ?: return
-        luminanceRevision++
+        if (!luminanceSourceDirty && luminanceProbeRevision == luminanceRevision && luminanceProbeLayer != null) return
         if (luminanceCapturing) return
         val probe = luminanceProbeLayer ?: requireGraphicsContext().createGraphicsLayer().also {
             luminanceProbeLayer = it
@@ -788,7 +880,10 @@ private class DrawBackdropNode(
                 val image = probe.toImageBitmap()
                 if (!isAttached || generation != luminanceGeneration || luminanceState !== state) return@launch
                 val pixels = luminancePixels ?: IntArray(16 * 16).also { luminancePixels = it }
-                image.readPixels(pixels)
+                // A hardware bitmap read waits for RenderThread/GPU completion. Keep that
+                // wait off the UI dispatcher; recording the GraphicsLayer stays on UI.
+                withContext(Dispatchers.Default) { image.readPixels(pixels) }
+                if (!isAttached || generation != luminanceGeneration || luminanceState !== state) return@launch
                 var weightedLuminance = 0f
                 var totalAlpha = 0f
                 for (pixel in pixels) {
@@ -828,6 +923,12 @@ private class DrawBackdropNode(
         luminanceSourceLayer = null
         luminanceProbeLayer = null
         luminancePixels = null
+        luminanceSampleRegion = null
+        luminanceSampleTransform = null
+        luminanceSampleSourceAlpha = Float.NaN
+        luminanceSampleSourceEffect = null
+        luminanceSampleSourceColorFilter = null
+        luminanceSampleSourceBlendMode = null
     }
 
     override fun onGloballyPositioned(coordinates: LayoutCoordinates) {

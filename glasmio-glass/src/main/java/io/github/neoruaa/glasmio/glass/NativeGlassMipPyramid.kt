@@ -99,6 +99,10 @@ internal class NativeGlassMipAtlas(
     val controlBlurPlane: IntRect? = null,
     /** A separately materialized optical scene; packing happens only at the consumer. */
     val controlScenePlane: IntRect? = null,
+    /** SDR geometry data is packed independently for the scene and final consumer. */
+    val controlFieldPlane: NativeControlLensFieldPlane? = null,
+    /** Owned SDR Tab Gaussian H reads its raw input without an extracted quarter texture. */
+    val controlUnwarpedBlurSource: Boolean = false,
     /** Internal native-gamma channel transport; only the sampler may display these values. */
     val nativeGammaStorage: Boolean = false,
     /** Only the owned regular pyramid uses an analytically addressed row or column strip. */
@@ -111,7 +115,7 @@ internal class NativeGlassMipAtlas(
         controlSceneEffect?.asComposeRenderEffect()
     }
     internal val hasControlPlanes: Boolean
-        get() = controlBlurPlane != null || controlScenePlane != null
+        get() = controlBlurPlane != null || controlScenePlane != null || controlFieldPlane != null
     private val immediateEffect = producerEffect
     private val immediateStages = producerStages
     private val compatibility by lazy(LazyThreadSafetyMode.NONE) { compatibilityProducer?.invoke() }
@@ -212,6 +216,37 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
     private var controlOutput: GraphicsLayer? = null
     private var controlSource: GraphicsLayer? = null
     private var sceneInput: GraphicsLayer? = null
+    private var fieldLayer: GraphicsLayer? = null
+    private var recordedFieldKey: NativeControlLensFieldKey? = null
+    private var recordedFieldProducer: RuntimeShader? = null
+    private val fieldPaint = android.graphics.Paint()
+
+    private fun recordControlField(
+        plane: NativeControlLensFieldPlane?,
+        record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
+    ) {
+        if (plane == null) {
+            fieldLayer?.let(context::releaseGraphicsLayer)
+            fieldLayer = null
+            recordedFieldKey = null
+            recordedFieldProducer = null
+            fieldPaint.shader = null
+            return
+        }
+        val layer = fieldLayer ?: context.createGraphicsLayer().also { fieldLayer = it }
+        layer.clip = true
+        layer.compositingStrategy = CompositingStrategy.Offscreen
+        layer.renderEffect = null
+        if (recordedFieldKey != plane.key || recordedFieldProducer !== plane.producer) {
+            fieldPaint.shader = plane.producer
+            record(layer, plane.size) {
+                drawContext.canvas.nativeCanvas.drawRect(0f, 0f,
+                    plane.size.width.toFloat(), plane.size.height.toFloat(), fieldPaint)
+            }
+            recordedFieldKey = plane.key
+            recordedFieldProducer = plane.producer
+        }
+    }
 
     /** Capture, optional blur and optical scene have independent GPU owners and extents. */
     fun recordControlPlanes(
@@ -219,6 +254,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
     ) {
+        recordControlField(atlas.controlFieldPlane, record)
         if (atlas.controlScenePlane == null) {
             recordControlBlur(atlas, record, sourceBlock)
             return
@@ -246,7 +282,10 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         input.renderEffect = requireNotNull(atlas.composeControlSceneEffect)
         // HWUI's image-filter input subset is the logical RenderNode size. Keep every
         // input plane available; clip only its output when packing the consumer input.
-        record(input, supportSize) { drawControlInputs(this, atlas) }
+        val fieldRect = atlas.controlFieldPlane?.sceneRect
+        val inputSize = IntSize(maxOf(supportSize.width, fieldRect?.right ?: 0),
+            maxOf(supportSize.height, fieldRect?.bottom ?: 0))
+        record(input, inputSize) { drawControlInputs(this, atlas, sceneInput = true) }
         recordedControl = atlas
     }
 
@@ -265,13 +304,21 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         }
     }
 
-    private fun drawControlInputs(scope: DrawScope, atlas: NativeGlassMipAtlas) = with(scope) {
+    private fun drawControlInputs(scope: DrawScope, atlas: NativeGlassMipAtlas, sceneInput: Boolean = false) = with(scope) {
         if (atlas.controlBlurPlane != null) drawControlBlurPlanes(this, atlas)
         else {
             val captureBottom = if (atlas.composeProducerStages.singleOrNull() != null)
                 atlas.rects[2].bottom else atlas.rects[1].bottom
             clipRect(0f, 0f, atlas.baseSize.width.toFloat(), captureBottom.toFloat()) {
                 drawLayer(requireNotNull(controlSource))
+            }
+        }
+        atlas.controlFieldPlane?.let { plane ->
+            val rect = if (sceneInput) plane.sceneRect else plane.consumerRect
+            translate(rect.left.toFloat(), rect.top.toFloat()) {
+                clipRect(0f, 0f, rect.width.toFloat(), rect.height.toFloat()) {
+                    drawLayer(requireNotNull(fieldLayer))
+                }
             }
         }
     }
@@ -283,6 +330,10 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
     ) {
         recordedPyramid = null
         val plane = requireNotNull(atlas.controlBlurPlane)
+        if (atlas.controlUnwarpedBlurSource) {
+            recordControlUnwarpedBlur(atlas, record, sourceBlock)
+            return
+        }
         check(atlas.producerStages.size in 3..4)
         val stages = configureLayers(atlas.composeProducerStages)
         // Keep the original extract's raw and portal pixels. Its two Gaussian successors
@@ -317,8 +368,44 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         controlOutput = stages[2]
     }
 
+    /** Keep full raw support for H, while its shader and the V input bound the quarter output. */
+    private fun recordControlUnwarpedBlur(
+        atlas: NativeGlassMipAtlas,
+        record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
+        sourceBlock: DrawScope.() -> Unit,
+    ) {
+        check(!atlas.colorManaged && atlas.producerStages.size == 2)
+        val plane = requireNotNull(atlas.controlBlurPlane)
+        val stages = configureLayers(atlas.composeProducerStages)
+        val raw = controlSource ?: context.createGraphicsLayer().also { controlSource = it }
+        raw.clip = true
+        raw.compositingStrategy = CompositingStrategy.Offscreen
+        raw.renderEffect = null
+        val rawSize = IntSize(atlas.baseSize.width, atlas.baseSize.height * 2)
+        record(raw, rawSize, sourceBlock)
+        var environment: RecordingContext? = null
+        // RuntimeShader inputs are clipped to their owner's logical bounds. H therefore
+        // retains the complete raw plane; the shader writes only the quarter-sized result.
+        record(stages[0], atlas.baseSize) {
+            environment = recordingContext()
+            clipRect(0f, 0f, atlas.baseSize.width.toFloat(), atlas.baseSize.height.toFloat()) { drawLayer(raw) }
+        }
+        val planeSize = IntSize(plane.width, plane.height)
+        if (recordedControl !== atlas || controlInput !== stages[0] || controlOutput !== stages[1] ||
+            controlContext != environment || environment?.hardware != true) {
+            record(stages[1], planeSize) {
+                clipRect(0f, 0f, plane.width.toFloat(), plane.height.toFloat()) { drawLayer(stages[0]) }
+            }
+        }
+        recordedControl = atlas
+        controlContext = environment
+        controlInput = stages[0]
+        controlOutput = stages[1]
+    }
+
     fun drawControlBlurAtlas(scope: DrawScope, atlas: NativeGlassMipAtlas) = with(scope) {
-        check(retained.size == atlas.composeProducerStages.size && retained.size in 3..4)
+        check(retained.size == atlas.composeProducerStages.size &&
+            (if (atlas.controlUnwarpedBlurSource) retained.size == 2 else retained.size in 3..4))
         if (retained.size == 4) drawLayer(retained[3])
         else drawControlBlurPlanes(this, atlas)
     }
@@ -327,9 +414,11 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         val plane = requireNotNull(atlas.controlBlurPlane)
         // Compose into the existing consumer or scene input recording. No additional
         // packed offscreen layer or second source callback is introduced.
-        clipRect(0f, 0f, atlas.baseSize.width.toFloat(), plane.top.toFloat()) { drawLayer(retained[0]) }
+        val raw = if (atlas.controlUnwarpedBlurSource) requireNotNull(controlSource) else retained[0]
+        val blurred = if (atlas.controlUnwarpedBlurSource) retained[1] else retained[2]
+        clipRect(0f, 0f, atlas.baseSize.width.toFloat(), plane.top.toFloat()) { drawLayer(raw) }
         translate(plane.left.toFloat(), plane.top.toFloat()) {
-            clipRect(0f, 0f, plane.width.toFloat(), plane.height.toFloat()) { drawLayer(retained[2]) }
+            clipRect(0f, 0f, plane.width.toFloat(), plane.height.toFloat()) { drawLayer(blurred) }
         }
     }
 
@@ -373,7 +462,8 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         }
         val output = assembled ?: context.createGraphicsLayer().also { assembled = it }
         output.clip = true
-        output.compositingStrategy = CompositingStrategy.Offscreen
+        // The final filter materializes this packed input; packing alone needs no copy target.
+        output.compositingStrategy = CompositingStrategy.Auto
         output.renderEffect = null
         record(output, atlas.size) {
             drawLayer(original)
@@ -398,6 +488,11 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         assembled?.let(context::releaseGraphicsLayer)
         controlSource?.let(context::releaseGraphicsLayer)
         sceneInput?.let(context::releaseGraphicsLayer)
+        fieldLayer?.let(context::releaseGraphicsLayer)
+        fieldLayer = null
+        recordedFieldKey = null
+        recordedFieldProducer = null
+        fieldPaint.shader = null
         controlSource = null
         sceneInput = null
         base = null
@@ -544,14 +639,18 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
             NativeGlassMipProducer(effect, stages)
         }
         val textureStages = ArrayList<RenderEffect>()
+        // The owned texture input uses HWUI's linear sampler. Interpolate only stored
+        // channels with an identity decode; transparent-border kernels retain four taps.
+        val textureHardwareLinear = allowHardwareLinearSampling &&
+            (storeNativeGamma || !colorManaged) && !kernel.clampToZero
         val textureMode = "${kernel.outputGridOffsets}.${kernel.halfArithmetic}.${kernel.flushSmallRgb}.${kernel.clampToZero}"
-        val textureProgramKey = "$colorManaged.$storeNativeGamma.$textureMode"
+        val textureProgramKey = "$colorManaged.$storeNativeGamma.$textureMode.linear=$textureHardwareLinear"
         for (index in 1 until rects.size) {
             val input = rects[index - 1]
             val output = rects[index]
             val textureProgram = texturePrograms.getOrPut(textureProgramKey) {
                 (if (colorManaged && !storeNativeGamma) NativeAtlasManagedColorFunctions else NativeAtlasRawColorFunctions) +
-                    nativeMipTextureGridFunctions(kernel.clampToZero) +
+                    nativeMipTextureGridFunctions(kernel.clampToZero, textureHardwareLinear) +
                     nativeMipTextureKernelFunctions(kernel.halfArithmetic, kernel.flushSmallRgb) +
                     nativeMipTextureDownsampleMain(kernel.outputGridOffsets)
             }
@@ -864,7 +963,7 @@ private const val NativeMipAtlasManagedDownsampleShader = NativeAtlasManagedColo
     NativeMipKernelFunctions + NativeMipAtlasDownsampleMain
 
 /** Real-sized intermediate textures keep every recovered tap on its original discrete grid. */
-private fun nativeMipTextureGridFunctions(clampToZero: Boolean): String = """
+private fun nativeMipTextureGridFunctions(clampToZero: Boolean, hardwareLinear: Boolean): String = """
 uniform shader content;
 uniform float2 nativeMipBaseSize;
 uniform float2 nativeMipLevelSize;
@@ -881,12 +980,15 @@ float4 nativeMipBilinear(float2 coordinate) {
     float2 pixel = coordinate - .5;
 """ + (if (clampToZero) "" else """
     pixel = clamp(pixel, float2(0.0), nativeMipLevelSize - 1.0);
-""") + """
+""") + (if (hardwareLinear) """
+    return nativeAtlasDecode(float4(content.eval(pixel + .5)));
+""" else """
     float2 index = floor(pixel);
     float2 fraction = pixel - index;
     float4 upper = mix(nativeMipTexel(index), nativeMipTexel(index + float2(1.0, 0.0)), fraction.x);
     float4 lower = mix(nativeMipTexel(index + float2(0.0, 1.0)), nativeMipTexel(index + 1.0), fraction.x);
     return mix(upper, lower, fraction.y);
+""") + """
 }
 """
 private fun nativeMipTextureDownsampleMain(outputGridOffsets: Boolean): String = """

@@ -1,6 +1,6 @@
 # Interaction performance invariants
 
-Performance changes must preserve the existing motion, live layout, contour tolerances and optical sampling. Do not substitute a scaled fixed-height layer for the sheet's live-height content or skip field updates when geometry changes.
+Performance changes must preserve the perceived motion, live layout, glass depth, refraction, dispersion and highlights. Texture interpolation and intermediate precision may change when the resulting appearance remains intact; pixel identity is not a performance requirement. Do not substitute a scaled fixed-height layer for the sheet's live-height content or skip field updates when geometry changes.
 
 ## Shader source lifetime
 
@@ -12,15 +12,22 @@ Control sources depend on their resting/small/tab/precomposed/color variants and
 
 Atlas sampling sources are initialized only for the selected layout, lookup capacity, sampler and color mode. Keep the fixed variant set and preserve the complete generated source.
 
-Active Tab scene and consumer programs share their source across the held endpoint. At zero rest, the background transfer returns the original zero-body composition before reading the omitted blur plane. Keep blur production, source uniforms and the resting program unchanged.
+Active Tab scene and consumer programs share their source across the held endpoint. At zero rest, the background transfer returns the original zero-body composition before reading the omitted blur plane. Keep the blur kernel, source uniforms and resting optical endpoint unchanged.
 
 Control scene composition passes the same-coordinate field, raw source and below-glass result through the background and portal stages. Displaced points evaluate their own field and source. Keep raw source and below-glass color distinct: background completion consumes the latter, while relative output uses the former. These are float values within one program, with no new storage or color conversion.
 
-Active built-in Tab scene and consumer passes use the same complete program. `lensScenePass` selects their original coordinate mapping and output; the pointwise scene calculation is shared in the program body. The scene still writes its encoded image before foreground sampling, and the consumer still reconstructs its unquantized scene values. Both passes keep separate shader instances and frozen RenderEffect snapshots. Every configuration must set the stage uniform, and the source-cache key must include the shared-stage capability because a modifier can change its backdrop or layer callback without replacing its scope.
+Active built-in Tab consumers sample the already materialized scene instead of reconstructing its below-glass, background and portal colors. The scene producer retains those optical operations. The consumer retains seven spectral samples, relative output and highlights; a geometry-only background alpha preserves the ring and shadow around opaque captures, while transparent captures retain alpha recovery from the composed scene. This intentionally accepts the existing scene texture's precision and interpolation. The source-cache key includes the sampled-scene capability because a modifier can change its backdrop or layer callback without replacing its scope.
+
+Owned SDR active Tabs materialize the original continuous distance and normal field once per geometry into a private data plane. Scene and final consumers sample that plane without repeating the analytic field. Eligibility requires a hardware recording, scalar equal corners, unit sampling scale and the known Capsule or continuous shape. Its support includes displaced portal, spectral and highlight queries; unsupported geometry retains the analytic route. Treat field RGB as data, independently of the scene color codec. See the [field transport probes](../.local-research/performance/first-use-20261102/gpu-field-plane-candidate/probes/avd-result.json).
+
+Tab and segmented-control extraction sources omit the unreachable SmallVariant warp before compilation. The switch and slider retain their warp and mask. Owned SDR extraction uses one clamped hardware-linear lookup; managed extraction retains decode-before-interpolate sampling.
+
+Owned SDR Tabs fuse their unwarped quarter-grid extraction into Gaussian H. Capture raw and portal rectangles once, retain the complete raw logical input for H, then use the quarter-sized H output as V input. Each H tap first clamps on the old quarter grid, maps to the raw image and clamps again at its texel centers. H/V retain the same kernel and use one source with input-scale uniforms; small controls, managed windows and custom scopes retain separate extraction. See the [render-path comparison](../.local-research/performance/first-use-20261102/control-extract-fusion-candidate/README.md).
 
 ```text
-live capture -> Gaussian H/V -> scene image -> lens output
-                               [same shader program]
+live capture -> Gaussian H/V -> scene image -> spectral lens output
+                                  |                   |
+                                  +--- sampled once --+
 ```
 
 ## Capture and effect ownership
@@ -31,9 +38,19 @@ Source-observer dispatch retains a membership snapshot. Rebuild it when observer
 
 `NativeGlassMipAtlas` retains Compose wrappers for its immutable Android `RenderEffect` instances. Source-only redraws reuse those wrappers instead of replacing unchanged RenderNode filters. Keep compatibility producers lazy, preserve every pass and texture barrier, and create new wrappers with a new atlas/filter snapshot.
 
-`NativeGlassAtlasPasses` retains only fixed `drawLayer` commands in wholly private successor layers. Every draw still records the live source/base, first mip tile and assembled atlas; the control-plane path still records stages 0 and 1. Successors reference live child RenderNodes, so every GPU pass and texture barrier remains active. Preserve the source `drawLayer` calls that perform Java-side outline and Z configuration.
+`NativeGlassAtlasPasses` retains only fixed `drawLayer` commands in wholly private successor layers. Every draw still records the live source/base, first mip tile and assembled atlas. Control paths record their live capture and first Gaussian input. Successors reference live child RenderNodes, so every GPU pass and texture barrier remains active. Preserve the source `drawLayer` calls that perform Java-side outline and Z configuration.
+
+The ordinary mip packer uses `Auto` composition: its disjoint children draw into the final filter's input without another atlas-sized copy target. Keep the original capture, every mip stage and the final filter isolated; only the private packing layer has no effect, group opacity or non-default blend. See the [Compose layer audit](../.local-research/performance/first-use-20261102/atlas-pack-copy-before/pass-audit.md).
 
 Successor-recording reuse depends on atlas identity, the raw Float bits of the actual recording density and font scale, layout direction and the hardware recording environment. Invalidate it when the pass mode changes, generic `layers()` access takes ownership, or layers are released. Do not treat source content or the entire mip chain as a retained recording.
+
+Owned materialized inputs use HWUI's linear image sampler when stored channels need no per-texel color decode. This includes control atlases, ordinary mip producers and the private morph renderer. Mip producers retain their thirteen taps, weights and texel-center clamps, replacing each four-read interpolation with one filtered read. Managed working-color interpolation and transparent-border kernels retain manual sampling. The texture program key includes the sampling mode.
+
+Continuous corners and their optical gradients are perceptually important. Tab scene/consumer programs and navigation unions retain the original continuous-corner field; do not replace it with a circular capsule or circular rounded rectangle. Preserve the union's affine axes, gradient, bridge, smoothness and presentation transforms as well as the visible Compose outline.
+
+Material programs omit generic fill operations only when the recipe and its alternate appearance have no fill layers. Source and target recipes have independent topology bits. All declarations and live appearance/tint/opacity updates remain available; custom recipes with fills use the complete implementation.
+
+The fixed tint-mask Bezier uses four clamped Newton iterations instead of twelve bisections. Its x derivative remains above .6429 on [0,1]; the maximum easing difference from the previous finite bisection is below .000182. Control points, coverage and the final y polynomial are unchanged.
 
 ## Native field arithmetic
 
@@ -49,11 +66,21 @@ Cascading-menu width remains measured during composition with the current collec
 
 ## Rejected experiments
 
+Role-specific highlight arithmetic was evaluated with the original continuous corners retained and reverted. The [candidate record](../.local-research/performance/first-use-20261102/highlight-candidate-source.json) retains its source identity and outcome: cold compilation and frame tails did not improve consistently across Demo and MeiloX.
+
 Draw-only menu press backgrounds and adaptive geometry/running-state caching were evaluated and reverted. Menu opening tails did not improve consistently, and the adaptive experiment encountered a callback regression test failure. Neither experiment is part of the implementation; immutable shader source reuse from that investigation is retained.
 
 Explicit `noinline` boundaries on atlas samplers or control-scene functions did not reduce first-use compilation on the physical device and were removed. Enlarging the scene input to the full consumer atlas also lacked a clear benefit. Preserve normal compiler specialization and the original input extents; image bounds and target state can still require distinct Skia pipelines for the shared source.
 
 Do not defer all effect invalidation to drawing: `nativeMaterialCompleted` changes the owning layout layer's clip and compositing strategy. A path clip may already be recorded before the draw callback runs, so a draw-time update can leave the first frame using the previous material's clipping.
+
+## Device measurement
+
+Use ADB for device control and Perfetto FrameTimeline as the primary frame measurement. Query traces through the official Python `TraceProcessor` API and keep intermediate rows in memory. Android Studio is an optional view for thread and memory investigations. Run extra collectors separately from cold comparisons.
+
+Verify the target package, UID, PID and window before attributing frames. MeiloX uses the `com.netease.cloudmusic` process alias; a process-name match alone can select another installed app. The unmodified androidperf 0.2.1 collector cannot handle this safely and attempts a heap dump after recording, so it is not part of the formal benchmark. Its gfxinfo-derived FPS and automatic jank summary do not replace actual presentation measurements.
+
+Report all-frame long-latency shares, p95/p99, deadline misses and actual presentation gaps. Keep app SurfaceFrame latency, display presentation intervals and scheduled CPU time distinct. A layer's low buffer production rate can include stationary or obscured content; call it animation FPS only when continued visual motion is established. Include cold startup and route preparation in the whole sequence, with interaction phases also reported separately. Preserve per-window attribution for sheets and menus.
 
 ## Evidence
 
@@ -65,6 +92,6 @@ The [AndroidLiquidGlass shader review](../.local-research/performance/kyant-2026
 
 The [Compose/HWUI boundary audit](../.local-research/performance/render-architecture-20261101/production-graph.md) grounds the shared Tab program in the existing materialized passes. Its [Demo confirmation](../.local-research/performance/render-architecture-20261101/shared-tab-confirmation-comparison.md) and [MeiloX comparison](../.local-research/performance/render-architecture-20261101/shared-tab-program-mei-comparison.md) retain complete cold interaction sequences, including compilation that moves between actions and startup or frame-tail regressions. First-use stalls remain; the improvement is specific to navigation.
 
-The interaction benchmark excludes route preparation and retains popup-dismissal frames through Perfetto after their windows are destroyed. Keep app SurfaceFrame latency separate from UI and RenderThread scope durations. This HyperOS device sets frame flag bit 32 during ordinary rendering; do not discard all nonzero flags or trust its malformed frame-deadline counters. Retain raw frame timestamps and report UI, Draw and RenderThread costs separately.
+Retain popup-dismissal frames through Perfetto after their windows are destroyed. Historical interaction-only samples exclude route preparation; current full-sequence captures include it. Keep app SurfaceFrame latency separate from UI and RenderThread scope durations. This HyperOS device sets frame flag bit 32 during ordinary rendering; do not discard all nonzero flags or trust its malformed frame-deadline counters. Retain raw frame timestamps and report UI, Draw and RenderThread costs separately.
 
 Supplemental pre-launch traces include the first app draw and shared-shader compilation. Treat nonzero Perfetto buffer-overwrite statistics as data loss even when the service labels them informational. Keep algorithm microbenchmarks, scheduled CPU time, frame latency and physical-device acceptance separate.
