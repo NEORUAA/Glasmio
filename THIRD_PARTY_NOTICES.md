@@ -18,6 +18,16 @@ Apple's iOS and iPadOS 27 Figma library is a design reference. The Sample includ
 
 Glasmio does not distribute rendered design screenshots as component artwork. SF Symbols names are accepted by the symbol resolver. Library artifacts contain no Apple fonts. The listening-mode artwork below is included in `glasmio-icons`. The Demo APK bundles host-supplied SF Pro, its SF Symbols glyphs, and real italic faces; these Apple assets remain subject to Apple's terms and are not covered by Glasmio's Apache-2.0 license. The font source files are excluded from Git and library artifacts. Debug builds accept optional local fonts, while Demo builds require both font inputs.
 
+## Tapback artwork
+
+The six `glasmio-ui/src/main/res/drawable-nodpi/glasmio_tapback_*.webp` resources
+contain the original classic Tapback frames from the user-authorized local iOS 27.0
+Simulator build `24A434`, `ChatKit.framework/Assets.car`. Heart, thumbs up, thumbs down,
+HAHA (ENG), exclamation, and question sequences were decoded through CoreUI and
+losslessly encoded at the native 60 FPS. Apple Inc. retains copyright; these images
+are not covered by Glasmio's Apache-2.0 license. Extraction and pixel comparison
+receipts are stored in `.local-research/ios/message-context/`.
+
 ## Listening-mode symbols
 
 `glasmio-icons/src/main/res/drawable-nodpi/glasmio_adaptive_audio.png` is the

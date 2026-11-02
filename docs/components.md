@@ -12,6 +12,7 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Buttons | `GlasmioButton`, `GlasmioIconButton`, `GlasmioButtonSize`, `GlasmioButtonDefaults` |
 | Controls | `GlasmioSwitch`, `GlasmioSlider`, `GlasmioVolumeSlider`, `GlasmioAdaptiveSlider`, `GlasmioStepper`, `GlasmioSegmentedControl`, `GlasmioScrollableTabRow`, `GlasmioColorPicker` |
 | Input | `GlasmioTextField`, `GlasmioSearchBar`, `GlasmioSearchToolbar`, `GlasmioEditableText` |
+| Messages | `GlasmioMessageBubble`, `MessageBubbleShape`, `MessageBubbleDefaults`, `GlasmioMessageContextMenu`, `GlasmioMessageReaction`, `GlasmioMessageReactionArtwork` |
 | Text editing | `GlasmioTextSelectionHost`, `GlasmioTextSelectionMenu`, `GlasmioTextSelectionLabels`, `GlasmioMagnifier`, `GlasmioLoupeMotion`, `GlasmioLoupeFlex`, `rememberGlasmioLoupeFollow`, `GlasmioLoupeFollowState` |
 | Lists | `GlasmioCard`, `GlasmioGroupedList`, `GlasmioListRow`, `GlasmioSectionTitle`, `GlasmioGroupedTableFooter`, `GlasmioListValuePill`, `GlasmioListSwipeActions`, `GlasmioListSwipeAction`, `GlasmioSwipeActionStyle`, `GlasmioReorderableGroup` |
 | Toolbars | `GlasmioTopBar`, `GlasmioTopBarStyle`, `GlasmioToolbarActionGroup`, `GlasmioToolbarActionStyle`, `GlasmioBottomToolbar`, `GlasmioSheetTopToolbar`, `GlasmioSheetToolbarButton`, `GlasmioSheetButton` |
@@ -26,6 +27,47 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Icons | `SfIcon`, `SfSymbol`, `SfSymbolCatalog`, `GlasmioIcon`, `GlasmioIconProvider`, `GlasmioIconResolver` |
 
 Button naming follows Apple's Liquid Glass vocabulary through regular/prominent emphasis and Small/Medium/Large sizes. Other component names retain the `Glasmio` prefix while using familiar terms such as Toolbar, Pop-up Button, Alert, Sheet, Stepper, and Segmented Control.
+
+## Message bubbles
+
+`GlasmioMessageBubble` renders a message balloon with arbitrary column content. `outgoing`
+places the tail on the logical end; incoming balloons use the logical start. `showTail = false`
+supports intermediate messages in a group. The host owns row alignment, maximum width,
+sender/time labels, message actions, and the grouping policy.
+
+```kotlin
+GlasmioMessageBubble(outgoing = true) {
+    Text("See you at 6.")
+}
+```
+
+Apple's corresponding internal classes are ChatKit's `CKBalloonView` and `CKBubblePath`.
+The iOS 27 path implementation is delegated to private `BubbleKit`; this is not a public
+UIKit control. `MessageBubbleShape` exposes the same outline used by the surface so a host
+can apply a matching lifted shadow without maintaining another tail path. The tail is part
+of the measured outline. Its bottom inset follows the fitted radius instead of a fixed
+14dp extension. Use `MessageBubbleDefaults.shape` when a lifted shadow must also follow
+the host's Dynamic Type settings.
+
+`GlasmioMessageContextMenu` owns long-press recognition, a retained preview, safe-area
+placement, the action list, and optional Tapback reactions. Pass flat
+`GlasmioCascadingMenuItem` actions; callbacks run after dismissal. Reaction selection and
+custom emoji remain host state. Omit `onReaction` for services without reaction support.
+The optional `GlasmioMessageReactionArtwork` selects a native classic Tapback animation;
+otherwise the reaction displays its host-provided emoji.
+
+See [message balloon geometry](ios-message-bubbles.md) for native implementation references.
+
+## SF Symbols catalog
+
+`SfSymbolCatalog` contains the complete official name-to-codepoint table (7,151 names)
+and 936 resolved legacy aliases. Regenerate it with `python3 scripts/generate_sf_symbol_catalog.py`;
+`--check-generated` verifies deterministic output against the installed official SF Symbols CLI.
+The generated table uses bounded initialization chunks rather than one oversized JVM method.
+
+Fonts remain host-owned. SF Pro 22.0d4e4 covers this catalog; earlier versions may omit newer
+glyphs. `SfIcon` checks coverage lazily and caches it by Typeface, falling back to the host
+icon resolver when a supplied font lacks a glyph.
 
 ## Example host
 
