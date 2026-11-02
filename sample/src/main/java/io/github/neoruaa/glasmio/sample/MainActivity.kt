@@ -517,6 +517,9 @@ private fun SampleNavigation(
                                                                     SampleLargeTitle(layout.title, layout.collapseProgress)
                                                                 }
                                                                 "Text Editing" -> TextEditingDemo(editingValue, layout.padding)
+                                                                "Messages" -> MessageBubblesDemo(layout.listState, layout.padding) {
+                                                                    SampleLargeTitle(layout.title, layout.collapseProgress)
+                                                                }
                                                                 "Sheets" -> SheetsDemo(layout)
                                                                 "About" -> AboutDemo(layout)
                                                             }
@@ -735,6 +738,7 @@ private val catalog = listOf(
     "Sheets" to "inset.filled.bottomthird.rectangle",
     "Text Styles and Dynamic Type" to "textformat.size",
     "Text Editing" to "character.cursor.ibeam",
+    "Messages" to "message",
 )
 
 @Composable
