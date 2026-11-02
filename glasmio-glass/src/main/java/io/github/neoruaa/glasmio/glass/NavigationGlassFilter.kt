@@ -188,8 +188,12 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     completion: NativeGlassCompletion?,
 ): Boolean {
     val storage = this as? BackdropEffectScopeImpl ?: return false
+    // Store managed mip intermediates as working-space colors. Native-gamma channel
+    // transport through HWUI layers can darken deformed or resized surfaces.
+    // Decode at each sampling boundary; SDR retains its existing fast path.
     val atlas = pyramid.atlas(source, IntSize(ceil(sourceSize.width).toInt(), ceil(sourceSize.height).toInt()),
         maximumLod, NativeGlassMipKernel.Compute13Tap, colorManaged = storage.colorManagedNativeGlass,
+        nativeGammaStorage = false,
         allowHardwareLinearSampling = storage.supportsNativeGlassHardwareLinearSampling)
     val functions = field?.shaderFunctions ?: NativeDefaultFieldShader
     val completionTopology = completion?.programTopology()
