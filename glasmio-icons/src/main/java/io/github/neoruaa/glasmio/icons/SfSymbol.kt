@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.LayoutDirection
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Typeface
+import java.lang.ref.WeakReference
+import java.util.WeakHashMap
 
 /** Code points are resolved by the SF Symbols CLI using exact-name matching. */
 @Immutable
@@ -77,6 +79,29 @@ private data class SfGlyphDrawCache(
     val bounds: Rect,
 )
 
+/** Shared lazily by font, with weak ownership so a replaced provider can be released. */
+private class SfGlyphCoverage(typeface: Typeface) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.typeface = typeface }
+    private val supported = mutableMapOf<Int, Boolean>()
+
+    fun hasGlyph(codePoint: Int): Boolean = supported.getOrPut(codePoint) {
+        paint.hasGlyph(String(Character.toChars(codePoint)))
+    }
+}
+
+private val sfGlyphCoverage = WeakHashMap<Typeface, WeakReference<SfGlyphCoverage>>()
+
+@Composable
+private fun rememberSfGlyphCoverage(typeface: Typeface?): SfGlyphCoverage? = remember(typeface) {
+    typeface?.let { font ->
+        synchronized(sfGlyphCoverage) {
+            sfGlyphCoverage[font]?.get() ?: SfGlyphCoverage(font).also {
+                sfGlyphCoverage[font] = WeakReference(it)
+            }
+        }
+    }
+}
+
 val LocalSfToolbarSymbols = staticCompositionLocalOf { false }
 
 /**
@@ -99,7 +124,8 @@ fun SfIcon(
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val toolbar = LocalSfToolbarSymbols.current
-    if (LocalGlasmioSymbolTypeface.current == null) {
+    val glyphs = rememberSfGlyphCoverage(LocalGlasmioSymbolTypeface.current)
+    if (glyphs == null || !glyphs.hasGlyph(symbol.codePoint)) {
         GlasmioResolvedIcon(symbol.systemName, contentDescription, modifier, tint, size,
             mirrored && symbol.autoMirrored && layoutDirection == LayoutDirection.Rtl)
         return
@@ -135,7 +161,8 @@ fun SfIcon(
     val layoutDirection = LocalLayoutDirection.current
     val toolbar = LocalSfToolbarSymbols.current
     val codePoint = SfSymbolCatalog.codePointOrNull(systemName)
-    if (LocalGlasmioSymbolTypeface.current == null || codePoint == null) {
+    val glyphs = rememberSfGlyphCoverage(LocalGlasmioSymbolTypeface.current)
+    if (codePoint == null || glyphs == null || !glyphs.hasGlyph(codePoint)) {
         GlasmioResolvedIcon(systemName, contentDescription, modifier, tint, size,
             mirrored && layoutDirection == LayoutDirection.Rtl)
         return
