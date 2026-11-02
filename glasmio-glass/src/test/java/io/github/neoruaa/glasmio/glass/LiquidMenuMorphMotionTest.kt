@@ -3,6 +3,7 @@ package io.github.neoruaa.glasmio.glass
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.RectangleShape
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
@@ -19,6 +20,38 @@ import kotlin.math.atan2
 class LiquidMenuMorphMotionTest {
     private val source = Rect(676f, 183f, 996f, 321f)
     private val destination = Rect(242f, 185f, 996f, 687f)
+
+    @Test
+    fun nonCoaxialReactionFieldKeepsItsLobesAndDetachedDotsWithoutFillingTheAllocation() {
+        val pillHeight = 64.24f
+        val emoji = Offset(240f, pillHeight + 14.3f)
+        val medium = emoji + Offset(23.584f * cos(Math.toRadians(124.0)).toFloat(),
+            23.584f * sin(Math.toRadians(124.0)).toFloat())
+        val small = medium + Offset(14.96f * cos(Math.toRadians(127.0)).toFloat(),
+            14.96f * sin(Math.toRadians(127.0)).toFloat())
+        // The dot radii differ, so their center midpoint still lies inside the medium dot.
+        val tailAxis = (small - medium) / 14.96f
+        val mediumEdge = medium + tailAxis * 7.92f
+        val smallEdge = small - tailAxis * 3.96f
+        val gapCenter = (mediumEdge + smallEdge) * .5f
+        assertEquals("The native detached-dot edge gap is preserved", 3.08f, (smallEdge - mediumEdge).getDistance(), .001f)
+        fun circle(center: Offset, radius: Float): LiquidContactCapsule {
+            val bounds = Rect(center.x - radius, center.y - radius, center.x + radius, center.y + radius)
+            return LiquidContactCapsule(bounds.size, bounds)
+        }
+        val pill = Rect(0f, 0f, 360f, pillHeight)
+        val shape = NavigationGlassUnionShape(RectangleShape, listOf(
+            LiquidContactCapsule(pill.size, pill), circle(emoji, 22f),
+            circle(medium, 7.92f), circle(small, 3.96f),
+        ), 1.66f, pillHeight)
+        for (point in listOf(pill.center, emoji, medium, small)) {
+            assertTrue("Every noncoaxial lobe retains material at $point", shape.field(point.x, point.y)[0] < 0f)
+        }
+        for (point in listOf(Offset(20f, 90f), Offset(340f, 90f), Offset(2f, 2f), gapCenter)) {
+            assertTrue("The 114pt allocation and detached-dot gap stay empty at $point", shape.field(point.x, point.y)[0] > 0f)
+        }
+        assertEquals("Optical depth follows the pill, excluding the tail allocation", pillHeight, shape.minimumDimension, 0f)
+    }
 
     @Test
     fun parallelEnvelopesContractBeforeTheyFormTheMenu() {

@@ -759,14 +759,14 @@ internal fun Modifier.navigationGlassBackgroundResolved(
         shape = shape,
         effects = {
             if (sampleBackdrop && appearance.usesBackdrop) {
-                val extent = size.minDimension / density
+                val surfaceShape = shape()
+                val extent = ((surfaceShape as? NavigationGlassUnionShape)?.minimumDimension ?: size.minDimension) / density
                 val geometry = if (cachedGeometry == null || geometryExtent != extent) {
                     navigationGlassGeometryProfile(extent, material).also { cachedGeometry = it; geometryExtent = extent }
                 } else requireNotNull(cachedGeometry)
                 val height = if (refractionHeight.value.isFinite()) refractionHeight.toPx() else geometry.innerHeight * density
                 val amount = if (refractionAmount.value.isFinite()) refractionAmount.toPx() else geometry.innerAmount * density
                 val nativeOptics = !refractionHeight.value.isFinite() && !refractionAmount.value.isFinite()
-                val surfaceShape = shape()
                 val contactShape = surfaceShape as? LiquidContactShape
                 val completion = nativeRecipe?.let { recipe ->
                     NativeGlassCompletion(recipe, isDark,
@@ -780,6 +780,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                 val nativeField = if (nativeOptics || completion != null) when (surfaceShape) {
                     is LiquidContactShape -> navigationContainerGlassField(surfaceShape, opticalCenter?.invoke(), completionBand)
                     is ToolbarActionShape -> navigationToolbarGlassField(surfaceShape, completionBand)
+                    is NavigationGlassUnionShape -> surfaceShape.nativeField()
                     else -> null
                 } else null
                 if (nativeOptics) {
