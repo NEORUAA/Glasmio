@@ -113,11 +113,6 @@ fun GlasmioCascadingMenu(
     val menuScroll = rememberScrollState()
     var selectedBounds by remember { mutableStateOf<Rect?>(null) }
     val colors = LocalGlassColors.current
-    val separatorColor = colors.content.copy(alpha = 0.16f)
-    val separatorModifier = Modifier.graphicsLayer {
-        blendMode = BlendMode.Luminosity
-        compositingStrategy = CompositingStrategy.Offscreen
-    }
     val headerRows = if (headerActions.isEmpty()) 0 else 2
     val resolvedHeaderHeight = if (headerContent != null) headerContentHeight
         else if (headerActions.isEmpty()) 0.dp else 76.dp + separatorHeight
@@ -163,8 +158,7 @@ fun GlasmioCascadingMenu(
             }
         },
         itemCount = items.size + headerRows,
-        heightOverride = 20.dp + resolvedHeaderHeight + itemHeights.fold(0.dp) { total, height -> total + height } +
-            separatorHeight * items.count { it.separatorBefore },
+        heightOverride = resolvedHeaderHeight + menuContentHeight(itemHeights, items.count { it.separatorBefore }, separatorHeight),
         menuWidth = menuWidth,
         backdrop = backdrop,
         exportChildBackdrop = false,
@@ -250,14 +244,10 @@ fun GlasmioCascadingMenu(
                         alpha = p
                         translationY = -separatorHeight.toPx() * (1f - p)
                     }.verticalScroll(rememberScrollState())) {
-                        Box(Modifier.fillMaxWidth().height(separatorHeight), contentAlignment = Alignment.Center) {
-                            HorizontalDivider(Modifier.padding(horizontal = 12.dp).then(separatorModifier), thickness = 0.5.dp, color = separatorColor)
-                        }
+                        GlasmioMenuSeparator(height = separatorHeight, horizontalInset = 12.dp)
                         selected.children.forEach { item ->
                             if (item.separatorBefore) {
-                                Box(Modifier.fillMaxWidth().height(separatorHeight), contentAlignment = Alignment.Center) {
-                                    HorizontalDivider(Modifier.padding(horizontal = 12.dp).then(separatorModifier), thickness = 0.5.dp, color = separatorColor)
-                                }
+                                GlasmioMenuSeparator(height = separatorHeight, horizontalInset = 12.dp)
                             }
                             GlasmioMenuItem(
                                 title = item.title,
@@ -296,26 +286,14 @@ fun GlasmioCascadingMenu(
                             )
                         }
                     }
-                    Box(Modifier.fillMaxWidth().height(separatorHeight), contentAlignment = Alignment.Center) {
-                        HorizontalDivider(
-                            Modifier.padding(horizontal = 16.dp).then(separatorModifier),
-                            thickness = 0.5.dp,
-                            color = separatorColor,
-                        )
-                    }
+                    GlasmioMenuSeparator(height = separatorHeight)
                 }
             }
             items.forEachIndexed { index, item ->
                 if (item.separatorBefore) {
-                    Box(Modifier.fillMaxWidth().height(separatorHeight).graphicsLayer {
+                    GlasmioMenuSeparator(Modifier.graphicsLayer {
                         alpha = 1f - 0.58f * child.value.coerceIn(0f, 1f)
-                    }, contentAlignment = Alignment.Center) {
-                        HorizontalDivider(
-                            Modifier.padding(horizontal = 16.dp).then(separatorModifier),
-                            thickness = 0.5.dp,
-                            color = separatorColor,
-                        )
-                    }
+                    }, height = separatorHeight)
                 }
                 GlasmioMenuItem(
                     title = item.title,
@@ -358,6 +336,25 @@ fun GlasmioCascadingMenu(
         }
     }
 
+}
+
+@Composable
+internal fun GlasmioMenuSeparator(
+    modifier: Modifier = Modifier,
+    height: Dp = 12.dp,
+    horizontalInset: Dp = 16.dp,
+) {
+    val color = LocalGlassColors.current.content.copy(alpha = 0.16f)
+    Box(modifier.fillMaxWidth().height(height), contentAlignment = Alignment.Center) {
+        HorizontalDivider(
+            Modifier.padding(horizontal = horizontalInset).graphicsLayer {
+                blendMode = BlendMode.Luminosity
+                compositingStrategy = CompositingStrategy.Offscreen
+            },
+            thickness = 0.5.dp,
+            color = color,
+        )
+    }
 }
 
 @Composable

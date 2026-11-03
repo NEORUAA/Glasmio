@@ -95,7 +95,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 
-private val LocalIosPopupMenuInteractive = staticCompositionLocalOf { true }
+internal val LocalIosPopupMenuInteractive = staticCompositionLocalOf { true }
 
 // AnimationKit MorphAnimationSettings.liquidMorph copies this content spring to
 // width, height, position and transform (UIKitCore/AnimationKit iOS 27).
@@ -115,7 +115,7 @@ private val PopupMenuShadowMargin = NavigationGlassMaterial.RegularMedium.let {
 }
 private val PopupMenuOvershootMarginStart = maxOf(64.dp, PopupMenuShadowMargin)
 private val PopupMenuOvershootMarginVertical = maxOf(32.dp, PopupMenuShadowMargin)
-private val PopupMenuWidth = 238.dp
+internal val PopupMenuWidth = 238.dp
 
 /** The stable shell is larger than the resting menu so the spring overshoot (up to 1.12x)
  *  fits inside the shell's constraints and actually renders. */
@@ -945,4 +945,11 @@ fun GlasmioMenuItem(
 /** A subtitle and an explicit second title line each keep their own vertical allowance. */
 internal fun menuItemHeight(base: androidx.compose.ui.unit.Dp, title: String, subtitle: String?): androidx.compose.ui.unit.Dp =
     base + (if (subtitle != null) 12.dp else 0.dp) + (if ('\n' in title) 20.dp else 0.dp)
+
+internal fun menuContentHeight(
+    rowHeights: List<androidx.compose.ui.unit.Dp>,
+    separatorCount: Int,
+    separatorHeight: androidx.compose.ui.unit.Dp = 12.dp,
+): androidx.compose.ui.unit.Dp =
+    20.dp + rowHeights.fold(0.dp) { total, height -> total + height } + separatorHeight * separatorCount
 

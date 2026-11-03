@@ -27,9 +27,14 @@ and 0.4 / 0.85 for outside dismissal. The preview lift is capped at 1.15 and 26p
 on its longest edge, then fitted to the available viewport. The default Glass metrics
 dim the background without enabling the legacy backdrop blur filter.
 The semantic dim color is black at 0.20 alpha in the default/light trait and 0.48
-in the dark trait. The Glass action list uses a 250pt default width, 32pt corners,
+in the dark trait. Native UIKit's Glass action list uses a 250pt default width, 32pt corners,
 10pt vertical section insets, and a default 42pt single-line row. Its baselines are
 27pt from the top, 19pt apart, and 15pt from the bottom (14pt for subtitles).
+
+Glasmio renders the action list with `GlasmioContextMenu`, `GlasmioMenuItem`, and the
+shared menu separator and height calculation. Its resting dimensions, material,
+typography, icon gutter, and pressed highlight therefore follow the standard Menu
+components. The message wrapper owns only preview placement and presentation motion.
 
 The Tapback pill is 64.24pt high at the normal text size, with 44pt cells and a 5pt
 gap above the preview. Its 44pt emoji lobe, 15.84pt medium dot, and 7.92pt small dot

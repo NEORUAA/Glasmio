@@ -2,16 +2,11 @@ package io.github.neoruaa.glasmio.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -27,9 +22,6 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.layout.FirstBaseline
-import androidx.compose.ui.layout.LastBaseline
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
@@ -37,12 +29,7 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import com.kyant.capsule.ContinuousRoundedRectangle
 import io.github.neoruaa.glasmio.core.LocalGlassColors
-import io.github.neoruaa.glasmio.core.IosTypography
-import io.github.neoruaa.glasmio.icons.SfIcon
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.text.style.TextOverflow
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
@@ -140,14 +127,13 @@ fun GlasmioMessageContextMenu(
     val captured = session
     if (alive && captured != null) {
         val px = density.density
-        val actionScale = with(density) { IosTypography.body.fontSize.toPx() / 17.dp.toPx() }
         val viewport = Rect(
             captured.viewport.left + leftInset, captured.viewport.top + topInset,
             captured.viewport.right - rightInset, captured.viewport.bottom - bottomInset,
         )
         val pickerScale = density.fontScale.coerceIn(.88f, 1.3f)
-        val placement = remember(captured, viewport, retainedActions, retainedReactions, tailOnRight, px, pickerScale, actionScale) {
-            placeMessageContext(captured.bounds, viewport, retainedActions, retainedReactions.isNotEmpty(), tailOnRight, px, pickerScale, actionScale)
+        val placement = remember(captured, viewport, retainedActions, retainedReactions, tailOnRight, px, pickerScale) {
+            placeMessageContext(captured.bounds, viewport, retainedActions, retainedReactions.isNotEmpty(), tailOnRight, px, pickerScale)
         }
         val popupBackdrop = rememberCrossWindowBackdrop(backdrop)
         var popupOrigin by remember { mutableStateOf<Offset?>(null) }
@@ -210,18 +196,29 @@ fun GlasmioMessageContextMenu(
                             scaleX = 0.2f + 0.8f * progress.value
                             scaleY = scaleX
                         }) {
-                        GlassSurface(
-                            modifier = Modifier.offset(margin, margin).requiredSize(with(density) { menu.width.toDp() }, with(density) { menu.height.toDp() }),
-                            backdrop = materialBackdrop, shape = ContinuousRoundedRectangle(32.dp),
-                            material = NavigationGlassMaterial.RegularMedium,
-                            navigationSurfaceAlphaMultiplier = 1f,
-                        ) {
-                            Column(Modifier.fillMaxSize().padding(vertical = 10.dp).verticalScroll(rememberScrollState())) {
-                                retainedActions.forEach { action ->
-                                    if (action.separatorBefore) {
-                                        HorizontalDivider(Modifier.padding(horizontal = 24.dp, vertical = 10.dp), color = LocalGlassColors.current.separator)
+                        CompositionLocalProvider(LocalIosPopupMenuInteractive provides expanded) {
+                            GlasmioContextMenu(
+                                visible = true,
+                                modifier = Modifier.offset(margin, margin),
+                                backdrop = materialBackdrop,
+                                compact = true,
+                                menuWidth = with(density) { menu.width.toDp() },
+                                heightOverride = with(density) { menu.height.toDp() },
+                                exportChildBackdrop = false,
+                            ) { childBackdrop ->
+                                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                                    retainedActions.forEach { action ->
+                                        if (action.separatorBefore) GlasmioMenuSeparator()
+                                        GlasmioMenuItem(
+                                            title = action.title,
+                                            subtitle = action.subtitle,
+                                            systemName = action.systemName,
+                                            destructive = action.destructive,
+                                            enabled = action.enabled,
+                                            backdrop = childBackdrop,
+                                            onClick = { close(action.onClick) },
+                                        )
                                     }
-                                    MessageActionRow(action, expanded) { close(action.onClick) }
                                 }
                             }
                         }
@@ -246,7 +243,7 @@ private data class MessageSource(val bounds: Rect, val viewport: Rect)
 internal data class MessageContextPlacement(val preview: Rect, val menu: Rect, val reactions: Rect?, val previewScale: Float)
 
 /** All inputs and results use the same screen coordinate space. */
-internal fun placeMessageContext(source: Rect, viewport: Rect, actions: List<GlasmioCascadingMenuItem>, reactions: Boolean, tailOnRight: Boolean, density: Float, pickerScale: Float = 1f, actionScale: Float = 1f): MessageContextPlacement {
+internal fun placeMessageContext(source: Rect, viewport: Rect, actions: List<GlasmioCascadingMenuItem>, reactions: Boolean, tailOnRight: Boolean, density: Float, pickerScale: Float = 1f): MessageContextPlacement {
     val area = Rect(viewport.left + 8f * density, viewport.top + 8f * density, viewport.right - 8f * density, viewport.bottom - 8f * density)
     val width = area.width.coerceAtLeast(1f)
     val height = area.height.coerceAtLeast(1f)
@@ -257,13 +254,14 @@ internal fun placeMessageContext(source: Rect, viewport: Rect, actions: List<Gla
     val pickerHeight = if (showReactions) requestedPickerHeight else 0f
     val pickerReserve = if (showReactions) pickerHeight + 5f * density else 0f
     val menuGap = 8f * density
-    val requestedMenuHeight = (20f + actions.sumOf {
-        (42 + (if ('\n' in it.title) 19 else 0) + (if (it.subtitle != null) 18 else 0)).toDouble()
-    }.toFloat() * actionScale + actions.count { it.separatorBefore } * 21f) * density
+    val requestedMenuHeight = menuContentHeight(
+        actions.map { menuItemHeight(44.dp, it.title, it.subtitle) },
+        actions.count { it.separatorBefore },
+    ).value * density
     val available = (height - pickerReserve - menuGap).coerceAtLeast(1f)
     val tailFloor = if (showReactions) (MessageContextMotion.TailExtent - 5f) * density else 0f
     val menuHeight = min(min(requestedMenuHeight, 520f * density), min(available * 0.6f, available - tailFloor).coerceAtLeast(1f))
-    val menuWidth = min(250f * density, width)
+    val menuWidth = min(PopupMenuWidth.value * density, width)
     val edge = max(source.width, source.height).coerceAtLeast(1f)
     val liftScale = min(1.15f, (edge + 26f * density) / edge)
     val previewScale = min(liftScale, min((width - if (showReactions) 61f * density else 0f).coerceAtLeast(1f) / source.width.coerceAtLeast(1f),
@@ -278,44 +276,4 @@ internal fun placeMessageContext(source: Rect, viewport: Rect, actions: List<Gla
     val menu = Rect(menuLeft, preview.top + stackHeight + menuGap, menuLeft + menuWidth, preview.top + stackHeight + menuGap + menuHeight)
     val bar = if (showReactions) Rect(area.left, preview.top - 5f * density - pickerHeight, area.right, preview.top - 5f * density + MessageContextMotion.TailExtent * density) else null
     return MessageContextPlacement(preview, menu, bar, previewScale)
-}
-
-/** Glass LargeCellLayout: 27pt first baseline, 19pt baseline spacing, 15/14pt bottom. */
-@Composable
-private fun MessageActionRow(action: GlasmioCascadingMenuItem, expanded: Boolean, onClick: () -> Unit) {
-    val colors = LocalGlassColors.current
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val foreground = if (action.destructive) colors.destructive else colors.content
-    val scale = with(LocalDensity.current) { IosTypography.body.fontSize.toPx() / 17.dp.toPx() }
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-            .background(Color.Black.copy(alpha = if (pressed) .12f else 0f), ContinuousRoundedRectangle(16.dp))
-            .clickable(enabled = expanded && action.enabled, interactionSource = interaction, indication = null, onClick = onClick)
-            .graphicsLayer { alpha = if (action.enabled) 1f else .45f }
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.width(40.dp), contentAlignment = Alignment.CenterStart) {
-            action.systemName?.let { SfIcon(it, null, size = 24.dp, tint = foreground) }
-        }
-        Layout(content = {
-            Text(action.title, style = IosTypography.body.copy(lineHeight = (19f * scale).sp / LocalDensity.current.fontScale),
-                color = foreground, maxLines = if ('\n' in action.title) 2 else 1, overflow = TextOverflow.Ellipsis)
-            action.subtitle?.let { Text(it, style = IosTypography.footnote, color = colors.secondaryContent, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        }, modifier = Modifier.weight(1f)) { measurables, constraints ->
-            val title = measurables[0].measure(constraints.copy(minHeight = 0))
-            val subtitle = measurables.getOrNull(1)?.measure(constraints.copy(minHeight = 0))
-            val first = (27.dp.toPx() * scale).roundToInt()
-            val titleY = first - title[FirstBaseline]
-            val last = titleY + title[LastBaseline]
-            val subtitleY = subtitle?.let { last + (19.dp.toPx() * scale).roundToInt() - it[FirstBaseline] }
-            val height = if (subtitle != null) subtitleY!! + subtitle[LastBaseline] + (14.dp.toPx() * scale).roundToInt()
-                else last + (15.dp.toPx() * scale).roundToInt()
-            layout(constraints.maxWidth, constraints.constrainHeight(height)) {
-                title.placeRelative(0, titleY)
-                if (subtitle != null) subtitle.placeRelative(0, subtitleY!!)
-            }
-        }
-    }
 }
