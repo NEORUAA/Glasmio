@@ -1808,6 +1808,26 @@ class SampleNavigationBehaviorTest {
     }
 
 
+    @Test fun fpsLowUsesActiveFrameCostsAndRetainsRealStalls() {
+        val period = 16_666_667L
+        val onTime = activeFrameDurationNanos(24_000_000L, 33_333_334L, period, false)!!
+        assertEquals(period, onTime)
+        assertEquals(-1, onePercentLowFps(LongArray(99) { onTime }))
+        assertEquals(60, onePercentLowFps(LongArray(100) { onTime }))
+        assertNull(activeFrameDurationNanos(5_000_000_000L, period, period, true))
+        assertNull(activeFrameDurationNanos(-1L, period, period, false))
+        assertNull(activeFrameDurationNanos(period, 0L, period, false))
+
+        val stalled = activeFrameDurationNanos(100_000_000L, period, period, false)!!
+        assertEquals(100_000_000L, stalled)
+        assertEquals(10, onePercentLowFps(LongArray(100) { if (it == 0) stalled else onTime }))
+        assertEquals(13, onePercentLowFps(LongArray(200) {
+            when (it) { 0 -> stalled; 1 -> 50_000_000L; else -> onTime }
+        }))
+        val highRefresh = activeFrameDurationNanos(6_000_000L, 8_333_333L, 8_333_333L, false)!!
+        assertEquals(120, onePercentLowFps(LongArray(100) { highRefresh }))
+    }
+
     @Test fun settingsControlDemoOptionsAndKeepPreferenceExamplesInControls() {
         awaitSampleHome()
         val context = rule.activity.applicationContext

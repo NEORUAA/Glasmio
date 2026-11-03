@@ -25,6 +25,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.neoruaa.glasmio.core.IosTypography
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 /** Counts rendered Activity-window frames without requesting additional animation frames. */
 @Composable
@@ -45,30 +46,38 @@ internal fun DemoFpsCounter(modifier: Modifier = Modifier) {
             val active = AtomicBoolean(true)
             val callbackThread = HandlerThread("Glasmio FPS").apply { start() }
             val callbackHandler = Handler(callbackThread.looper)
+            val display = window.decorView.display
+            fun refreshPeriod(): Long {
+                val rate = display?.refreshRate?.takeIf { it.isFinite() && it > 0f } ?: 60f
+                return (1_000_000_000.0 / rate).roundToLong()
+            }
+            var framePeriod = refreshPeriod()
             // Both the listener and sampler run on this handler, keeping the ring thread-confined.
             val intervals = LongArray(2_400)
             val timestamps = LongArray(intervals.size)
             var firstSample = 0
             var sampleCount = 0
             var frames = 0
-            var previousVsync = 0L
             val listener = Window.OnFrameMetricsAvailableListener { _, metrics, droppedReports ->
                 if (active.get()) {
                     // Dropped reports still represent rendered frames, not dropped frames.
                     frames += 1 + droppedReports
-                    val vsync = metrics.getMetric(FrameMetrics.VSYNC_TIMESTAMP)
-                    if (previousVsync > 0L && vsync > previousVsync && droppedReports == 0) {
+                    val duration = activeFrameDurationNanos(
+                        totalDuration = metrics.getMetric(FrameMetrics.TOTAL_DURATION),
+                        deadline = metrics.getMetric(FrameMetrics.DEADLINE),
+                        refreshPeriod = framePeriod,
+                        firstDraw = metrics.getMetric(FrameMetrics.FIRST_DRAW_FRAME) == 1L,
+                    )
+                    if (duration != null) {
                         val index = (firstSample + sampleCount) % intervals.size
-                        intervals[index] = vsync - previousVsync
-                        timestamps[index] = vsync
+                        intervals[index] = duration
+                        timestamps[index] = System.nanoTime()
                         if (sampleCount < intervals.size) {
                             sampleCount++
                         } else {
                             firstSample = (firstSample + 1) % intervals.size
                         }
                     }
-                    // A missing report breaks adjacency; never treat its gap as a slow frame.
-                    previousVsync = vsync
                 }
             }
             var sampleStarted = System.nanoTime()
@@ -80,21 +89,21 @@ internal fun DemoFpsCounter(modifier: Modifier = Modifier) {
                     val measuredFps = (frames * 1_000_000_000.0 / elapsed).roundToInt()
                     frames = 0
                     sampleStarted = now
+                    val nextPeriod = refreshPeriod()
+                    if (nextPeriod != framePeriod) {
+                        // A different app refresh rate starts a new, comparable frame window.
+                        framePeriod = nextPeriod
+                        firstSample = 0
+                        sampleCount = 0
+                    }
                     val cutoff = now - 10_000_000_000L
                     while (sampleCount > 0 && timestamps[firstSample] < cutoff) {
                         firstSample = (firstSample + 1) % intervals.size
                         sampleCount--
                     }
-                    val measuredLow = if (sampleCount >= 100) {
-                        val sorted = LongArray(sampleCount) { intervals[(firstSample + it) % intervals.size] }
-                        sorted.sort()
-                        val slowCount = (sampleCount + 99) / 100
-                        var slowTotal = 0L
-                        for (index in sorted.size - slowCount until sorted.size) slowTotal += sorted[index]
-                        (1_000_000_000.0 * slowCount / slowTotal).roundToInt()
-                    } else {
-                        -1
-                    }
+                    val measuredLow = onePercentLowFps(
+                        LongArray(sampleCount) { intervals[(firstSample + it) % intervals.size] },
+                    )
                     mainHandler.post {
                         if (active.get()) {
                             fps = measuredFps
@@ -144,4 +153,27 @@ internal fun DemoFpsCounter(modifier: Modifier = Modifier) {
         style = IosTypography.caption1.copy(fontFeatureSettings = "tnum"),
         maxLines = 1,
     )
+}
+
+/** Normalize pipeline budget to one refresh interval, retaining all deadline overrun. */
+internal fun activeFrameDurationNanos(
+    totalDuration: Long,
+    deadline: Long,
+    refreshPeriod: Long,
+    firstDraw: Boolean,
+): Long? {
+    if (firstDraw || totalDuration <= 0L || deadline <= 0L || refreshPeriod <= 0L) return null
+    // Vsync arrival gaps include intentional idle time. TOTAL_DURATION includes UI delay
+    // and GPU completion; DEADLINE accounts for the system's overlapping pipeline budget.
+    return refreshPeriod + (totalDuration - deadline).coerceAtLeast(0L)
+}
+
+/** Reciprocal mean of the slowest one percent, with at least one hundred real samples. */
+internal fun onePercentLowFps(durations: LongArray): Int {
+    if (durations.size < 100) return -1
+    durations.sort()
+    val slowCount = (durations.size + 99) / 100
+    var slowTotal = 0.0
+    for (index in durations.size - slowCount until durations.size) slowTotal += durations[index]
+    return (1_000_000_000.0 * slowCount / slowTotal).roundToInt()
 }
