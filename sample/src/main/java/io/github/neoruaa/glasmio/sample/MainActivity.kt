@@ -1136,15 +1136,6 @@ private fun NavigationDemo(layout: SamplePageLayout) {
                 })
             }
         }
-        item {
-            GlasmioBottomToolbar(Modifier.fillMaxWidth()) {
-                GlasmioIconButton(onClick = {}) { SfIcon("chevron.backward", "Previous") }
-                Spacer(Modifier.weight(1f))
-                Text("$selected", style = IosTypography.headline)
-                Spacer(Modifier.weight(1f))
-                GlasmioIconButton(onClick = {}) { SfIcon("square.and.arrow.up", "Share") }
-            }
-        }
     }
 }
 
