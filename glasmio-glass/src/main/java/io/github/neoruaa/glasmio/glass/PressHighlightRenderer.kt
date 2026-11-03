@@ -18,7 +18,11 @@ import io.github.neoruaa.glasmio.glass.render.highlight.NativeVibrantColorMatrix
 import kotlin.math.pow
 
 /** A source control's local bounds survive shared/retained material composition. */
-internal data class SampledPressHighlight(val highlight: GlassPressHighlight, val bounds: Rect)
+internal data class SampledPressHighlight(
+    val highlight: GlassPressHighlight,
+    val bounds: Rect,
+    val boundsHighlight: Boolean = true,
+)
 
 /** UIKit's two backdrop-aware flex glows, applied after the material and before its caption. */
 class PressHighlightRenderer {
@@ -38,6 +42,7 @@ class PressHighlightRenderer {
         tint: Color? = null,
         clear: Boolean = false,
         dissipationProgress: Float = 0f,
+        boundsHighlight: Boolean = true,
     ) {
         if (Build.VERSION.SDK_INT < 36 || progress <= 0f || sourceBounds.isEmpty) return
         val target = blender ?: NativePressBlender().also { blender = it }
@@ -48,7 +53,7 @@ class PressHighlightRenderer {
         val canvas = scope.drawContext.canvas.nativeCanvas
         if (!canvas.isHardwareAccelerated) return
         configureNativePressGlow(mask, progress, position, sourceBounds, scope.density,
-            clampPosition, horizontalRadius, isDark, tint, clear, dissipationProgress)
+            clampPosition, horizontalRadius, isDark, tint, clear, dissipationProgress, boundsHighlight)
         target.shader.setFloatUniform("glowGain", nativePressDodgeGain(isDark, tint, clear))
         paint.xfermode = target.shader
         canvas.drawRect(0f, 0f, scope.size.width, scope.size.height, paint)
@@ -64,10 +69,11 @@ class PressHighlightRenderer {
         tint: Color?,
         clear: Boolean,
         dissipationProgress: Float = 0f,
+        boundsHighlight: Boolean = true,
     ): RenderEffect {
         val effect = effectShader ?: RuntimeShader(NativePressGlowFunctions + PressEffectMain).also { effectShader = it }
         configureNativePressGlow(effect, progress, position, bounds, density,
-            true, null, isDark, tint, clear, dissipationProgress)
+            true, null, isDark, tint, clear, dissipationProgress, boundsHighlight)
         return RenderEffect.createRuntimeShaderEffect(effect, "content")
     }
 
@@ -113,6 +119,7 @@ internal fun configureNativePressGlow(
     tint: Color?,
     clear: Boolean,
     dissipationProgress: Float,
+    boundsHighlight: Boolean = true,
 ) {
     val size = bounds.size
     val t = nativeFlexSizeProgress(size, density)
@@ -124,7 +131,7 @@ internal fun configureNativePressGlow(
     val expansion = 1f + 3f * dissipationProgress.coerceIn(0f, 1f)
     shader.setFloatUniform("pressCenter", center.x, center.y)
     shader.setFloatUniform("pressRadius", (horizontalRadius ?: radius) * expansion, radius * expansion)
-    shader.setFloatUniform("pressOpacity", opacity * (1f - t),
+    shader.setFloatUniform("pressOpacity", if (boundsHighlight) opacity * (1f - t) else 0f,
         opacity * if (compact) 1f else .3f - .1f * t)
     shader.setFloatUniform("pressDodgeGain", nativePressDodgeGain(isDark, tint, clear))
     shader.setFloatUniform("pressBounds", bounds.left, bounds.top, bounds.right, bounds.bottom)

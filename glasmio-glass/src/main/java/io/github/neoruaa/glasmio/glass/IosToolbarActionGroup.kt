@@ -864,7 +864,7 @@ class ToolbarActionGroup(
         return SampledPressHighlight(GlassPressHighlight(active.highlight.pressProgress,
             Offset(position.x / base.width.coerceAtLeast(1f), position.y / base.height.coerceAtLeast(1f)),
             active.highlight.glowProgress, active.highlight.dissipationProgress),
-            base.translate(-bounds(run).topLeft))
+            base.translate(-bounds(run).topLeft), boundsHighlight = false)
     }
 
     fun drawPressHighlight(scope: DrawScope, run: List<ToolbarActionMember>) = with(scope) {
@@ -877,7 +877,8 @@ class ToolbarActionGroup(
             isDark = active.highlight.materialIsDark,
             tint = active.highlight.materialTint,
             clear = active.highlight.materialClear,
-            dissipationProgress = active.highlight.dissipationProgress)
+            dissipationProgress = active.highlight.dissipationProgress,
+            boundsHighlight = false)
     }
 
     fun shape(run: List<ToolbarActionMember>, separation: Float): Shape {

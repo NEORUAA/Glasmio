@@ -838,6 +838,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                             bounds.topLeft + Offset(bounds.width * press.position.x, bounds.height * press.position.y),
                             bounds, if (fullResolution) requireNotNull(storage).sourceDensity.density else density, isDark, prominentTint,
                             material == NavigationGlassMaterial.Clear, press.dissipationProgress,
+                            boundsHighlight = source.boundsHighlight,
                         )
                         renderEffect = renderEffect?.let {
                             RenderEffect.createChainEffect(light, it.asAndroidRenderEffect()).asComposeRenderEffect()
