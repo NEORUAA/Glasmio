@@ -29,6 +29,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -847,11 +848,15 @@ fun <T> GlasmioNavigationBar(
             ) {
                 // Keep registration outside both transforms so contact geometry cannot feed
                 // its own press magnification back into layout bounds.
-                Box(Modifier.matchParentSize()
-                    .then(commonTransform)
-                    .then(if (appearance.usesBackdrop && !sharesContactSurface) Modifier.layerBackdrop(ownBarBackdrop, reuseContent = true) else Modifier)
-                    .then(navigationGlassModifier)
-                    .then(if (sharesContactSurface) Modifier else interactiveHighlight.modifier))
+                // A renderer change needs a fresh layout owner for its retained display list.
+                // Animation state and contact registration stay outside this endpoint handoff.
+                key(morphing && !sharesContactSurface) {
+                    Box(Modifier.matchParentSize()
+                        .then(commonTransform)
+                        .then(if (appearance.usesBackdrop && !sharesContactSurface) Modifier.layerBackdrop(ownBarBackdrop, reuseContent = true) else Modifier)
+                        .then(navigationGlassModifier)
+                        .then(if (sharesContactSurface) Modifier else interactiveHighlight.modifier))
+                }
             }
             Row(
                 modifier = Modifier
