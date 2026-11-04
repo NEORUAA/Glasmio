@@ -64,7 +64,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalFontFamilyResolver
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
@@ -394,6 +398,12 @@ private fun SampleNavigation(
         headerEntries.keys.retainAll(backStack.toSet() + setOf(frame.fromEntryKey, frame.toEntryKey))
     }
     val bottomBackdrop = rememberSharedGlassBackdrop(navigationBackdrop, navigationBackdrop)
+    val adaptiveNavigation = rememberGlasmioAdaptiveNavigationState()
+    val navigationLayout = glasmioNavigationLayout()
+    val topTabs = navigationLayout == GlasmioNavigationLayout.TopTabs
+    val tabItems = sampleTabItems(currentRoute.value ?: "Home")
+    val selectedRoot = backStack.asReversed().firstOrNull { it.sampleRouteName() in topLevelRoutes }
+        ?.sampleRouteName() ?: "Home"
     val editingValue = rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue("Hello World"))
     }
@@ -403,6 +413,13 @@ private fun SampleNavigation(
         additionalItems = if (currentRoute.value == "Text Editing") editingActions.items else emptyList(),
     ) {
         editingActions.dialog()
+        GlasmioAdaptiveNavigationScaffold(
+            state = adaptiveNavigation,
+            layout = navigationLayout,
+            sidebar = {
+                SampleSidebar(adaptiveNavigation, tabItems, selectedRoot, selectTab, navigate)
+            },
+        ) {
         GlasmioFloatingSearch(
             active = currentRoute.value == "Search",
             query = searchQuery,
@@ -437,6 +454,20 @@ private fun SampleNavigation(
                             scrollState = entry.scroll,
                         )
                     },
+                    topBar = if (topTabs) ({ availableWidth ->
+                        GlasmioTabBar(
+                            items = tabItems,
+                            selectedKey = if (currentRoute.value == "Search") "Search" else selectedRoot,
+                            searchKey = "Search",
+                            onSelected = selectTab,
+                            onSearchClick = { navigate("Search") },
+                            onSidebarToggle = adaptiveNavigation::toggleSidebar,
+                            sidebarToggleLabel = if (adaptiveNavigation.sidebarExpanded) "Hide Sidebar" else "Show Sidebar",
+                            onSearchBoundsChanged = { searchSourceBounds = it },
+                            modifier = Modifier.widthIn(max = minOf(560.dp, availableWidth))
+                                .onGloballyPositioned { adaptiveNavigation.tabBarBounds.value = it.boundsInWindow() },
+                        )
+                    }) else null,
                 ) { headerPadding ->
                 CompositionLocalProvider(LocalSampleBodyPadding provides headerPadding) {
                 Box(Modifier.fillMaxSize().glassBackdropSource(navigationBackdrop).trackBackdropPosition(navigationBackdrop)) {
@@ -471,7 +502,7 @@ private fun SampleNavigation(
                                     overlayContent = {
                                         val isTopLevel = route in topLevelRoutes
                                         val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-                                        val bottomPadding = navigationInset + if (isTopLevel || route == "Search") NavigationBarSurfaceHeight + 8.dp else 0.dp
+                                        val bottomPadding = navigationInset + if (!topTabs && (isTopLevel || route == "Search")) NavigationBarSurfaceHeight + 8.dp else 0.dp
                                         val pageBackdrop = rememberLayerBackdrop()
                                         CompositionLocalProvider(LocalBlurBackdrop provides pageBackdrop) {
                                             Box(Modifier.fillMaxSize()) {
@@ -496,6 +527,8 @@ private fun SampleNavigation(
                                                             wallpaper = wallpaper,
                                                             listState = entryListState,
                                                             alwaysCompact = route == "Text Editing",
+                                                            topPaddingAdjustment = if (topTabs && route == "Search")
+                                                                GlasmioAdaptiveNavigationDefaults.SearchTopPadding + 56.dp - 72.dp else 0.dp,
                                                             backgroundColor = if (route == "Text Editing") {
                                                                 if (LocalGlassColors.current.isDark) Color.Black else Color.White
                                                             } else LocalGlassColors.current.groupedBackground,
@@ -540,7 +573,7 @@ private fun SampleNavigation(
                 }
                 val activeRoute = currentRoute.value
                 val searchMorph = searchTransition.progressState.value.coerceIn(0f, 1f)
-                if (activeRoute != null && (activeRoute in topLevelRoutes || searchMorph > 0f)) {
+                if (!topTabs && activeRoute != null && (activeRoute in topLevelRoutes || searchMorph > 0f)) {
                     GlasmioBackdropProvider(bottomBackdrop) {
                         SampleBottomBar(
                             selected = activeRoute,
@@ -565,6 +598,53 @@ private fun SampleNavigation(
                             onExpand = navigationScrollState::expand,
                         )
                     }
+                }
+            }
+        }
+        }
+    }
+}
+
+@Composable
+private fun sampleTabItems(selected: String): List<GlasmioTabItem<String>> = listOf(
+    GlasmioTabItem("Home", "Home", if (selected == "Home") SfSymbol.HouseFilled else SfSymbol.House),
+    GlasmioTabItem("MaterialTab", "Materials", SfSymbol.Layers),
+    GlasmioTabItem("SettingsTab", "Settings", SfSymbol.Gearshape),
+    GlasmioTabItem("About", "About", SfSymbol.InfoCircle),
+)
+
+@Composable
+private fun SampleSidebar(
+    state: GlasmioAdaptiveNavigationState,
+    tabs: List<GlasmioTabItem<String>>,
+    selected: String,
+    onSelected: (String) -> Unit,
+    navigate: (String) -> Unit,
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var componentsExpanded by rememberSaveable { mutableStateOf(true) }
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 0.dp)) {
+        GlasmioSidebarToolbar(
+            leading = { Text("Glasmio", style = IosTypography.headline, modifier = Modifier.padding(start = 12.dp)) },
+            trailing = {
+                GlasmioIconButton(onClick = { state.sidebarExpanded = false },
+                    modifier = Modifier.semantics { contentDescription = "Hide Sidebar" }) {
+                    SfIcon("sidebar.left", null, size = 20.dp, mirrored = true)
+                }
+            },
+        )
+        GlasmioSidebarSearchField(query, { query = it }, onSearch = { navigate("Search") }, placeholder = "Search Components")
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 10.dp)) {
+            items(tabs.filter { it.label.contains(query, ignoreCase = true) }, key = { it.key }) { tab ->
+                GlasmioSidebarRow(tab.label, tab.symbol, selected == tab.key, onClick = { onSelected(tab.key) })
+            }
+            item {
+                GlasmioSidebarSectionHeader("Components", componentsExpanded, { componentsExpanded = it })
+            }
+            if (componentsExpanded) {
+                items(listOf("Controls", "Navigation", "Lists", "Menus", "Sheets", "Text Editing", "Text Styles and Dynamic Type", "Messages")
+                    .filter { it.contains(query, ignoreCase = true) }) { route ->
+                    GlasmioSidebarRow(route, SfSymbol.Layers, onClick = { navigate(route) })
                 }
             }
         }
@@ -608,6 +688,7 @@ private fun SamplePinnedPage(
     wallpaper: Boolean,
     listState: LazyListState? = null,
     alwaysCompact: Boolean = false,
+    topPaddingAdjustment: Dp = 0.dp,
     backgroundColor: Color = LocalGlassColors.current.groupedBackground,
     content: @Composable (SamplePageLayout) -> Unit,
 ) {
@@ -625,7 +706,7 @@ private fun SamplePinnedPage(
     SideEffect { entry.scroll = scroll }
     val hostPadding = LocalSampleBodyPadding.current
     val bodyPadding = PaddingValues(
-        start = IosPageHorizontalPadding, top = hostPadding.calculateTopPadding(),
+        start = IosPageHorizontalPadding, top = hostPadding.calculateTopPadding() + topPaddingAdjustment,
         end = IosPageHorizontalPadding, bottom = bottomPadding + 24.dp,
     )
     GlasmioPageBody(
@@ -683,14 +764,7 @@ private fun SampleBottomBar(
     modifier: Modifier = Modifier,
     onItemBoundsChanged: ((String, Rect) -> Unit)? = null,
 ) {
-    val items = remember(selected) {
-        listOf(
-            GlasmioTabItem("Home", "Home", if (selected == "Home") SfSymbol.HouseFilled else SfSymbol.House),
-            GlasmioTabItem("MaterialTab", "Materials", SfSymbol.Layers),
-            GlasmioTabItem("SettingsTab", "Settings", SfSymbol.Gearshape),
-            GlasmioTabItem("About", "About", SfSymbol.InfoCircle),
-        )
-    }
+    val items = sampleTabItems(selected)
     GlasmioNavigationBarWithTrailingItem(
         items = items,
         trailingItem = GlasmioTabItem("Search", "Search", SfSymbol.Search),

@@ -55,6 +55,13 @@ import io.github.neoruaa.glasmio.glass.render.effects.blur
 import com.kyant.shapes.Capsule
 import kotlinx.coroutines.flow.first
 
+/** Shared vertical allocation for page and primary-sidebar toolbars. */
+object GlasmioToolbarDefaults {
+    val Height = 62.dp
+    val ControlHeight = 44.dp
+    val VerticalPadding = (Height - ControlHeight) / 2
+}
+
 
 @Composable
 fun <T> GlasmioScrollableTabRow(

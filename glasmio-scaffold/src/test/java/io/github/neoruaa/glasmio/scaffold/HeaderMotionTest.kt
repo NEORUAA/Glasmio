@@ -3,6 +3,7 @@ package io.github.neoruaa.glasmio.scaffold
 import org.junit.Assert.*
 import org.junit.Test
 import kotlin.math.abs
+import androidx.compose.ui.geometry.Rect
 import io.github.neoruaa.glasmio.scaffold.navigation.IosSwipeBackArbitrator
 import io.github.neoruaa.glasmio.scaffold.navigation.IosSwipeBackRelease
 import io.github.neoruaa.glasmio.scaffold.navigation.IosNavigationEasing
@@ -11,6 +12,57 @@ import io.github.neoruaa.glasmio.scaffold.navigation.iosNavigationFraction
 import io.github.neoruaa.glasmio.scaffold.navigation.iosNavigationParallaxOffset
 
 class HeaderMotionTest {
+    @Test fun tabSidebarMorphGatesItsMaterialContentAndDirectionalSafeArea() {
+        val tabs = Rect(400f, 40f, 900f, 84f)
+        val sidebar = Rect(0f, 0f, 320f, 834f)
+        val motion = TabSidebarMotion(false)
+        motion.updateGeometry(tabs, sidebar, 1f, false)
+        motion.retarget(true)
+        assertEquals(0, motion.phase)
+        repeat(4) { motion.advance(1f / 60f) }
+        assertEquals(0, motion.phase)
+        assertEquals(0f, motion.materialProgress, 0f)
+        assertEquals(0f, motion.sidebarPreviewProgress, 0f)
+        assertTrue(motion.contentInsetProgress > 0f)
+        assertTrue(motion.tabsPreviewProgress < 1f)
+        motion.advance(1f / 60f)
+        assertEquals(1, motion.phase)
+        motion.advance(1f / 60f)
+        assertTrue(motion.materialProgress > 0f)
+        assertTrue(motion.sidebarPreviewProgress > 0f)
+        val interrupted = motion.bounds
+        motion.retarget(false)
+        assertEquals(interrupted, motion.bounds)
+        repeat(180) { motion.advance(1f / 120f) }
+        assertFalse(motion.running)
+        assertEquals(tabs, motion.bounds)
+        motion.retarget(true)
+        repeat(180) { motion.advance(1f / 120f) }
+        assertEquals(sidebar, motion.bounds)
+        motion.retarget(false)
+        repeat(4) { motion.advance(1f / 60f) }
+        assertEquals("Closing waits for the rope gate before restoring the page safe area", 1f, motion.contentInsetProgress, 0f)
+        repeat(2) { motion.advance(1f / 60f) }
+        assertTrue(motion.contentInsetProgress < 1f)
+        val direct = TabSidebarMotion(false)
+        direct.updateGeometry(Rect(10f, 20f, 210f, 64f), Rect(0f, 0f, 220f, 200f), 1f, false)
+        direct.retarget(true)
+        assertEquals(2, direct.phase)
+    }
+
+    @Test fun splitSidebarUsesTheRecoveredCriticalSpringAndRetainsInterruptedVelocity() {
+        assertEquals(500_000_000L, IosSidebarSpring.getDurationNanos(0f, 1f, 0f))
+        val quarter = IosSidebarSpring.getValueFromNanos(125_000_000L, 0f, 1f, 0f)
+        assertEquals(.6710675f, quarter, .00002f)
+        assertEquals(.999f, IosSidebarSpring.getValueFromNanos(499_999_999L, 0f, 1f, 0f), .00001f)
+        assertEquals(1f, IosSidebarSpring.getValueFromNanos(500_000_000L, 0f, 1f, 0f), 0f)
+        val velocity = IosSidebarSpring.getVelocityFromNanos(125_000_000L, 0f, 1f, 0f)
+        assertEquals(quarter, IosSidebarSpring.getValueFromNanos(0L, quarter, 0f, velocity), 0f)
+        assertEquals(velocity, IosSidebarSpring.getVelocityFromNanos(0L, quarter, 0f, velocity), 0f)
+        assertTrue(IosSidebarSpring.getValueFromNanos(1_000_000L, quarter, 0f, velocity) > quarter)
+        assertEquals(0f, IosSidebarSpring.getValueFromNanos(500_000_000L, quarter, 0f, velocity), 0f)
+    }
+
     @Test fun navigationProjectionAndChildOwnershipFollowNativeRules() {
         val child = IosSwipeBackArbitrator(10f)
         assertEquals(0, child.observe(4f, 0f, false))

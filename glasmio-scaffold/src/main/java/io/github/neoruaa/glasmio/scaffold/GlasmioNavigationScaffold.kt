@@ -18,6 +18,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -114,6 +116,7 @@ private class PageTitleEntry {
 
 /** Stores title data only; action callbacks and composed button content stay in the shared bar. */
 private class PageTitleRegistry {
+    var hasTopTabs by mutableStateOf(false)
     private val entries = mutableMapOf<Any, PageTitleEntry>()
     private val mounted = mutableMapOf<Any, Int>()
     private var active = emptySet<Any>()
@@ -148,6 +151,7 @@ private val LocalPageTitles = staticCompositionLocalOf<PageTitleRegistry?> { nul
 @Composable
 fun GlasmioPageTitle(entryKey: Any, modifier: Modifier = Modifier) {
     val registry = requireNotNull(LocalPageTitles.current) { "GlasmioPageTitle requires GlasmioNavigationScaffold" }
+    if (registry.hasTopTabs) return
     val entry = remember(registry, entryKey) { registry.entry(entryKey) }
     DisposableEffect(registry, entryKey) {
         registry.mount(entryKey)
@@ -170,7 +174,7 @@ fun GlasmioPageTitle(entryKey: Any, modifier: Modifier = Modifier) {
         if ((if (startsAtLeading) trailing else widest) > 0) 8.dp else 0.dp
     val colors = spec.colors ?: LocalGlassColors.current
     CompositionLocalProvider(LocalGlassColors provides colors, LocalContentColor provides colors.content) {
-        Box(modifier.fillMaxWidth().statusBarsPadding().height(62.dp).padding(horizontal = IosPageHorizontalPadding)) {
+        Box(modifier.fillMaxWidth().glasmioAdaptiveContent().statusBarsPadding().height(GlasmioToolbarDefaults.Height).padding(horizontal = IosPageHorizontalPadding)) {
             Column(
                 Modifier.align(if (startsAtLeading) Alignment.CenterStart else Alignment.Center)
                     .fillMaxWidth().padding(start = start, end = end)
@@ -192,6 +196,8 @@ fun GlasmioNavigationScaffold(
     header: @Composable (entryKey: Any) -> GlasmioHeaderSpec,
     modifier: Modifier = Modifier,
     bottomBar: @Composable BoxScope.() -> Unit = {},
+    /** Centered regular-width navigation, bounded by the measured shared button groups. */
+    topBar: (@Composable (availableWidth: Dp) -> Unit)? = null,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val backdrop = rememberLayerBackdrop()
@@ -207,6 +213,12 @@ fun GlasmioNavigationScaffold(
     val source = key(frame.fromEntryKey) { header(frame.fromEntryKey) }
     val target = key(frame.toEntryKey) { header(frame.toEntryKey) }
     val titles = remember { PageTitleRegistry() }
+    val adaptive = LocalAdaptiveSidebarCoordinator.current
+    DisposableEffect(adaptive, topBar != null) {
+        if (adaptive != null && topBar != null) adaptive.tabHosts++
+        onDispose { if (adaptive != null && topBar != null) adaptive.tabHosts-- }
+    }
+    titles.hasTopTabs = topBar != null && !(adaptive?.usesTabMorph == true && adaptive.motion.expanded)
     SideEffect { titles.update(frame, source, target) }
     val status = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val padding = PaddingValues(start = IosPageHorizontalPadding, top = status + 72.dp, end = IosPageHorizontalPadding)
@@ -216,11 +228,60 @@ fun GlasmioNavigationScaffold(
         GlasmioBackdropProvider(backdrop) {
             val owner = if (frame.phase == GlasmioNavigationPhase.Tracking || frame.phase == GlasmioNavigationPhase.Canceling) source else target
             CompositionLocalProvider(LocalGlassColors provides (owner.colors ?: LocalGlassColors.current)) {
-            GlasmioNavigationHeader(source, target, frame, titles, Modifier.fillMaxWidth().padding(top = status))
+            GlasmioNavigationHeader(source, target, frame, titles, Modifier.fillMaxWidth().glasmioAdaptiveContent().padding(top = status))
+            if (topBar != null) {
+                GlasmioTopNavigationSlot(frame, source, target, titles, status, topBar)
+            }
             }
             bottomBar()
         }
     }
+    }
+}
+
+@Composable
+private fun GlasmioTopNavigationSlot(
+    frame: GlasmioNavigationFrame,
+    source: GlasmioHeaderSpec,
+    target: GlasmioHeaderSpec,
+    titles: PageTitleRegistry,
+    status: Dp,
+    content: @Composable (Dp) -> Unit,
+) {
+    val density = LocalDensity.current
+    val adaptive = LocalAdaptiveSidebarCoordinator.current
+    fun width(key: Any, spec: GlasmioHeaderSpec, leading: Boolean): Int? {
+        val groups = if (leading) spec.leading else spec.trailing
+        if (groups.all { it.actions.isEmpty() }) return 0
+        val entry = titles.entry(key)
+        val measured = (if (leading) entry.leading else entry.trailing) ?: return null
+        return measured.width.takeIf {
+            measured.keys == endpointKeys(groups) && measured.density == density.density && measured.fontScale == density.fontScale
+        }
+    }
+    val sides = listOf(
+        width(frame.fromEntryKey, source, true), width(frame.fromEntryKey, source, false),
+        width(frame.toEntryKey, target, true), width(frame.toEntryKey, target, false),
+    )
+    val ready = sides.all { it != null }
+    var lastSide by remember { mutableStateOf(0.dp) }
+    val side = if (ready) with(density) { sides.filterNotNull().max().toDp() } else lastSide
+    SideEffect { if (ready) lastSide = side }
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = status).height(GlasmioToolbarDefaults.Height)
+        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+        .padding(horizontal = IosPageHorizontalPadding + side + if (side > 0.dp) 8.dp else 0.dp)
+        .graphicsLayer { alpha = if (ready || lastSide > 0.dp) 1f else 0f },
+        contentAlignment = Alignment.Center,
+    ) {
+        val availableWidth = maxWidth
+        if (availableWidth >= 44.dp) {
+            CompositionLocalProvider(LocalGlasmioTabBarPresentation provides
+                (adaptive?.tabPresentation ?: LocalGlasmioTabBarPresentation.current)) {
+                Box(Modifier.onGloballyPositioned { adaptive?.publishTabsBounds(it.boundsInWindow()) }) {
+                    content(availableWidth)
+                }
+            }
+        }
     }
 }
 
@@ -253,12 +314,12 @@ fun GlasmioPageBody(
                 Modifier.matchParentSize()
                     .then(if (backgroundBrush != null) Modifier.background(backgroundBrush) else Modifier.background(backgroundColor)),
             ) { background?.invoke(this) }
-            Box(Modifier.fillMaxSize().scrollEdgeContentFade(progress, headerHeight, headerTop = statusBarHeight)) {
+            Box(Modifier.fillMaxSize().glasmioAdaptiveContent().scrollEdgeContentFade(progress, headerHeight, headerTop = statusBarHeight)) {
                 GlasmioOverscrollHost { content(contentPadding) }
             }
         }
         Box(
-            Modifier.fillMaxWidth().height(headerHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
+            Modifier.fillMaxWidth().glasmioAdaptiveContent().height(headerHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
                 .then(if (appearance.usesBackdrop) {
                     Modifier.progressiveBlurBackdrop(backdrop, progress)
                 } else {
@@ -328,7 +389,9 @@ private fun GlasmioNavigationHeader(
     val density = LocalDensity.current
     // Retained groups are disposed only after their own tracks settle, not when the body ends.
     CompositionLocalProvider(LocalContentColor provides LocalGlassColors.current.content) {
-        Box(modifier.height(62.dp).padding(horizontal = IosPageHorizontalPadding)) {
+        Box(modifier.height(GlasmioToolbarDefaults.Height)
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .padding(horizontal = IosPageHorizontalPadding)) {
             HeaderSide(source.leading, target.leading, owner.leading, retainedLeading, progress, tracking,
                 Modifier.align(Alignment.CenterStart)) { old, new ->
                 titles.publish(frame.fromEntryKey, true, source.leading, old, density)

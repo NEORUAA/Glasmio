@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -39,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -166,6 +168,7 @@ fun GlasmioFloatingSearch(
 
     val navigationInsets = WindowInsets.navigationBars
     val imeInsets = WindowInsets.ime
+    val topTabs = LocalGlasmioNavigationLayout.current == GlasmioNavigationLayout.TopTabs
     val topInsets = WindowInsets.systemBars.only(WindowInsetsSides.Top)
     val bottomControlInsets = remember(navigationInsets, extraBottomSpacing) {
         navigationInsets.only(WindowInsetsSides.Bottom)
@@ -177,11 +180,20 @@ fun GlasmioFloatingSearch(
             imeInsets.add(WindowInsets(bottom = 8.dp + extraBottomSpacing)),
         ).only(WindowInsetsSides.Bottom)
     }
-    val toolbarPadding = remember(searchBottomInsets, density) {
-        searchBottomInsets.asPaddingValues(density)
+    val horizontalInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
+    val toolbarPadding = remember(searchBottomInsets, topInsets, horizontalInsets, density, topTabs) {
+        if (topTabs) topInsets.add(horizontalInsets)
+            .add(WindowInsets(top = GlasmioAdaptiveNavigationDefaults.SearchTopPadding))
+            .asPaddingValues(density)
+        else searchBottomInsets.asPaddingValues(density)
     }
-    val resultsPadding = remember(topInsets, searchBottomInsets, resultsBottomSpacing, density) {
-        topInsets.add(searchBottomInsets)
+    val resultsHeaderInset = if (topTabs) topInsets.asPaddingValues(density).calculateTopPadding() +
+        GlasmioAdaptiveNavigationDefaults.TopBarHeight else 0.dp
+    val resultsPadding = remember(topInsets, searchBottomInsets, resultsBottomSpacing, navigationInsets, imeInsets, horizontalInsets, density, topTabs) {
+        if (topTabs) horizontalInsets.add(navigationInsets.union(imeInsets).only(WindowInsetsSides.Bottom))
+            .add(WindowInsets(top = GlasmioAdaptiveNavigationDefaults.SearchTopPadding + 56.dp - GlasmioAdaptiveNavigationDefaults.TopBarHeight))
+            .asPaddingValues(density)
+        else topInsets.add(searchBottomInsets)
             .add(WindowInsets(bottom = resultsBottomSpacing))
             .asPaddingValues(density)
     }
@@ -197,8 +209,12 @@ fun GlasmioFloatingSearch(
     val usesBackdrop = LocalGlassAppearance.current.usesBackdrop
     val morph = transition ?: rememberGlasmioSearchTransition(active)
     var openingSourceBounds by remember { mutableStateOf(sourceBoundsInWindow) }
-    LaunchedEffect(active) {
-        if (active) openingSourceBounds = sourceBoundsInWindow
+    val currentSourceBounds by rememberUpdatedState(sourceBoundsInWindow)
+    LaunchedEffect(active, topTabs) {
+        if (active) {
+            withFrameNanos { }
+            openingSourceBounds = currentSourceBounds
+        }
     }
     LaunchedEffect(sourceBoundsInWindow) {
         if (active && openingSourceBounds == null) openingSourceBounds = sourceBoundsInWindow
@@ -210,7 +226,7 @@ fun GlasmioFloatingSearch(
         // Record the fading results alone. The toolbar remains a sibling and can never
         // feed its own glass pixels back into the sampled source.
         Box(
-            Modifier.matchParentSize().then(
+            Modifier.matchParentSize().glasmioAdaptiveContent().padding(top = resultsHeaderInset).then(
                 if (usesBackdrop) Modifier.layerBackdrop(resultsBackdrop).trackBackdropPosition(resultsBackdrop)
                 else Modifier,
             ),
@@ -242,6 +258,7 @@ fun GlasmioFloatingSearch(
             placeholder = placeholder,
             autoFocus = active && autoFocus,
             sourceBoundsInWindow = openingSourceBounds,
+            topAligned = topTabs,
         )
     }
 }
@@ -264,6 +281,7 @@ private fun BoxScope.SearchBarLayer(
     placeholder: String,
     autoFocus: Boolean,
     sourceBoundsInWindow: Rect?,
+    topAligned: Boolean,
 ) {
     val value = progress.value
     if (!active && value <= 0f) return
@@ -273,7 +291,8 @@ private fun BoxScope.SearchBarLayer(
         it.width > 0f && it.height > 0f &&
             it.left.isFinite() && it.top.isFinite() && it.right.isFinite() && it.bottom.isFinite()
     }
-    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(toolbarPadding)) {
+    Box(Modifier.align(if (topAligned) Alignment.TopCenter else Alignment.BottomCenter).fillMaxWidth()
+        .glasmioAdaptiveContent().padding(toolbarPadding)) {
         Box(
             Modifier.align(Alignment.BottomEnd)
                 .padding(horizontal = 8.dp)
