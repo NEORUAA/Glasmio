@@ -155,6 +155,7 @@ object GlasmioAdaptiveNavigationDefaults {
  * Owns only the regular-width split. Navigation entries remain mounted when its primary column
  * changes width, and the saved sidebar preference survives rotations without entering the back stack.
  * [content] contains the existing navigation scaffold, floating search and application overlays.
+ * [overlay] covers both columns without changing their presentation or foreground insets.
  */
 @Composable
 fun GlasmioAdaptiveNavigationScaffold(
@@ -165,6 +166,7 @@ fun GlasmioAdaptiveNavigationScaffold(
     sidebarEnabled: Boolean = true,
     sidebarWidth: Dp = GlasmioAdaptiveNavigationDefaults.SidebarWidth,
     sidebarTransition: GlasmioSidebarTransition = GlasmioSidebarTransition.Automatic,
+    overlay: @Composable BoxScope.() -> Unit = {},
     content: @Composable BoxScope.() -> Unit,
 ) {
     val open = layout == GlasmioNavigationLayout.TopTabs && sidebarEnabled && state.sidebarExpanded
@@ -273,6 +275,9 @@ fun GlasmioAdaptiveNavigationScaffold(
                         { native.bounds }, { native.cornerRadius }, { native.sidebarPreviewProgress })
                 }
             }
+            // Keep page < sidebar < overlay priority without dismissing the pane beneath a player.
+            BackHandler(open) { state.sidebarExpanded = false }
+            Box(Modifier.fillMaxSize(), content = overlay)
         }) { measurables, constraints ->
             val width = constraints.maxWidth
             val height = constraints.maxHeight
@@ -285,6 +290,7 @@ fun GlasmioAdaptiveNavigationScaffold(
             val scrim = measurables[1].measure(Constraints.fixed(if (overlay && p > 0f) width else 0, height))
             val primary = measurables[2].measure(Constraints.fixed(paneWidth, height))
             val morph = measurables[3].measure(Constraints.fixed(width, height))
+            val foreground = measurables[4].measure(Constraints.fixed(width, height))
             layout(width, height) {
                 body.placeRelative(0, 0)
                 if (overlay && p > 0f) scrim.placeRelative(0, 0)
@@ -292,8 +298,8 @@ fun GlasmioAdaptiveNavigationScaffold(
                     if (native.expanded || native.running) primary.placeRelative(0, 0)
                 } else if (p > 0f) primary.placeRelative(((p - 1f) * paneWidth).roundToInt(), 0)
                 morph.place(0, 0)
+                foreground.place(0, 0)
             }
         }
     }
-    BackHandler(open) { state.sidebarExpanded = false }
 }

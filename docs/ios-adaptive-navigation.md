@@ -24,6 +24,12 @@ content, shared buttons, page titles and floating controls consume
 `LocalGlasmioSidebarInsets`; external controls can use `glasmioAdaptiveContent()`.
 The sidebar retains its physical leading safe area.
 
+Full-screen presentations use the adaptive scaffold's `overlay` slot. It draws
+above both columns while preserving sidebar state and page width underneath.
+The slot inherits the foreground insets for collapsed accessories and remains
+outside the page backdrop capture. Overlay Back handlers take precedence over
+the sidebar fallback.
+
 Animation values are read during layout and drawing. Endpoint foregrounds use
 Compose-owned graphics layers; preview padding wrappers retain those layers
 without recording their subtrees on each spring frame. Expanded-state local
