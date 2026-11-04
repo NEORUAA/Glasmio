@@ -33,8 +33,39 @@ object LiquidMenuNativeField {
         width: Int, height: Int, band: Float, rgba: FloatArray,
     ): Boolean = available && buildContactNative(edges, originX, originY, step, width, height, band, rgba)
 
-    fun buildNavigationPath(geometry: FloatArray, path: android.graphics.Path): Boolean =
-        available && buildNavigationPathNative(geometry, path)
+    /** Reused contour buffer; grown when a contour needs more room. */
+    private var navigationContours = FloatArray(2048)
+
+    /**
+     * Appends the native navigation union contours to [path]. The native side returns each closed
+     * contour as `[n, x0, y0, ..., x(n-1), y(n-1)]` instead of calling back into the Path per vertex.
+     */
+    fun buildNavigationPath(geometry: FloatArray, path: android.graphics.Path): Boolean {
+        if (!available) return false
+        synchronized(this) {
+            var count = buildNavigationPathNative(geometry, navigationContours)
+            if (count < 0) {
+                navigationContours = FloatArray(-count)
+                count = buildNavigationPathNative(geometry, navigationContours)
+            }
+            if (count <= 0) return false
+            appendContours(path, navigationContours, count)
+            return true
+        }
+    }
+
+    private fun appendContours(path: android.graphics.Path, contours: FloatArray, count: Int) {
+        var index = 0
+        while (index < count) {
+            val points = contours[index].toInt()
+            path.moveTo(contours[index + 1], contours[index + 2])
+            for (point in 1 until points) {
+                path.lineTo(contours[index + 1 + 2 * point], contours[index + 2 + 2 * point])
+            }
+            path.close()
+            index += 1 + 2 * points
+        }
+    }
 
     fun release() {
         if (available) releaseNative()
@@ -54,7 +85,7 @@ object LiquidMenuNativeField {
         width: Int, height: Int, band: Float, rgba: FloatArray,
     ): Boolean
 
-    private external fun buildNavigationPathNative(geometry: FloatArray, path: android.graphics.Path): Boolean
+    private external fun buildNavigationPathNative(geometry: FloatArray, output: FloatArray): Int
 
     private external fun releaseNative()
 }

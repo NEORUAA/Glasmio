@@ -124,6 +124,165 @@ struct RoundedField {
     }
 };
 
+#if defined(__aarch64__)
+// Lane-wise float operations for 2- and 4-lane NEON vectors. Comparisons and selection reproduce
+// the scalar std::min/max/clamp tie and NaN rules, so each lane is bit-identical to the scalar code.
+template <typename V> struct Lanes;
+template <> struct Lanes<float32x2_t> {
+    using V = float32x2_t;
+    using M = uint32x2_t;
+    static V dup(float v) { return vdup_n_f32(v); }
+    static V add(V a, V b) { return vadd_f32(a, b); }
+    static V sub(V a, V b) { return vsub_f32(a, b); }
+    static V mul(V a, V b) { return vmul_f32(a, b); }
+    static V div(V a, V b) { return vdiv_f32(a, b); }
+    static V sqrt(V a) { return vsqrt_f32(a); }
+    static V abs(V a) { return vabs_f32(a); }
+    static V neg(V a) { return vneg_f32(a); }
+    static M lt(V a, V b) { return vclt_f32(a, b); }
+    static M gt(V a, V b) { return vcgt_f32(a, b); }
+    static M le(V a, V b) { return vcle_f32(a, b); }
+    static V select(M m, V a, V b) { return vbsl_f32(m, a, b); }
+};
+template <> struct Lanes<float32x4_t> {
+    using V = float32x4_t;
+    using M = uint32x4_t;
+    static V dup(float v) { return vdupq_n_f32(v); }
+    static V add(V a, V b) { return vaddq_f32(a, b); }
+    static V sub(V a, V b) { return vsubq_f32(a, b); }
+    static V mul(V a, V b) { return vmulq_f32(a, b); }
+    static V div(V a, V b) { return vdivq_f32(a, b); }
+    static V sqrt(V a) { return vsqrtq_f32(a); }
+    static V abs(V a) { return vabsq_f32(a); }
+    static V neg(V a) { return vnegq_f32(a); }
+    static M lt(V a, V b) { return vcltq_f32(a, b); }
+    static M gt(V a, V b) { return vcgtq_f32(a, b); }
+    static M le(V a, V b) { return vcleq_f32(a, b); }
+    static V select(M m, V a, V b) { return vbslq_f32(m, a, b); }
+};
+
+// RoundedField::distance and normal(x, y, 0) over SIMD lanes. Lanes hold either different fields
+// at one point (FieldLanes<float32x2_t>::pair) or one field at different points
+// (FieldLanes<float32x4_t>::broadcast). Every lane repeats the scalar operations in order.
+template <typename V> struct FieldLanes {
+    using L = Lanes<V>;
+    using M = typename L::M;
+    V cx, cy, radius, inverseX, inverseY, halfWidth, halfHeight;
+    V expanded, curvatureX, curvatureY, baseRadius;
+    M circular;
+    bool anyCircular, allCircular;
+
+    // std::min(a, b) is (b < a) ? b : a; std::max(a, b) is (a < b) ? b : a.
+    static V minOf(V a, V b) { return L::select(L::lt(b, a), b, a); }
+    static V maxOf(V a, V b) { return L::select(L::lt(a, b), b, a); }
+    // std::clamp(v, 0, 1) is (v < 0) ? 0 : (1 < v) ? 1 : v.
+    static V saturateLanes(V v) {
+        const V zero = L::dup(0.0f), one = L::dup(1.0f);
+        return L::select(L::lt(v, zero), zero, L::select(L::lt(one, v), one, v));
+    }
+
+    V distance(V x, V y) const {
+        const V zero = L::dup(0.0f), one = L::dup(1.0f);
+        const V qx = L::sub(L::abs(L::mul(L::sub(x, cx), inverseX)), halfWidth);
+        const V qy = L::sub(L::abs(L::mul(L::sub(y, cy), inverseY)), halfHeight);
+        const V bx = L::add(qx, baseRadius), by = L::add(qy, baseRadius);
+        const V interior = minOf(maxOf(bx, by), zero);
+        V round = zero;
+        if (anyCircular) {
+            const V dx = maxOf(bx, zero), dy = maxOf(by, zero);
+            round = L::sub(L::add(interior, L::sqrt(L::add(L::mul(dx, dx), L::mul(dy, dy)))), radius);
+            if (allCircular) return round;
+        }
+        const V ux = L::div(L::add(qx, expanded), expanded);
+        const V uy = L::div(L::add(qy, expanded), expanded);
+        const V zx = maxOf(ux, zero), zy = maxOf(uy, zero);
+        const V maximum = maxOf(zx, zy);
+        const V t = L::select(L::gt(maximum, zero), L::div(minOf(zx, zy), maximum), zero);
+        const V length = L::sqrt(L::add(L::mul(zx, zx), L::mul(zy, zy)));
+        V polynomial = L::mul(L::dup(-0.9260540008544922f), t);
+        polynomial = L::mul(L::add(polynomial, L::dup(3.1560099124908447f)), t);
+        polynomial = L::mul(L::sub(polynomial, L::dup(3.6412200927734375f)), t);
+        polynomial = L::mul(L::add(polynomial, L::dup(1.268030047416687f)), t);
+        polynomial = L::mul(L::mul(L::add(polynomial, L::dup(0.2685309946537018f)), t), t);
+        const V continuous = L::sub(L::add(length, one),
+            L::div(one, L::sub(one, L::mul(polynomial, minOf(length, one)))));
+        const V ax = maxOf(L::sub(L::mul(L::dup(kExpansion), ux), L::dup(kAdjustment)), zero);
+        const V ay = maxOf(L::sub(L::mul(L::dup(kExpansion), uy), L::dup(kAdjustment)), zero);
+        const V correction = L::add(L::sub(L::dup(0.3458344340324402f), continuous),
+            L::mul(L::dup(0.6541655659675598f), L::sqrt(L::add(L::mul(ax, ax), L::mul(ay, ay)))));
+        const V sign = L::select(L::lt(zx, zy), one, L::dup(-1.0f));
+        const V weight = saturateLanes(L::add(L::mul(sign, L::sub(t, one)), L::dup(0.5f)));
+        const V result = L::add(interior, L::mul(expanded, L::add(L::sub(continuous, one),
+            L::mul(correction, L::add(curvatureX, L::mul(L::sub(curvatureY, curvatureX), weight))))));
+        return anyCircular ? L::select(circular, round, result) : result;
+    }
+
+    void normal(V x, V y, V &outX, V &outY) const {
+        const V zero = L::dup(0.0f), one = L::dup(1.0f), epsilon = L::dup(0.000001f);
+        const V lx = L::mul(L::sub(x, cx), inverseX);
+        const V ly = L::mul(L::sub(y, cy), inverseY);
+        const V qx = L::add(L::sub(L::abs(lx), halfWidth), baseRadius);
+        const V qy = L::add(L::sub(L::abs(ly), halfHeight), baseRadius);
+        V nx = maxOf(qx, zero), ny = maxOf(qy, zero);
+        const V cornerLength = L::sqrt(L::add(L::mul(nx, nx), L::mul(ny, ny)));
+        const M corner = L::gt(cornerLength, epsilon);
+        const M horizontal = L::gt(qx, qy);
+        nx = L::select(corner, L::div(nx, cornerLength), L::select(horizontal, one, zero));
+        ny = L::select(corner, L::div(ny, cornerLength), L::select(horizontal, zero, one));
+        nx = L::select(L::lt(lx, zero), L::neg(nx), nx);
+        ny = L::select(L::lt(ly, zero), L::neg(ny), ny);
+        const V length = L::sqrt(L::add(L::mul(nx, nx), L::mul(ny, ny)));
+        const M degenerate = L::le(length, epsilon);
+        outX = L::select(degenerate, zero, L::mul(L::div(nx, length), inverseX));
+        outY = L::select(degenerate, zero, L::mul(L::div(ny, length), inverseY));
+    }
+};
+
+// Lane 0 holds [a], lane 1 holds [b].
+inline FieldLanes<float32x2_t> fieldPair(const RoundedField &a, const RoundedField &b) {
+    auto pair = [](float u, float v) {
+        const float lanes[2] = {u, v};
+        return vld1_f32(lanes);
+    };
+    FieldLanes<float32x2_t> f;
+    f.cx = pair(a.cx, b.cx);
+    f.cy = pair(a.cy, b.cy);
+    f.radius = pair(a.radius, b.radius);
+    f.inverseX = pair(a.inverseX, b.inverseX);
+    f.inverseY = pair(a.inverseY, b.inverseY);
+    f.halfWidth = pair(a.halfWidth, b.halfWidth);
+    f.halfHeight = pair(a.halfHeight, b.halfHeight);
+    f.expanded = pair(a.expanded, b.expanded);
+    f.curvatureX = pair(a.curvatureX, b.curvatureX);
+    f.curvatureY = pair(a.curvatureY, b.curvatureY);
+    f.baseRadius = pair(a.baseRadius, b.baseRadius);
+    const uint32_t flags[2] = {a.circular ? ~0u : 0u, b.circular ? ~0u : 0u};
+    f.circular = vld1_u32(flags);
+    f.anyCircular = a.circular || b.circular;
+    f.allCircular = a.circular && b.circular;
+    return f;
+}
+
+// All four lanes hold [a].
+inline FieldLanes<float32x4_t> fieldBroadcast(const RoundedField &a) {
+    FieldLanes<float32x4_t> f;
+    f.cx = vdupq_n_f32(a.cx);
+    f.cy = vdupq_n_f32(a.cy);
+    f.radius = vdupq_n_f32(a.radius);
+    f.inverseX = vdupq_n_f32(a.inverseX);
+    f.inverseY = vdupq_n_f32(a.inverseY);
+    f.halfWidth = vdupq_n_f32(a.halfWidth);
+    f.halfHeight = vdupq_n_f32(a.halfHeight);
+    f.expanded = vdupq_n_f32(a.expanded);
+    f.curvatureX = vdupq_n_f32(a.curvatureX);
+    f.curvatureY = vdupq_n_f32(a.curvatureY);
+    f.baseRadius = vdupq_n_f32(a.baseRadius);
+    f.circular = vdupq_n_u32(a.circular ? ~0u : 0u);
+    f.anyCircular = f.allCircular = a.circular;
+    return f;
+}
+#endif
+
 Sample sample(const RoundedField &incoming, const RoundedField &outgoing, bool hasOutgoing, float smoothing,
               float x, float y) {
     const float a = incoming.distance(x, y);
@@ -432,27 +591,255 @@ inline uint64_t navigationFloatBits(float value) {
     return bits;
 }
 
+// Upper bound of the rounding noise of the navigation union field near its zero, in pixels of
+// field value (observed noise is about 6e-5 for coordinates up to ~1100).
+constexpr float kNavigationFieldNoise = 2e-4f;
+// Distance from a search endpoint within which a crossing may be a graze (see RootSearch).
+constexpr float kNavigationGrazeZone = 1.0f;
+
+// Produces exactly the result of a 20-step bisection of [outside, inside] (the field is positive
+// outside the contour), with far fewer field evaluations. It runs as a resumable state machine:
+// start() and resume() return true while [probe] needs a field value, and false once [result] is
+// final, so several searches can share vectorized field evaluations.
+//
+// A safeguarded Illinois iteration first encloses the sign change in a bracket of evaluated
+// points [lo: f > 0, hi: f <= 0] no wider than the bisection's final interval. The bisection is
+// then replayed step by step: along the monotonic search ray, a midpoint at or outside lo is
+// positive and one at or inside hi is not, so only midpoints within the rounding-noise band around
+// the bracket are evaluated. Every midpoint, decision and the result are therefore identical to
+// the plain bisection. An optional hint (an adjacent contour chord) first tries a narrow enclosing
+// window; it only reduces the number of evaluations.
+//
+// Inference requires a ray with a single crossing (singleCrossing); a window bracket also needs
+// the inside endpoint to be inside the contour, which insideIsInterior may assert in advance.
+// Otherwise, and whenever the evaluated values contradict monotonicity, the plain bisection runs.
+struct RootSearch {
+    static constexpr int kBisectionSteps = 20;
+    enum class Phase : uint8_t { WindowA, WindowB, Lo, Hi, Inside, Illinois, Replay, Bisect };
+
+    float probe = 0.0f, result = 0.0f;
+
+    bool start(float outsideValue, float insideValue, bool singleCrossing, bool insideIsInterior,
+               float hint = std::numeric_limits<float>::quiet_NaN()) {
+        outside = outsideValue;
+        inside = insideValue;
+        interior = insideIsInterior;
+        tolerance = std::abs(inside - outside) * (1.0f / float(1 << kBisectionSteps));
+        lo = outside;
+        hi = inside;
+        flo = fhi = 0.0f;
+        windowLo = windowHi = false;
+        if (!singleCrossing) return beginBisect();
+        if (std::isfinite(hint) && tolerance > 0.0f) {
+            const float window = std::copysign(0.5f, inside - outside);
+            a = hint - window;
+            b = hint + window;
+            if ((a - outside) * (inside - a) > 0.0f && (b - outside) * (inside - b) > 0.0f)
+                return request(Phase::WindowA, a);
+        }
+        return afterWindow();
+    }
+
+    bool resume(float value) {
+        switch (phase) {
+        case Phase::WindowA:
+            if (value > 0.0f) {
+                lo = a; flo = value; windowLo = true;
+                return request(Phase::WindowB, b);
+            }
+            hi = a; fhi = value; windowHi = true;
+            return afterWindow();
+        case Phase::WindowB:
+            if (value <= 0.0f) { hi = b; fhi = value; windowHi = true; }
+            else { lo = b; flo = value; }
+            return afterWindow();
+        case Phase::Lo:
+            flo = value;
+            return afterLo();
+        case Phase::Hi:
+            fhi = value;
+            return afterHi();
+        case Phase::Inside:
+            return decide(value <= 0.0f);
+        case Phase::Illinois:
+            if (value > 0.0f) {
+                lo = probe; flo = value;
+                if (side == 1) fhi *= 0.5f;
+                side = 1;
+            } else {
+                hi = probe; fhi = value;
+                if (side == -1) flo *= 0.5f;
+                side = -1;
+            }
+            ++iteration;
+            return illinois();
+        case Phase::Replay: {
+            const bool positive = value > 0.0f;
+            if (positive) {
+                if (position >= alongHi) return beginBisect();
+                if (position > alongLo) { lo = probe; alongLo = position; }
+                l = probe;
+            } else {
+                if (position <= alongLo) return beginBisect();
+                if (position < alongHi) { hi = probe; alongHi = position; }
+                h = probe;
+            }
+            ++step;
+            return replay();
+        }
+        case Phase::Bisect:
+            if (value > 0.0f) l = probe; else h = probe;
+            ++step;
+            return bisect();
+        }
+        return false;
+    }
+
+private:
+    float outside = 0.0f, inside = 0.0f, tolerance = 0.0f;
+    float lo = 0.0f, hi = 0.0f, flo = 0.0f, fhi = 0.0f, a = 0.0f, b = 0.0f;
+    float margin = 0.0f, direction = 0.0f, band = 0.0f, alongLo = 0.0f, alongHi = 0.0f;
+    float l = 0.0f, h = 0.0f, position = 0.0f;
+    bool interior = false, windowLo = false, windowHi = false;
+    int side = 0, iteration = 0, step = 0;
+    Phase phase = Phase::Bisect;
+
+    bool request(Phase next, float at) {
+        phase = next;
+        probe = at;
+        return true;
+    }
+
+    bool afterWindow() { return windowLo ? afterLo() : request(Phase::Lo, lo); }
+    bool afterLo() { return windowHi ? afterHi() : request(Phase::Hi, hi); }
+    bool afterHi() {
+        // The outside endpoint lies beyond the union's guard and is always positive. A window
+        // bracket still has to confirm that the inside endpoint is inside the contour (a column
+        // between disconnected capsules has no crossing before it).
+        if (windowHi && !interior) return request(Phase::Inside, inside);
+        return decide(true);
+    }
+
+    bool decide(bool endpointsOrdered) {
+        if (!(endpointsOrdered && flo > 0.0f && fhi <= 0.0f && tolerance > 0.0f)) return beginBisect();
+        // Rounding makes the field non-monotonic within roughly 1e-4 of its zero, where the
+        // plain bisection's decisions are decided by that rounding. Midpoints are inferred only
+        // when they lie a noise margin beyond the evaluated bracket, measured with the slope of
+        // the initial (wide) bracket; every other midpoint is evaluated exactly as before.
+        const float span = std::abs(hi - lo);
+        const float slope = span > 0.0f ? (flo - fhi) / span : 0.0f;
+        margin = std::max(tolerance, slope > 0.0f ? kNavigationFieldNoise / slope : std::abs(inside - outside));
+        side = 0;
+        iteration = 0;
+        return illinois();
+    }
+
+    bool illinois() {
+        if (iteration < 12 && std::abs(hi - lo) > tolerance) {
+            float x = lo + flo * (hi - lo) / (flo - fhi);
+            // Keep every probe at least half the tolerance inside the bracket, so that a
+            // converged estimate is enclosed from both sides on the following steps.
+            const float nudge = std::copysign(tolerance * 0.5f, hi - lo);
+            if (!(std::abs(x - lo) >= tolerance * 0.5f)) x = lo + nudge;
+            if (!(std::abs(hi - x) >= tolerance * 0.5f)) x = hi - nudge;
+            if (!((x - lo) * (hi - x) > 0.0f)) x = (lo + hi) * 0.5f;
+            if (!(x == lo || x == hi)) return request(Phase::Illinois, x);
+        }
+        return beginReplay();
+    }
+
+    bool beginReplay() {
+        // Near a search endpoint the ray can graze the contour (a capsule tip on the centre
+        // line), where the field stays within rounding of zero over a long stretch and is not
+        // monotonic. Such columns are rare and keep the plain bisection.
+        if (std::abs(hi - inside) <= kNavigationGrazeZone || std::abs(lo - outside) <= kNavigationGrazeZone)
+            return beginBisect();
+        // Positions are measured along the ray (increasing towards inside). An inverted bracket,
+        // or a later evaluation that contradicts it, means the field is not monotonic here.
+        direction = inside - outside;
+        band = margin * std::abs(direction);
+        alongLo = (lo - outside) * direction;
+        alongHi = (hi - outside) * direction;
+        if (alongHi <= alongLo) return beginBisect();
+        l = outside;
+        h = inside;
+        step = 0;
+        return replay();
+    }
+
+    bool replay() {
+        while (step < kBisectionSteps) {
+            const float mid = (l + h) * 0.5f;
+            const float along = (mid - outside) * direction;
+            bool positive;
+            if (mid == lo) positive = true;
+            else if (mid == hi) positive = false;
+            else if (along <= alongLo - band) positive = true;
+            else if (along >= alongHi + band) positive = false;
+            else {
+                position = along;
+                return request(Phase::Replay, mid);
+            }
+            if (positive) l = mid; else h = mid;
+            ++step;
+        }
+        result = (l + h) * 0.5f;
+        return false;
+    }
+
+    bool beginBisect() {
+        l = outside;
+        h = inside;
+        step = 0;
+        return bisect();
+    }
+
+    bool bisect() {
+        if (step < kBisectionSteps) return request(Phase::Bisect, (l + h) * 0.5f);
+        result = (l + h) * 0.5f;
+        return false;
+    }
+};
+
 struct NavigationUnionPath {
-    JNIEnv *env;
-    jobject path;
-    jmethodID moveTo, lineTo, close;
+    // Closed contours, each written as [n, x0, y0, ..., x(n-1), y(n-1)]: moveTo the first point,
+    // lineTo the others, then close. Kotlin replays them into the Path.
+    std::vector<float> contours;
     RoundedField a, b;
+#if defined(__aarch64__)
+    FieldLanes<float32x2_t> fields;
+    FieldLanes<float32x4_t> fieldA, fieldB;
+#endif
     bool hasSecond;
     float smoothness;
     const float *ag;
     const float *bg;
     float centerY, guard, left, top, right, bottom;
-    std::unordered_map<uint64_t, float> edgeRoots;
-    std::vector<std::pair<float, float>> points;
+    // With a common vertical centre, every column of either capsule is an interval around
+    // centerY, so each search ray towards centerY crosses the union's contour at most once.
+    bool singleCrossingRays;
 
-    NavigationUnionPath(JNIEnv *env, jobject path, const float *geometry)
-        : env(env), path(path), a(geometry, true), b(geometry + 6, true), hasSecond(geometry[13] != 0.0f),
-          smoothness(geometry[12]), ag(geometry), bg(geometry + 6) {
-        jclass pathClass = env->GetObjectClass(path);
-        moveTo = env->GetMethodID(pathClass, "moveTo", "(FF)V");
-        lineTo = env->GetMethodID(pathClass, "lineTo", "(FF)V");
-        close = env->GetMethodID(pathClass, "close", "()V");
-        env->DeleteLocalRef(pathClass);
+    // One contour root on a vertical ray: y on column x between [outer] and centerY.
+    struct RootRequest {
+        float x, outer, hint;
+        bool interior;
+    };
+    struct Segment {
+        float x0, y0, x1, y1;
+        int depth;
+        bool leaf;
+    };
+    std::vector<RootRequest> requests;
+    std::vector<float> roots;
+    std::vector<Segment> segments[2], refined;
+    std::vector<int> pending;
+
+    explicit NavigationUnionPath(const float *geometry)
+        : a(geometry, true), b(geometry + 6, true),
+#if defined(__aarch64__)
+          fields(fieldPair(a, b)), fieldA(fieldBroadcast(a)), fieldB(fieldBroadcast(b)),
+#endif
+          hasSecond(geometry[13] != 0.0f), smoothness(geometry[12]), ag(geometry), bg(geometry + 6) {
         left = hasSecond ? std::min(ag[0], bg[0]) : ag[0];
         top = hasSecond ? std::min(ag[1], bg[1]) : ag[1];
         right = hasSecond ? std::max(ag[2], bg[2]) : ag[2];
@@ -460,60 +847,223 @@ struct NavigationUnionPath {
         centerY = hasSecond ? ((ag[1] + ag[3]) / 2.0f + (bg[1] + bg[3]) / 2.0f) * 0.5f
                             : (ag[1] + ag[3]) / 2.0f;
         guard = smoothness * 0.25f + 1.0f;
+        singleCrossingRays = !hasSecond ||
+            std::abs((ag[1] + ag[3]) * 0.5f - (bg[1] + bg[3]) * 0.5f) <= 1e-3f;
         top -= guard;
         bottom += guard;
     }
 
-    float distance(float x, float y) const {
-        if (!hasSecond) return a.distance(x, y);
-        const float ad = a.distance(x, y);
-        const float bd = b.distance(x, y);
-        if (std::abs(ad - bd) >= smoothness) {
-            // The mixed weight is saturated even at the maximum possible radius.
-            // Preserve the original saturated arithmetic without evaluating normals.
-            return ad <= bd ? bd + (ad - bd) : bd;
-        }
-        const Normal an = a.normal(x, y, 0.0f), bn = b.normal(x, y, 0.0f);
+    float saturatedUnion(float ad, float bd) const {
+        // The mixed weight is saturated even at the maximum possible radius.
+        // Preserve the original saturated arithmetic without evaluating normals.
+        return ad <= bd ? bd + (ad - bd) : bd;
+    }
+
+    float blendedUnion(float ad, float bd, Normal an, Normal bn) const {
         const float radius = smoothness * saturate(0.5f - 0.5f * (an.x * bn.x + an.y * bn.y));
         const float h = radius <= 0.000001f ? (ad < bd ? 1.0f : 0.0f)
                                            : saturate(0.5f + 0.5f * (bd - ad) / radius);
         return bd + (ad - bd) * h - radius * h * (1.0f - h);
     }
 
+    float distance(float x, float y) const {
+        if (!hasSecond) return a.distance(x, y);
+#if defined(__aarch64__)
+        // Both capsule fields in one pair of NEON lanes, bit-identical to the scalar calls.
+        const float32x2_t both = fields.distance(vdup_n_f32(x), vdup_n_f32(y));
+        const float ad = vget_lane_f32(both, 0);
+        const float bd = vget_lane_f32(both, 1);
+#else
+        const float ad = a.distance(x, y);
+        const float bd = b.distance(x, y);
+#endif
+        if (std::abs(ad - bd) >= smoothness) return saturatedUnion(ad, bd);
+#if defined(__aarch64__)
+        float32x2_t normalX, normalY;
+        fields.normal(vdup_n_f32(x), vdup_n_f32(y), normalX, normalY);
+        const Normal an{vget_lane_f32(normalX, 0), vget_lane_f32(normalY, 0)};
+        const Normal bn{vget_lane_f32(normalX, 1), vget_lane_f32(normalY, 1)};
+#else
+        const Normal an = a.normal(x, y, 0.0f), bn = b.normal(x, y, 0.0f);
+#endif
+        return blendedUnion(ad, bd, an, bn);
+    }
+
+#if defined(__aarch64__)
+    // distance() at four points, each lane bit-identical to the scalar call (saturatedUnion and
+    // blendedUnion repeated lane-wise).
+    float32x4_t distance4(float32x4_t px, float32x4_t py) const {
+        const float32x4_t ad = fieldA.distance(px, py);
+        if (!hasSecond) return ad;
+        const float32x4_t bd = fieldB.distance(px, py);
+        const float32x4_t zero = vdupq_n_f32(0.0f), one = vdupq_n_f32(1.0f), half = vdupq_n_f32(0.5f);
+        const float32x4_t difference = vsubq_f32(ad, bd);
+        const uint32x4_t saturated = vcgeq_f32(vabsq_f32(difference), vdupq_n_f32(smoothness));
+        const float32x4_t saturatedValue = vbslq_f32(vcleq_f32(ad, bd), vaddq_f32(bd, difference), bd);
+        if (vminvq_u32(saturated) != 0u) return saturatedValue;
+        float32x4_t anx, any, bnx, bny;
+        fieldA.normal(px, py, anx, any);
+        fieldB.normal(px, py, bnx, bny);
+        const float32x4_t dot = vaddq_f32(vmulq_f32(anx, bnx), vmulq_f32(any, bny));
+        const float32x4_t radius = vmulq_f32(vdupq_n_f32(smoothness),
+            FieldLanes<float32x4_t>::saturateLanes(vsubq_f32(half, vmulq_f32(half, dot))));
+        const float32x4_t nearest = vbslq_f32(vcltq_f32(ad, bd), one, zero);
+        const float32x4_t smooth = FieldLanes<float32x4_t>::saturateLanes(
+            vaddq_f32(half, vdivq_f32(vmulq_f32(half, vsubq_f32(bd, ad)), radius)));
+        const float32x4_t weight = vbslq_f32(vcleq_f32(radius, vdupq_n_f32(0.000001f)), nearest, smooth);
+        const float32x4_t blended = vsubq_f32(vaddq_f32(bd, vmulq_f32(difference, weight)),
+                                              vmulq_f32(vmulq_f32(radius, weight), vsubq_f32(one, weight)));
+        return vbslq_f32(saturated, saturatedValue, blended);
+    }
+#endif
+
+    template <typename Field>
+    static float findRoot(float outside, float inside, Field &&field, bool singleCrossing, bool interior,
+                          float hint = std::numeric_limits<float>::quiet_NaN()) {
+        RootSearch search;
+        if (search.start(outside, inside, singleCrossing, interior, hint)) {
+            while (search.resume(field(search.probe))) {
+            }
+        }
+        return search.result;
+    }
+
     float rootX(float outside, float inside) {
-        float lo = outside, hi = inside;
-        for (int i = 0; i < 20; ++i) {
-            const float mid = (lo + hi) * 0.5f;
-            if (distance(mid, centerY) > 0.0f) lo = mid; else hi = mid;
-        }
-        return (lo + hi) * 0.5f;
+        // The inside endpoint is a capsule centre on the centre line.
+        return findRoot(outside, inside, [this](float x) { return distance(x, centerY); },
+                        singleCrossingRays, true);
     }
 
-    float edgeY(float x, float outer) {
-        const uint64_t key = (navigationFloatBits(x) << 32) | navigationFloatBits(outer);
-        const auto cached = edgeRoots.find(key);
-        if (cached != edgeRoots.end()) return cached->second;
-        float lo = outer, hi = centerY;
-        for (int i = 0; i < 20; ++i) {
-            const float mid = (lo + hi) * 0.5f;
-            if (distance(x, mid) > 0.0f) lo = mid; else hi = mid;
-        }
-        const float result = (lo + hi) * 0.5f;
-        edgeRoots.emplace(key, result);
-        return result;
+    // On a common centre line, a column within either capsule's horizontal span (by one pixel)
+    // meets centerY well inside that capsule, and the union is never further out than it.
+    bool centreInside(float x) const {
+        return singleCrossingRays && ((x > ag[0] + 1.0f && x < ag[2] - 1.0f) ||
+            (hasSecond && x > bg[0] + 1.0f && x < bg[2] - 1.0f));
     }
 
-    void subdivide(float x0, float y0, float x1, float y1, float outer, int depth) {
-        const float xm = (x0 + x1) * 0.5f;
-        const float ym = edgeY(xm, outer);
-        const bool refine = std::abs(x1 - x0) > 8.0f || std::abs(ym - (y0 + y1) * 0.5f) > 0.125f ||
-            std::abs(edgeY(x0 + (x1 - x0) * 0.25f, outer) - (y0 + (y1 - y0) * 0.25f)) > 0.125f ||
-            std::abs(edgeY(x0 + (x1 - x0) * 0.75f, outer) - (y0 + (y1 - y0) * 0.75f)) > 0.125f;
-        if (depth < 16 && refine) {
-            subdivide(x0, y0, xm, ym, outer, depth + 1);
-            subdivide(xm, ym, x1, y1, outer, depth + 1);
-        } else {
-            points.emplace_back(x1, y1);
+    void request(float x, float outer, float hint) {
+        requests.push_back({x, outer, hint, centreInside(x)});
+    }
+
+    // Solves every pending request into [roots] (same order). Each root is the exact bisection
+    // result, so the evaluation order is free: on AArch64 four searches advance together and
+    // share one four-lane field evaluation, overlapping their dependency chains.
+    void solveRequests() {
+        const int count = static_cast<int>(requests.size());
+        roots.resize(count);
+#if defined(__aarch64__)
+        struct Lane {
+            RootSearch search;
+            float x = 0.0f;
+            int index = -1;
+        };
+        Lane lanes[4];
+        int next = 0;
+        auto fill = [&](Lane &lane) {
+            while (next < count) {
+                const RootRequest &r = requests[next];
+                lane.index = next++;
+                lane.x = r.x;
+                if (lane.search.start(r.outer, centerY, singleCrossingRays, r.interior, r.hint)) return;
+                roots[lane.index] = lane.search.result;
+            }
+            lane.index = -1;
+        };
+        for (Lane &lane : lanes) fill(lane);
+        float xs[4], ys[4], values[4];
+        for (;;) {
+            int live = -1;
+            for (int k = 0; k < 4; ++k) if (lanes[k].index >= 0) { live = k; break; }
+            if (live < 0) break;
+            for (int k = 0; k < 4; ++k) {
+                const Lane &lane = lanes[k].index >= 0 ? lanes[k] : lanes[live];
+                xs[k] = lane.x;
+                ys[k] = lane.search.probe;
+            }
+            vst1q_f32(values, distance4(vld1q_f32(xs), vld1q_f32(ys)));
+            for (int k = 0; k < 4; ++k) {
+                Lane &lane = lanes[k];
+                if (lane.index < 0) continue;
+                if (!lane.search.resume(values[k])) {
+                    roots[lane.index] = lane.search.result;
+                    fill(lane);
+                }
+            }
+        }
+#else
+        for (int i = 0; i < count; ++i) {
+            const RootRequest &r = requests[i];
+            const float x = r.x;
+            roots[i] = findRoot(r.outer, centerY, [this, x](float y) { return distance(x, y); },
+                                singleCrossingRays, r.interior, r.hint);
+        }
+#endif
+        requests.clear();
+    }
+
+    // Adaptive subdivision of both edges, breadth first: every level resolves the midpoints of
+    // all open segments together, then the quarter points of the segments that still need them,
+    // exactly as the depth-first rule does (mid, then quarter, then three-quarter, short-circuit).
+    // Each segment is replaced in place by its halves, so the leaves keep the depth-first order.
+    void subdivideAll(const float *outer) {
+        for (;;) {
+            pending.clear();
+            for (int pass = 0; pass < 2; ++pass)
+                for (int i = 0; i < static_cast<int>(segments[pass].size()); ++i)
+                    if (!segments[pass][i].leaf) pending.push_back(pass * (1 << 24) + i);
+            if (pending.empty()) return;
+            auto at = [this](int id) -> Segment & { return segments[id >> 24][id & ((1 << 24) - 1)]; };
+            const int count = static_cast<int>(pending.size());
+            std::vector<float> mids(count);
+            std::vector<char> refine(count, 0);
+            for (int k = 0; k < count; ++k) {
+                const Segment &s = at(pending[k]);
+                // The chord between known roots predicts each new root; it only narrows the search.
+                request((s.x0 + s.x1) * 0.5f, outer[pending[k] >> 24], (s.y0 + s.y1) * 0.5f);
+            }
+            solveRequests();
+            std::vector<int> stage;
+            for (int k = 0; k < count; ++k) {
+                const Segment &s = at(pending[k]);
+                mids[k] = roots[k];
+                refine[k] = std::abs(s.x1 - s.x0) > 8.0f || std::abs(mids[k] - (s.y0 + s.y1) * 0.5f) > 0.125f;
+                if (!refine[k]) stage.push_back(k);
+            }
+            for (int quarter = 1; quarter <= 3 && !stage.empty(); quarter += 2) {
+                for (int k : stage) {
+                    const Segment &s = at(pending[k]);
+                    const float x = s.x0 + (s.x1 - s.x0) * (quarter == 1 ? 0.25f : 0.75f);
+                    const float hint = quarter == 1 ? (s.y0 + mids[k]) * 0.5f : (mids[k] + s.y1) * 0.5f;
+                    request(x, outer[pending[k] >> 24], hint);
+                }
+                solveRequests();
+                std::vector<int> survivors;
+                for (int j = 0; j < static_cast<int>(stage.size()); ++j) {
+                    const int k = stage[j];
+                    const Segment &s = at(pending[k]);
+                    const float expected = s.y0 + (s.y1 - s.y0) * (quarter == 1 ? 0.25f : 0.75f);
+                    if (std::abs(roots[j] - expected) > 0.125f) refine[k] = 1;
+                    else survivors.push_back(k);
+                }
+                stage.swap(survivors);
+            }
+            for (int pass = 0; pass < 2; ++pass) {
+                refined.clear();
+                int k = 0;
+                for (int i = 0; i < static_cast<int>(segments[pass].size()); ++i) {
+                    const Segment &s = segments[pass][i];
+                    if (s.leaf) { refined.push_back(s); continue; }
+                    while (pending[k] != pass * (1 << 24) + i) ++k;
+                    const float xm = (s.x0 + s.x1) * 0.5f;
+                    if (s.depth < 16 && refine[k]) {
+                        refined.push_back({s.x0, s.y0, xm, mids[k], s.depth + 1, false});
+                        refined.push_back({xm, mids[k], s.x1, s.y1, s.depth + 1, false});
+                    } else {
+                        refined.push_back({s.x0, s.y0, s.x1, s.y1, s.depth, true});
+                    }
+                }
+                segments[pass].swap(refined);
+            }
         }
     }
 
@@ -548,25 +1098,37 @@ struct NavigationUnionPath {
         }
         std::sort(distinct.begin(), distinct.end());
 
-        env->CallVoidMethod(path, moveTo, appendLeft, edgeY(appendLeft, top));
-        for (int pass = 0; pass < 2; ++pass) {
-            const float outer = pass == 0 ? top : bottom;
-            points.clear();
-            if (pass == 0) {
-                for (size_t i = 0; i + 1 < distinct.size(); ++i) {
-                    const float x0 = distinct[i], x1 = distinct[i + 1];
-                    subdivide(x0, edgeY(x0, outer), x1, edgeY(x1, outer), outer, 0);
-                }
-            } else {
-                for (size_t i = distinct.size(); i-- > 1;) {
-                    const float x0 = distinct[i], x1 = distinct[i - 1];
-                    subdivide(x0, edgeY(x0, outer), x1, edgeY(x1, outer), outer, 0);
-                }
-            }
-            for (const auto &point : points) env->CallVoidMethod(path, lineTo, point.first, point.second);
-            if (pass == 0) env->CallVoidMethod(path, lineTo, appendRight, edgeY(appendRight, bottom));
-        }
-        env->CallVoidMethod(path, close);
+        // Stop roots for both edges (no hint), plus the contour's start and end.
+        const float outer[2] = {top, bottom};
+        const int n = static_cast<int>(distinct.size());
+        for (int pass = 0; pass < 2; ++pass)
+            for (int i = 0; i < n; ++i) request(distinct[i], outer[pass], std::numeric_limits<float>::quiet_NaN());
+        request(appendLeft, top, std::numeric_limits<float>::quiet_NaN());
+        request(appendRight, bottom, std::numeric_limits<float>::quiet_NaN());
+        solveRequests();
+        const std::vector<float> stopRoots(roots.begin(), roots.end());
+        auto stopRoot = [&](int pass, int i) { return stopRoots[pass * n + i]; };
+        const float startY = stopRoots[2 * n], endY = stopRoots[2 * n + 1];
+
+        segments[0].clear();
+        segments[1].clear();
+        for (int i = 0; i + 1 < n; ++i)
+            segments[0].push_back({distinct[i], stopRoot(0, i), distinct[i + 1], stopRoot(0, i + 1), 0, false});
+        for (int i = n; i-- > 1;)
+            segments[1].push_back({distinct[i], stopRoot(1, i), distinct[i - 1], stopRoot(1, i - 1), 0, false});
+        subdivideAll(outer);
+
+        const size_t points = 2 + segments[0].size() + segments[1].size();
+        contours.reserve(contours.size() + 1 + 2 * points);
+        contours.push_back(static_cast<float>(points));
+        auto point = [this](float x, float y) {
+            contours.push_back(x);
+            contours.push_back(y);
+        };
+        point(appendLeft, startY);
+        for (const Segment &s : segments[0]) point(s.x1, s.y1);
+        point(appendRight, endY);
+        for (const Segment &s : segments[1]) point(s.x1, s.y1);
     }
 
     void build() {
@@ -583,17 +1145,21 @@ struct NavigationUnionPath {
 };
 } // namespace
 
-extern "C" JNIEXPORT jboolean JNICALL
+// Writes the contours (see NavigationUnionPath::contours) into [output] and returns the number of
+// floats written, or minus the required length when [output] is too short, or 0 on invalid input.
+extern "C" JNIEXPORT jint JNICALL
 Java_io_github_neoruaa_glasmio_glass_LiquidMenuNativeField_buildNavigationPathNative(
-    JNIEnv *env, jobject, jfloatArray geometry, jobject path) {
-    if (!geometry || !path || env->GetArrayLength(geometry) != 14) return JNI_FALSE;
+    JNIEnv *env, jobject, jfloatArray geometry, jfloatArray output) {
+    if (!geometry || !output || env->GetArrayLength(geometry) != 14) return 0;
     float g[14];
     env->GetFloatArrayRegion(geometry, 0, 14, g);
-    if (env->ExceptionCheck()) return JNI_FALSE;
-    for (float value : g) if (!std::isfinite(value)) return JNI_FALSE;
-    NavigationUnionPath builder(env, path, g);
-    if (!builder.moveTo || !builder.lineTo || !builder.close) return JNI_FALSE;
+    if (env->ExceptionCheck()) return 0;
+    for (float value : g) if (!std::isfinite(value)) return 0;
+    NavigationUnionPath builder(g);
     builder.build();
-    return env->ExceptionCheck() ? JNI_FALSE : JNI_TRUE;
+    const jint count = static_cast<jint>(builder.contours.size());
+    if (count > env->GetArrayLength(output)) return -count;
+    env->SetFloatArrayRegion(output, 0, count, builder.contours.data());
+    return env->ExceptionCheck() ? 0 : count;
 }
 #endif
