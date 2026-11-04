@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.hasBuiltInCoordinateIndependentSource
 import io.github.neoruaa.glasmio.glass.render.backdrops.hasBuiltInLayerBlockIndependentSource
+import io.github.neoruaa.glasmio.glass.render.backdrops.recordingSignature
 import io.github.neoruaa.glasmio.glass.render.highlight.Highlight
 import io.github.neoruaa.glasmio.glass.render.highlight.HighlightElement
 import io.github.neoruaa.glasmio.glass.render.internal.ShapeProvider
@@ -397,7 +398,38 @@ private class DrawBackdropNode(
 
     private var layoutCoordinates: LayoutCoordinates? by mutableStateOf(null, neverEqualPolicy())
 
+    // What the current source recordings contain relative to this consumer; see recordingSignature.
+    private var recordedSourceSignature: Any? = null
+
     private var padding by mutableFloatStateOf(0f)
+
+    /**
+     * Describes the position-dependent content of this node's source recordings, or null when
+     * they must be recorded again after every move. The luminance source and its probe derive
+     * from the same padded recording; standalone probes, sample bounds and custom backdrop
+     * callbacks may depend on position in ways a signature cannot describe.
+     */
+    private fun sourceSignature(coordinates: LayoutCoordinates?): Any? {
+        if (luminanceOnly || sampleBounds != null || onDrawBackdrop !== DefaultOnDrawBackdrop) return null
+        val consumer = coordinates?.takeIf { it.isAttached } ?: return null
+        // Only a filtered layer bounds its source to the recorded size; unfiltered layers can overflow.
+        if (graphicsLayer?.renderEffect == null) return null
+        val scale = effectScope.samplingScale
+        val size = effectScope.size
+        if (!size.width.isFinite() || !size.height.isFinite() || scale <= 0f) return null
+        // Every source recording starts at -padding. With a materialized texture, recordSource clips
+        // the source and its auxiliary plane to the padded base; otherwise the consumer layer itself
+        // records the source and may extend to the material output.
+        val texturePadding = padding
+        val output = if (effectScope.effectTextureSize == null) effectScope.materialOutputSize else null
+        val width = maxOf(size.width + texturePadding * 2f, (output?.width ?: 0).toFloat())
+        val height = maxOf(size.height + texturePadding * 2f, (output?.height ?: 0).toFloat())
+        val region = Rect(-texturePadding / scale - 1f, -texturePadding / scale - 1f,
+            (ceil(width) - texturePadding) / scale + 1f, (ceil(height) - texturePadding) / scale + 1f)
+        val primary = backdrop.recordingSignature(consumer, region) ?: return null
+        val auxiliary = effectScope.auxiliaryBackdrop?.let { it.recordingSignature(consumer, region) ?: return null }
+        return listOf(primary, auxiliary, region)
+    }
 
     private fun DrawScope.recordSource(applyDrawCallback: Boolean, source: GraphicsLayer? = null) {
         val canvas = drawContext.canvas
@@ -589,7 +621,8 @@ private class DrawBackdropNode(
 
             layer.topLeft = IntOffset.Zero
             drawRecordedBackdrop()
-        }
+            recordedSourceSignature = sourceSignature(layoutCoordinates)
+        } else recordedSourceSignature = null
     }
 
     override fun MeasureScope.measure(
@@ -936,7 +969,12 @@ private class DrawBackdropNode(
         if (coordinates.isAttached) {
             // An effect may attach a coordinate-dependent portal after this layout pass,
             // even when its primary source is an empty or coordinate-free backdrop.
-            layoutCoordinates = coordinates
+            // A move that leaves every source recording identical keeps those recordings,
+            // so HWUI can reuse the filtered layers instead of repeating every pass.
+            val signature = recordedSourceSignature
+            if (signature == null || layoutCoordinates !== coordinates || sourceSignature(coordinates) != signature) {
+                layoutCoordinates = coordinates
+            }
             exportedBackdrop?.layerCoordinates = coordinates
         }
     }
@@ -992,6 +1030,7 @@ private class DrawBackdropNode(
 
         effectScope.reset()
         completedLayout = false
+        recordedSourceSignature = null
         layoutCoordinates = null
         exportedBackdrop?.clearRecordingCoordinates()
     }
