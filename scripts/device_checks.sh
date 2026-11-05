@@ -2,6 +2,8 @@
 set -euo pipefail
 
 adb wait-for-device
+adb shell settings put global hide_error_dialogs 1
+adb shell svc power stayon true
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard
 

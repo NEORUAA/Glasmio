@@ -405,7 +405,8 @@ class NavigationRenderingTest {
                                 val layout = actual.controlAtlas?.samplingLayoutKey ?: (
                                     if (small && fullyResting && !content) "packed1" else "packed4") + ".linear=false"
                                 val sourceKey = "Glasmio.ControlLens.${case.managed}.$fullyResting.$small.$tab.$precomposedScene.layout=" +
-                                    "$layout.sampledScene=${tabPlanes && precomposedScene}.builtin.source"
+                                    "$layout.sampledScene=${tabPlanes && precomposedScene}" +
+                                    ".field=${actual.controlAtlas?.controlFieldPlane != null}.builtin.source"
                                 val source = producer.cachedResource<String>(sourceKey) { error("Missing production consumer source") }
                                 var result: LensPoolFrame? = null
                                 val privateCalls = owner.privateConsumerCalls

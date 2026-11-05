@@ -1934,7 +1934,7 @@ class SampleNavigationBehaviorTest {
         rule.onNode(tab and hasContentDescription("Settings")).performClick().assertIsSelected()
         val scrollable = hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
         val titleInBody = hasText("Settings") and hasAnyAncestor(scrollable)
-        val toolbarTitle = hasText("Settings") and !hasAnyAncestor(scrollable)
+        val toolbarTitle = hasText("Settings") and !hasAnyAncestor(scrollable) and !tab and !hasAnyAncestor(tab)
         awaitDisplayed(titleInBody)
         val initialLarge = rule.onAllNodes(titleInBody).fetchSemanticsNodes().maxByOrNull { it.boundsInRoot.height }
             ?: error("Settings must initially show its large title")
