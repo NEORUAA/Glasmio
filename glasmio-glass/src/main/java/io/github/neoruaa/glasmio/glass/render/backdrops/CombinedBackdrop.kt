@@ -12,6 +12,7 @@ package io.github.neoruaa.glasmio.glass.render.backdrops
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -144,3 +145,28 @@ private class CombinedBackdrops(
         }
     }
 }
+
+/**
+ * Describes the position-dependent part of what this source records for [consumer] within
+ * [region] (consumer pixels). Equal signatures record identical pixels, so a moved consumer can
+ * keep its previous recording. Null means unknown: the consumer must record again.
+ */
+internal fun Backdrop.recordingSignature(consumer: LayoutCoordinates, region: Rect): Any? {
+    return when (this) {
+        is LayerBackdrop -> recordingSignature(consumer, region)
+        is Combined2Backdrops -> listOf(
+            backdrop1.recordingSignature(consumer, region) ?: return null,
+            backdrop2.recordingSignature(consumer, region) ?: return null,
+        )
+        is Combined3Backdrops -> listOf(
+            backdrop1.recordingSignature(consumer, region) ?: return null,
+            backdrop2.recordingSignature(consumer, region) ?: return null,
+            backdrop3.recordingSignature(consumer, region) ?: return null,
+        )
+        is CombinedBackdrops -> backdrops.map { it.recordingSignature(consumer, region) ?: return null }
+        // These draw without reading any coordinates.
+        else -> if (hasBuiltInCoordinateIndependentSource()) PositionIndependentSource else null
+    }
+}
+
+private object PositionIndependentSource

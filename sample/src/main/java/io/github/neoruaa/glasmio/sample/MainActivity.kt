@@ -100,6 +100,7 @@ import io.github.neoruaa.glasmio.scaffold.navigation.iosPredictivePopTransitionS
 import com.kyant.capsule.ContinuousRoundedRectangle
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.LocalGlassAdaptiveLuminanceRange
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
 import com.kyant.shapes.Capsule
@@ -497,12 +498,7 @@ private fun SampleNavigation(
                                 val entryListState = rootListStates[route] ?: rememberLazyListState()
                                 CompositionLocalProvider(LocalSampleHeaderEntry provides headerEntry(entryKey)) {
                                 val wallpaper = route in wallpaperRoutes
-                                GlasmioBackdropHost(
-                                    modifier = Modifier.fillMaxSize(),
-                                    sampledContent = {
-                                        if (route == "Adaptive Glass") AdaptiveGlassBackdrop() else SampleBackdrop(wallpaper)
-                                    },
-                                    overlayContent = {
+                                val overlay: @Composable BoxScope.(LayerBackdrop) -> Unit = {
                                         val isTopLevel = route in topLevelRoutes
                                         val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                                         val bottomPadding = navigationInset + if (!topTabs && (isTopLevel || route == "Search")) NavigationBarSurfaceHeight + 8.dp else 0.dp
@@ -565,8 +561,23 @@ private fun SampleNavigation(
                                                 GlasmioPageTitle(entryKey)
                                             }
                                         }
-                                    },
-                                )
+                                    }
+                                if (route != "Adaptive Glass" && !wallpaper) {
+                                    // SampleBackdrop(false) is exactly this fill; declaring it lets moving glass keep its result.
+                                    GlasmioBackdropHost(
+                                        sampledColor = LocalGlassColors.current.groupedBackground,
+                                        modifier = Modifier.fillMaxSize(),
+                                        overlayContent = overlay,
+                                    )
+                                } else {
+                                    GlasmioBackdropHost(
+                                        modifier = Modifier.fillMaxSize(),
+                                        sampledContent = {
+                                            if (route == "Adaptive Glass") AdaptiveGlassBackdrop() else SampleBackdrop(wallpaper)
+                                        },
+                                        overlayContent = overlay,
+                                    )
+                                }
                                 }
                             }
                         },

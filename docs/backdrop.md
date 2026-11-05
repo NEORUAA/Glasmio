@@ -11,13 +11,26 @@ Both slots receive the same `LayerBackdrop`. The host provides it through `Local
 GlasmioBackdropHost(
     modifier = Modifier.fillMaxSize(),
     sampledContent = {
-        Box(Modifier.fillMaxSize().background(GlasmioTheme.colors.groupedBackground))
+        Image(wallpaper, contentDescription = null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
     },
     overlayContent = {
         GlasmioButton(onClick = onContinue) { Text("Continue") }
     },
 )
 ```
+
+When the sampled background is a single color, pass it as `sampledColor` instead of drawing it in `sampledContent`:
+
+```kotlin
+GlasmioBackdropHost(
+    sampledColor = GlasmioTheme.colors.groupedBackground,
+    modifier = Modifier.fillMaxSize(),
+) {
+    GlasmioButton(onClick = onContinue) { Text("Continue") }
+}
+```
+
+The host draws the color and declares that its source contains nothing else. The result is identical; scrolled glass can then keep its rendered result (see [Lifetime and cost](#lifetime-and-cost)).
 
 Place glass outside the layer it samples. Recording a control into its own backdrop creates a feedback loop. For scrolling pages, `GlasmioPinnedListPage` already records the body separately from its fixed toolbar.
 
@@ -91,10 +104,8 @@ The standard host registers its source position automatically. If a modal must s
 
 ```kotlin
 GlasmioBackdropHost(
+    sampledColor = GlasmioTheme.colors.groupedBackground,
     modifier = Modifier.fillMaxSize(),
-    sampledContent = {
-        Box(Modifier.fillMaxSize().background(GlasmioTheme.colors.groupedBackground))
-    },
     overlayContent = {
         val pageBackdrop = rememberLayerBackdrop()
         CompositionLocalProvider(LocalBlurBackdrop provides pageBackdrop) {
@@ -146,6 +157,8 @@ Glasmio requires Android API 33. Known native materials use a full-resolution `R
 ## Lifetime and cost
 
 Remember backdrop sources instead of recreating them during animation. Glasmio's shared/rasterized backdrop helpers cache recorded regions for multiple glass consumers. Animation state belongs in drawing and layer blocks where possible, so a changing highlight does not rebuild an entire page.
+
+A moving consumer normally records its source again, and HWUI repeats every filter pass. When the new recording would be identical, Glasmio keeps the previous one instead. For a `sampledColor` host this applies whenever the glass and the source it samples move together, such as controls in scrolled content. The control's own track and glyph recordings move with it, and the uniform fill looks the same at every offset. Glass is still rendered again when an edge of the fill moves within its padded sampling region, such as near the window's top or bottom while scrolling, and whenever a sampled recording changes. Header glass over scrolling content therefore renders every frame as before. Hosts with arbitrary `sampledContent` keep the original behavior.
 
 `rememberSharedGlassBackdrop` shares page regions between consumers. `rememberRasterizedBackdrop` creates a live flattened source and removes its pre-draw listener when composition ends. Use these helpers only when the source hierarchy calls for them; the standard host is sufficient for a simple screen.
 

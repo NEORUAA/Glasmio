@@ -4,6 +4,7 @@ import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
 
 import android.view.ViewTreeObserver
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -73,8 +75,32 @@ fun GlasmioBackdropHost(
     modifier: Modifier = Modifier,
     sampledContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
     overlayContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
+) = BackdropHost(modifier, uniformFill = false, sampledContent, overlayContent)
+
+/**
+ * A [GlasmioBackdropHost] whose sampled content is [sampledColor] filling the host.
+ *
+ * The host declares the fill itself, so glass that moves while sampling only this color, such as
+ * a control in scrolled content, keeps its rendered result instead of repeating every pass.
+ * Glass is rendered again as usual when an edge of the fill moves within its samples.
+ */
+@Composable
+fun GlasmioBackdropHost(
+    sampledColor: Color,
+    modifier: Modifier = Modifier,
+    overlayContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
+) = BackdropHost(modifier, uniformFill = true, { Box(Modifier.fillMaxSize().background(sampledColor)) }, overlayContent)
+
+@Composable
+private fun BackdropHost(
+    modifier: Modifier,
+    uniformFill: Boolean,
+    sampledContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
+    overlayContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
 ) {
     val backdrop = rememberLayerBackdrop()
+    // The fill draws nothing else and covers the layer bounds exactly.
+    backdrop.fillsBoundsUniformly = uniformFill
     CompositionLocalProvider(
         LocalGlassBackdrop provides backdrop,
         LocalBlurBackdrop provides backdrop,

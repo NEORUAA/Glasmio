@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
@@ -51,6 +52,12 @@ class LayerBackdrop internal constructor(
     override val isCoordinatesDependent: Boolean = true
 
     internal var layerCoordinates: LayoutCoordinates? by mutableStateOf(null)
+
+    /**
+     * Set only by owners that record nothing but one color filling the layer bounds. Every
+     * consumer region inside those bounds then samples identical pixels at any translation.
+     */
+    internal var fillsBoundsUniformly: Boolean = false
 
     private val sourceToConsumer = Matrix()
     private val screenToConsumer = Matrix()
@@ -114,4 +121,47 @@ class LayerBackdrop internal constructor(
             false
         }
     }
+
+    /**
+     * Describes what [drawBackdrop] records for [consumer] within [region] (consumer pixels).
+     * Equal signatures record identical pixels; null means the recording cannot be described.
+     */
+    internal fun recordingSignature(consumer: LayoutCoordinates, region: Rect): Any? {
+        if (!consumer.isAttached) return null
+        val source = layerCoordinates?.takeIf { it.isAttached } ?: return null
+        if (!updateTransform(source, consumer)) return null
+        val values = sourceToConsumer.values
+        if (fillsBoundsUniformly && values.isAxisAligned()) {
+            // A uniform fill records only the color over its bounds. Within the region, the result
+            // is fully described by where those bounds fall: identical edges give identical
+            // coverage, and edges outside the region do not reach the recorded pixels.
+            val bounds = sourceToConsumer.map(Rect(0f, 0f, source.size.width.toFloat(), source.size.height.toFloat()))
+            val left = bounds.left.takeIf { it > region.left }
+            val top = bounds.top.takeIf { it > region.top }
+            val right = bounds.right.takeIf { it < region.right }
+            val bottom = bounds.bottom.takeIf { it < region.bottom }
+            return UniformFillSignature(this, left, top, right, bottom)
+        }
+        return TransformSignature(source, values.copyOf())
+    }
+}
+
+private fun FloatArray.isAxisAligned(): Boolean =
+    this[1] == 0f && this[2] == 0f && this[3] == 0f && this[4] == 0f && this[6] == 0f &&
+        this[7] == 0f && this[8] == 0f && this[9] == 0f && this[11] == 0f && this[15] == 1f
+
+/** Fill edges that lie inside the consumer region, in consumer pixels; null edges lie outside. */
+private data class UniformFillSignature(
+    val backdrop: LayerBackdrop,
+    val left: Float?,
+    val top: Float?,
+    val right: Float?,
+    val bottom: Float?,
+)
+
+private class TransformSignature(val source: LayoutCoordinates, val values: FloatArray) {
+    override fun equals(other: Any?): Boolean =
+        other is TransformSignature && other.source === source && other.values.contentEquals(values)
+
+    override fun hashCode(): Int = System.identityHashCode(source) * 31 + values.contentHashCode()
 }
