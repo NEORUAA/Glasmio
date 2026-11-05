@@ -32,6 +32,16 @@ Clear's captured `inputRefractionOpacity = 0` disables the outer-ray mix only. I
 
 Prominent and destructive buttons pass their semantic tint into the same regular material pipeline. The default idle opaque tint matrix is reconstructed from DesignLibrary's HSL endpoint mapping and gamma-encoded sRGB luminance. Captured blue and red matrices match that formula to floating-point precision. It replaces a translucent flat tint overlay; other native recipe/state branches are not implied by that result.
 
+## Attached sidebars
+
+The attached sidebar uses its own planar `SidebarRecipe`: ordinary active light
+face black/white/saturation .4/1.03/1.2, white fill .2 and maximum luminance .85;
+dark .1/.5/.6, white fill0 and maximum luminance1. Primary blur reaches8 for the
+regular 320pt column, with a separate16 blur-fill and .25 backdrop scale. The
+optional mirrored background extension precedes that material. See
+[adaptive navigation](ios-adaptive-navigation.md#material-and-design-metrics) for
+native branch conditions, exact conversion receipts and host integration.
+
 ## Capture resolution and platform paths
 
 Native regular examples capture 50-point controls at scale 0.5, a 150-point SwiftUI panel near 1/3, and a 200-point UIKit panel at 0.25. Glasmio interpolates its regular geometry and capture scale through those measured sizes. Explicit frost/refraction overrides remain caller-owned.

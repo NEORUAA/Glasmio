@@ -7,7 +7,11 @@ The default policy keeps the bottom bar in portrait and uses top tabs in landsca
 Applications can supply an explicit `GlasmioNavigationLayout` for other window policies.
 
 Place the existing navigation scaffold, floating search and application overlays in
-the adaptive scaffold's content. Pass its saved state to the sidebar toggle. Use
+the adaptive scaffold's content. Share one `contentBackdrop` between the adaptive
+and navigation scaffolds when enabling content extension. The navigation scaffold
+owns its single recording, including an opaque base; shared controls remain outside
+that source. Do not record that layer again around the caller's content. Pass the
+saved adaptive state to the sidebar toggle. Use
 `GlasmioNavigationScaffold.topBar` for the tabs; the slot reserves the actual measured
 width of both shared button groups, including transitions between pages. It retains
 the tab subtree while new button endpoints are measured. `state.tabBarBounds` and
@@ -102,20 +106,60 @@ and scrim are Glasmio window policy, not recovered UIKit constants.
 ## Material and design metrics
 
 UIKit creates distinct sidebar materials: variant 9 is flexible `.sidebar`
-(`0x1cad09d6c`); variant 10 is `.abuttedSidebar` (`0x1cad09d9c`). Their final
-parameters resolve through the environment and luminance; static extraction did
-not recover a fixed light/dark tuple.
+(`0x1cad09d6c`); variant 10 is `.abuttedSidebar` (`0x1cad09d9c`). The attached
+column uses the planar `SidebarRecipe` endpoint. Top tabs retain their regular
+navigation recipe during the first morph stage.
 
-The Android abutted background therefore uses the supplied Figma Sidebar BG
-compositing reference: stacked 40/60 pt backdrop blur, 92% luminosity coating
-(`#DAE6F2` in the supplied light mode), and 80% desaturation. Dark mode inherits
-the host elevated background's luminosity. This is a design-resource material
-adaptation, not a claim that UIKit variants 9/10 equal navigation glass. Sidebar
-toolbar buttons use Glasmio's existing navigation material over that background.
-Reduce Transparency supplies an opaque surface.
+The current iOS 27 V2 recipe and its Spec-to-CA conversion supply these ordinary
+active-window values. Background content, increased contrast, diffusion and window
+activity can select additional native branches.
+
+| Parameter | Light | Dark |
+| --- | ---: | ---: |
+| Backdrop scale | .25 | .25 |
+| Primary blur at a 320 pt column | 8 | 8 |
+| Blur-fill radius | 16 | 16 |
+| Fill darken / lighten / normal | 0 / .9 / .5 | .9 / 0 / .5 |
+| Face black / white / saturation | .4 / 1.03 / 1.2 | .1 / .5 / .6 |
+| White fill alpha | .2 | 0 |
+| Maximum luminance, ordinary content | .85 | 1 |
+
+Primary blur evaluates `minimumDistanceOfLargestArea ?? minimumDistance ?? 48`
+through a clamped 64–160 → 0–4 recipe map, then doubles the result in the native
+Spec converter. Blur-fill 16 passes through unchanged. The Android planar filter
+uses the existing native mip sampler, blur-fill min/max composition and gamma-space
+face transform, with working-space storage between GPU passes. Reduce Transparency
+uses an opaque surface. Source and conversion receipts are in
+`.local-research/ios/adaptive-sidebar/appearance/material/sidebar-base/ENDPOINT.md`.
+
+`extendContentUnderSidebar` opts the host into the separately recovered background
+extension. Its leading/trailing portal reflects adjacent content beneath the pane,
+then applies a 10 pt variable blur over a .1-source-width mask. The sampling source is flattened once into a shared live quarter-resolution plane,
+then mapped back to window coordinates for both endpoints. Visible page content
+keeps its original resolution. Reflection fades into the original background within
+15% of the content width, capped at a 130 dp adjoining edge band. The mask uses the normalized shifted-reciprocal curve
+`alpha = (1 - t) / (1 + 3 * t)`, where `t` is outward distance divided by the band
+width. It retains a long low-opacity tail and reaches zero at the outer bound. The private scene
+records once instead of repeating nested control filters. This avoids
+expanding capture padding by the entire sidebar width. The Android extension uses two materialized, normalized Gaussian passes before
+the material mip pyramid. Hosts with an already full-window wallpaper can retain that
+source directly. UIKit's public `UIBackgroundExtensionView` is an explicit content
+facility, independent from the selected glass recipe. Source receipts are in
+`.local-research/ios/adaptive-sidebar/appearance/extension/FINDINGS.md`.
+
+`GlasmioSidebarToggleIcon` uses the recovered private CoreGlyphs vector
+`rectangle.line.horizontal.inset.top` (canonical
+`inset.line.horizontal.top.rectangle`). UIKit chooses preferred Body, Medium weight
+and Large symbol scale. Its default 17 pt ink is 25.257129 × 19.782044 pt; the
+component retains that aspect ratio and follows the host Body text size. The
+private asset does not require a glyph in the host SF Pro font. Source receipts
+are in `.local-research/ios/adaptive-sidebar/appearance/icon/README.md`.
 
 The design's 320 pt primary column has 10 pt side insets, 44 pt rows, a 34 pt
 symbol allocation, body text, capsule selection and collapsible section headers.
 Top tabs use a 44 pt surface, 4 pt inset and 36 pt indicator; leading sidebar and
-trailing search actions prefer 54 pt. Constrained labels truncate with their own
+trailing search actions prefer 54 pt. Both action symbols use Semibold weight. The sidebar symbol has 16 dp measured
+ink height and search has 17 dp, preserving each glyph's aspect ratio. Labels use
+Semibold and the selected lens source uses Bold; both weights participate in cell
+width measurement. Constrained labels truncate with their own
 spacing before the independent actions lose their preferred width.

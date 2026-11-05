@@ -554,6 +554,7 @@ private class DrawBackdropNode(
                     null
                 } else if (mipAtlas != null) passes.recordPyramid(
                     mipAtlas,
+                    inputEffects = producerEffects,
                     record = { target, targetSize, block ->
                         recordLayer(this@DrawBackdropNode, target, targetSize, block)
                     },

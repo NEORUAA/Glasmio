@@ -44,9 +44,12 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.LocalGlassAppearance
-import io.github.neoruaa.glasmio.glass.glassBackdropSource
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
 import io.github.neoruaa.glasmio.glass.trackBackdropPosition
+import io.github.neoruaa.glasmio.glass.rememberRasterizedBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberSidebarBackgroundExtensionBackdrop
 import io.github.neoruaa.glasmio.ui.GlasmioSidebar
 import io.github.neoruaa.glasmio.ui.GlasmioSidebarMorphSurface
 import io.github.neoruaa.glasmio.ui.GlasmioToolbarDefaults
@@ -166,6 +169,8 @@ fun GlasmioAdaptiveNavigationScaffold(
     sidebarEnabled: Boolean = true,
     sidebarWidth: Dp = GlasmioAdaptiveNavigationDefaults.SidebarWidth,
     sidebarTransition: GlasmioSidebarTransition = GlasmioSidebarTransition.Automatic,
+    extendContentUnderSidebar: Boolean = false,
+    contentBackdrop: LayerBackdrop? = null,
     overlay: @Composable BoxScope.() -> Unit = {},
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -205,12 +210,32 @@ fun GlasmioAdaptiveNavigationScaffold(
             }
         }
     }
-    val backdrop = rememberLayerBackdrop()
+    val backdrop = contentBackdrop ?: rememberLayerBackdrop()
     val placement = remember { SidebarPlacement() }
     val consumed = remember(progress, coordinator) { SidebarConsumedInsets {
         val p = if (coordinator.usesTabMorph) native.contentInsetProgress else progress.value.coerceIn(0f, 1f)
         if (placement.overlays) 0 else (placement.width * p).roundToInt()
     } }
+    val contentBoundsInWindow = {
+        val origin = coordinator.hostOrigin
+        Rect(origin.x + consumed.getLeft(density, direction), origin.y,
+            origin.x + viewport.width - consumed.getRight(density, direction), origin.y + viewport.height)
+    }
+    // Flatten only the sampling source; visible text and controls retain native resolution.
+    // Both endpoints share this live plane instead of replaying nested glass filter trees.
+    val extensionSource = if (extendContentUnderSidebar) rememberRasterizedBackdrop(backdrop) else backdrop
+    val sidebarBackdrop = if (extendContentUnderSidebar) rememberSidebarBackgroundExtensionBackdrop(
+        source = extensionSource,
+        contentBoundsInWindow = contentBoundsInWindow,
+        consumerBoundsInWindow = { sideFrame.translate(coordinator.hostOrigin) },
+        isLeftEdge = direction == LayoutDirection.Ltr,
+    ) else backdrop
+    val morphSidebarBackdrop = if (extendContentUnderSidebar) rememberSidebarBackgroundExtensionBackdrop(
+        source = extensionSource,
+        contentBoundsInWindow = contentBoundsInWindow,
+        consumerBoundsInWindow = { native.bounds.translate(coordinator.hostOrigin) },
+        isLeftEdge = direction == LayoutDirection.Ltr,
+    ) else backdrop
     val visibleTabBounds = remember(state, coordinator) { derivedStateOf {
         if (coordinator.usesTabMorph && (native.expanded || native.running)) null else state.tabBarBounds.value
     } }
@@ -233,7 +258,9 @@ fun GlasmioAdaptiveNavigationScaffold(
         Layout(modifier = modifier.clipToBounds().testTag("GlasmioAdaptiveNavigation")
             .onSizeChanged { viewport = it }
             .onGloballyPositioned { coordinator.hostOrigin = it.positionInWindow() }, content = {
-            Box(Modifier.fillMaxSize().glassBackdropSource(backdrop).trackBackdropPosition(backdrop)
+            Box(Modifier.fillMaxSize()
+                .then(if (contentBackdrop == null) Modifier.layerBackdrop(backdrop, reuseContent = true)
+                    .trackBackdropPosition(backdrop) else Modifier)
                 .background(colors.groupedBackground)) {
                 content()
             }
@@ -253,7 +280,7 @@ fun GlasmioAdaptiveNavigationScaffold(
                 .onFocusChanged { sidebarHasFocus = it.hasFocus }.focusGroup()
                 .then(if ((if (usesTabMorph) native.expanded else open) && !blocked) Modifier else Modifier.clearAndSetSemantics {})) {
                 GlasmioSidebar(
-                    backdrop = backdrop,
+                    backdrop = sidebarBackdrop,
                     backgroundAlpha = { if (usesTabMorph && native.running) 0f else 1f },
                     onContentPreview = if (usesTabMorph && native.running) ({ layer, size ->
                         sidebarLayer = layer
@@ -267,6 +294,7 @@ fun GlasmioAdaptiveNavigationScaffold(
             Box(Modifier.fillMaxSize().clearAndSetSemantics {}) {
                 if (usesTabMorph && native.running) {
                     GlasmioSidebarMorphSurface(backdrop, { native.bounds }, { native.cornerRadius }, { native.materialProgress },
+                        sidebarBackdrop = morphSidebarBackdrop,
                         tabsColors = coordinator.tabsColors ?: LocalGlassColors.current,
                         tabsAppearance = coordinator.tabsAppearance ?: LocalGlassAppearance.current)
                     TabSidebarContentPreview({ coordinator.tabsLayer }, { coordinator.tabsLayerSize },

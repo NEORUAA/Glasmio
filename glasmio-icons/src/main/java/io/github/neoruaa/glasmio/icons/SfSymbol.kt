@@ -106,8 +106,9 @@ val LocalSfToolbarSymbols = staticCompositionLocalOf { false }
 
 /**
  * Renders an SF symbol with [size] as its layout slot and [fontSize] as its typographic size.
+ * [inkHeight] normalizes measured glyph height before optional slot fitting.
  * Disable [fitGlyphToBounds] to preserve native glyph metrics, including ink outside the slot.
- * Toolbar symbols always preserve their native metrics; vector fallbacks use the layout slot.
+ * Toolbar symbols skip slot fitting; vector fallbacks use the layout slot.
  */
 @Composable
 fun SfIcon(
@@ -121,6 +122,7 @@ fun SfIcon(
     mirrored: Boolean = false,
     fontFeatureSettings: String = "'ss16' 1",
     fitGlyphToBounds: Boolean = true,
+    inkHeight: Dp? = null,
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val toolbar = LocalSfToolbarSymbols.current
@@ -141,6 +143,7 @@ fun SfIcon(
         fitToSlot = fitGlyphToBounds && !toolbar,
         mirrored = mirrored && symbol.autoMirrored && layoutDirection == LayoutDirection.Rtl,
         features = fontFeatureSettings,
+        inkHeight = inkHeight,
     )
 }
 
@@ -157,6 +160,7 @@ fun SfIcon(
     mirrored: Boolean = false,
     fontFeatureSettings: String = "'ss16' 1",
     fitGlyphToBounds: Boolean = true,
+    inkHeight: Dp? = null,
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val toolbar = LocalSfToolbarSymbols.current
@@ -178,6 +182,7 @@ fun SfIcon(
         fitToSlot = fitGlyphToBounds && !toolbar,
         mirrored = mirrored && layoutDirection == LayoutDirection.Rtl,
         features = fontFeatureSettings,
+        inkHeight = inkHeight,
     )
 }
 
@@ -200,6 +205,7 @@ private fun SfIconGlyph(
     fitToSlot: Boolean,
     mirrored: Boolean,
     features: String,
+    inkHeight: Dp?,
 ) {
     val density = LocalDensity.current
     val baseTypeface = LocalGlasmioSymbolTypeface.current ?: return
@@ -209,7 +215,8 @@ private fun SfIconGlyph(
     val glyph = remember(codePoint) { String(Character.toChars(codePoint)) }
     val requestedSize = with(density) { fontSize.toPx() }
     val iconSize = with(density) { size.toPx() }
-    val drawCache = remember(typeface, glyph, requestedSize, iconSize, fitToSlot, features) {
+    val requestedInkHeight = with(density) { inkHeight?.toPx() }
+    val drawCache = remember(typeface, glyph, requestedSize, iconSize, fitToSlot, features, requestedInkHeight) {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
             this.typeface = typeface
             textSize = requestedSize
@@ -218,6 +225,12 @@ private fun SfIconGlyph(
         }
         val bounds = Rect()
         paint.getTextBounds(glyph, 0, glyph.length, bounds)
+        if (requestedInkHeight != null && requestedInkHeight.isFinite() &&
+            requestedInkHeight > 0f && bounds.height() > 0
+        ) {
+            paint.textSize *= requestedInkHeight / bounds.height()
+            paint.getTextBounds(glyph, 0, glyph.length, bounds)
+        }
         val safeWidth = iconSize * 0.88f
         val safeHeight = iconSize * 0.88f
         val scale = if (fitToSlot) minOf(

@@ -415,7 +415,9 @@ private fun SampleNavigation(
         editingActions.dialog()
         GlasmioAdaptiveNavigationScaffold(
             state = adaptiveNavigation,
+            contentBackdrop = navigationBackdrop,
             layout = navigationLayout,
+            extendContentUnderSidebar = currentRoute.value != "Materials" && currentRoute.value != "MaterialTab",
             sidebar = {
                 SampleSidebar(adaptiveNavigation, tabItems, selectedRoot, selectTab, navigate)
             },
@@ -435,6 +437,7 @@ private fun SampleNavigation(
         ) {
             Box(Modifier.fillMaxSize().nestedScroll(navigationScrollState.nestedScrollConnection)) {
                 GlasmioNavigationScaffold(
+                    contentBackdrop = navigationBackdrop,
                     motion = headerMotion,
                     header = { entryKey ->
                         val key = entryKey as String
@@ -470,7 +473,7 @@ private fun SampleNavigation(
                     }) else null,
                 ) { headerPadding ->
                 CompositionLocalProvider(LocalSampleBodyPadding provides headerPadding) {
-                Box(Modifier.fillMaxSize().glassBackdropSource(navigationBackdrop).trackBackdropPosition(navigationBackdrop)) {
+                Box(Modifier.fillMaxSize()) {
                     GlasmioNavDisplay(
                         motion = headerMotion,
                         backStack = backStack,
@@ -629,7 +632,7 @@ private fun SampleSidebar(
             trailing = {
                 GlasmioIconButton(onClick = { state.sidebarExpanded = false },
                     modifier = Modifier.semantics { contentDescription = "Hide Sidebar" }) {
-                    SfIcon("sidebar.left", null, size = 20.dp, mirrored = true)
+                    GlasmioSidebarToggleIcon()
                 }
             },
         )

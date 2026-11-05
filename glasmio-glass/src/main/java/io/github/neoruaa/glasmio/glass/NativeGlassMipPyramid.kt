@@ -426,13 +426,21 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         atlas: NativeGlassMipAtlas,
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
+        inputEffects: List<androidx.compose.ui.graphics.RenderEffect> = emptyList(),
     ): GraphicsLayer {
         recordedControl = null
+        var prepared: GraphicsLayer? = null
+        for (pass in configureLayers(inputEffects)) {
+            val input = prepared
+            record(pass, atlas.baseSize, if (input == null) sourceBlock else { { drawLayer(input) } })
+            prepared = pass
+        }
         val original = base ?: context.createGraphicsLayer().also { base = it }
         original.clip = true
         original.compositingStrategy = CompositingStrategy.Offscreen
         original.renderEffect = atlas.composeTextureSource
-        record(original, atlas.baseSize, sourceBlock)
+        val input = prepared
+        record(original, atlas.baseSize, if (input == null) sourceBlock else { { drawLayer(input) } })
         while (tiles.size > atlas.textureStages.size) context.releaseGraphicsLayer(tiles.removeAt(tiles.lastIndex))
         while (tiles.size < atlas.textureStages.size) tiles += context.createGraphicsLayer()
         var previous = original

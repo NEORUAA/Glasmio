@@ -115,8 +115,8 @@ private fun <T> tabBarNaturalWidths(items: List<GlasmioTabItem<T>>): List<Dp> {
     return remember(items, density, textMeasurer, labelStyle) {
         items.map { item ->
             val width = maxOf(
-                textMeasurer.measure(AnnotatedString(item.label), labelStyle.copy(fontWeight = FontWeight.Normal), maxLines = 1).size.width,
-                textMeasurer.measure(AnnotatedString(item.label), labelStyle.copy(fontWeight = FontWeight.Medium), maxLines = 1).size.width,
+                textMeasurer.measure(AnnotatedString(item.label), labelStyle.copy(fontWeight = FontWeight.SemiBold), maxLines = 1).size.width,
+                textMeasurer.measure(AnnotatedString(item.label), labelStyle.copy(fontWeight = FontWeight.Bold), maxLines = 1).size.width,
             )
             with(density) { width.toDp() } + 32.dp
         } + GlasmioTabBarDefaults.ActionWidth
@@ -166,7 +166,7 @@ fun <T> GlasmioTabBar(
         if (key == searchKey) onSearchClick() else onSelected(key)
     }
     var coordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
-    val labelStyle = IosTypography.body.copy(fontWeight = FontWeight.Medium)
+    val labelStyle = IosTypography.body.copy(fontWeight = FontWeight.SemiBold)
     val naturalWidths = tabBarNaturalWidths(items)
     val sidebarWidth = if (onSidebarToggle != null) GlasmioTabBarDefaults.ActionWidth else 0.dp
     val naturalWidth = naturalWidths.fold(GlasmioTabBarDefaults.ContentPadding * 2 + sidebarWidth) { total, width -> total + width }
@@ -331,7 +331,9 @@ fun <T> GlasmioTabBar(
                             onClick = onSidebarToggle) else Modifier),
                 contentAlignment = Alignment.Center,
             ) {
-                SfIcon("sidebar.left", null, size = 20.dp, tint = colors.content, mirrored = true)
+                SfIcon("sidebar.left", null, modifier = Modifier.width(21.dp), size = 16.dp,
+                    inkHeight = 16.dp, weight = FontWeight.SemiBold, fitGlyphToBounds = false,
+                    tint = colors.content, mirrored = true)
             }
             tabs.forEachIndexed { index, item ->
                 val selected = index == selectedIndex
@@ -350,7 +352,8 @@ fun <T> GlasmioTabBar(
                                 onClick = { onUserSelected(item.key) }) else Modifier),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (item.key == searchKey) SfIcon(SfSymbol.Search, null, size = 20.dp,
+                    if (item.key == searchKey) SfIcon(SfSymbol.Search, null, size = 17.dp,
+                        inkHeight = 17.dp, weight = FontWeight.SemiBold, fitGlyphToBounds = false,
                         tint = if (!interactive) colors.accent else if (selected)
                             androidx.compose.ui.graphics.lerp(colors.accent, colors.content, animation.pressProgress)
                             else colors.content)
@@ -359,7 +362,7 @@ fun <T> GlasmioTabBar(
                         color = if (!interactive) colors.accent else if (selected)
                             androidx.compose.ui.graphics.lerp(colors.accent, colors.content, animation.pressProgress)
                             else colors.content,
-                        fontWeight = if (interactive) FontWeight.Medium else FontWeight.SemiBold)
+                        fontWeight = if (interactive) FontWeight.SemiBold else FontWeight.Bold)
                 }
             }
         }

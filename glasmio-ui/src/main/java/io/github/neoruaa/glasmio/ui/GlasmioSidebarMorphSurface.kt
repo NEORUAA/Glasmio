@@ -45,6 +45,7 @@ fun GlasmioSidebarMorphSurface(
     cornerRadius: () -> Float,
     sidebarMaterialProgress: () -> Float,
     modifier: Modifier = Modifier,
+    sidebarBackdrop: Backdrop = backdrop,
     tabsColors: GlassColors = LocalGlassColors.current,
     tabsAppearance: GlassAppearance = LocalGlassAppearance.current,
 ) {
@@ -90,7 +91,7 @@ fun GlasmioSidebarMorphSurface(
             Box(Modifier.matchParentSize().graphicsLayer {
                 alpha = sidebarMaterialProgress().coerceIn(0f, 1f)
                 blendMode = BlendMode.Plus
-            }.sidebarMaterialBackground(backdrop, shape))
+            }.sidebarMaterialBackground(sidebarBackdrop, shape))
             }
         },
     ) { measurables, constraints ->

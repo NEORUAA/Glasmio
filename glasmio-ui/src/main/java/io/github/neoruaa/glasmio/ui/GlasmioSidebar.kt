@@ -13,7 +13,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
@@ -39,13 +38,12 @@ import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
-import io.github.neoruaa.glasmio.glass.render.effects.blur
-import io.github.neoruaa.glasmio.glass.render.effects.vibrancy
+import io.github.neoruaa.glasmio.glass.sidebarGlass
 import io.github.neoruaa.glasmio.icons.SfIcon
 import io.github.neoruaa.glasmio.icons.SfSymbol
 import com.kyant.shapes.Capsule
 
-/** Design-resource adaptation of the environment-resolved native sidebar material. */
+/** UIKit's planar sidebar endpoint; content extension remains a separate backdrop source. */
 @Composable
 internal fun Modifier.sidebarMaterialBackground(
     backdrop: Backdrop,
@@ -60,13 +58,8 @@ internal fun Modifier.sidebarMaterialBackground(
     else drawPlainBackdrop(
         backdrop = backdrop,
         shape = shape,
-        // Preserve both stacked background-blur effects and the 80% desaturation
-        // in Apple's Sidebar BG design resource. Runtime variant 10 is environment-resolved.
-        effects = { blur(40.dp.toPx()); blur(60.dp.toPx()); vibrancy(.2f) },
-        onDrawSurface = {
-            drawRect(if (colors.isDark) colors.elevatedBackground.copy(alpha = .92f)
-                else Color(0xFFDAE6F2).copy(alpha = .92f), blendMode = BlendMode.Luminosity)
-        },
+        samplingScale = { _, _ -> .25f },
+        effects = { sidebarGlass(backdrop, colors.isDark) },
     )
 }
 

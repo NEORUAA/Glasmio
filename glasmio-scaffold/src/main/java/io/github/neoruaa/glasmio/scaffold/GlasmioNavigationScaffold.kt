@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.ui.*
@@ -198,9 +199,10 @@ fun GlasmioNavigationScaffold(
     bottomBar: @Composable BoxScope.() -> Unit = {},
     /** Centered regular-width navigation, bounded by the measured shared button groups. */
     topBar: (@Composable (availableWidth: Dp) -> Unit)? = null,
+    contentBackdrop: LayerBackdrop = rememberLayerBackdrop(),
     content: @Composable (PaddingValues) -> Unit,
 ) {
-    val backdrop = rememberLayerBackdrop()
+    val backdrop = contentBackdrop
     val rawFrame = motion.frame
     val frameSource = remember { mutableStateOf(rawFrame, referentialEqualityPolicy()) }
     frameSource.value = rawFrame
@@ -224,7 +226,8 @@ fun GlasmioNavigationScaffold(
     val padding = PaddingValues(start = IosPageHorizontalPadding, top = status + 72.dp, end = IosPageHorizontalPadding)
     CompositionLocalProvider(LocalPageTitles provides titles) {
     Box(modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().glassBackdropSource(backdrop).trackBackdropPosition(backdrop)) { content(padding) }
+        Box(Modifier.fillMaxSize().layerBackdrop(backdrop, reuseContent = true).trackBackdropPosition(backdrop)
+            .background(LocalGlassColors.current.groupedBackground)) { content(padding) }
         GlasmioBackdropProvider(backdrop) {
             val owner = if (frame.phase == GlasmioNavigationPhase.Tracking || frame.phase == GlasmioNavigationPhase.Canceling) source else target
             CompositionLocalProvider(LocalGlassColors provides (owner.colors ?: LocalGlassColors.current)) {
