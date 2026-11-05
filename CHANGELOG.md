@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Add adaptive top tabs, native sidebar transitions, and fullscreen overlays above adaptive navigation.
+- Improve sidebar materials, content sampling, and navigation glass rendering performance.
+
 ## 0.1.1
 
 - Reduce active navigation tab rendering work by sharing scene and lens programs.

@@ -2,6 +2,8 @@
 
 All six artifacts share `GROUP` and `VERSION_NAME` in `gradle.properties`. A release tag is `v` followed by that version. The Android, Kotlin, Compose, and NDK versions are pinned in the checked-in Gradle configuration.
 
+Every latest GitHub release must be published as a non-prerelease and include the signed Release APK named `Glasmio-demo.apk`; the README download link resolves this asset. Build the public APK with `:sample:assembleRelease`, `-Pglasmio.requireReleaseFonts=true`, and both `glasmio.symbolFont` and `glasmio.italicFont` set to the host font paths. Sign the APK with the release key before uploading it.
+
 ## Local staging
 
 ```sh

@@ -23,8 +23,8 @@ android {
         applicationId = "io.github.neoruaa.glasmio.sample"
         minSdk = 33
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true }
@@ -56,7 +56,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-/** Host-owned fonts are generated into sample debug and demo assets. */
+/** Host-owned fonts are generated into sample assets. */
 abstract class GenerateSymbolFontAssets : DefaultTask() {
     @get:Input
     abstract val requireFonts: Property<Boolean>
@@ -117,6 +117,12 @@ val generateDemoSymbolFontAssets = tasks.register<GenerateSymbolFontAssets>("gen
     sourceItalicFont.set(layout.file(italicFontPath.map { File(it) }))
     outputDirectory.set(layout.buildDirectory.dir("generated/symbol-font/demo/assets"))
 }
+val generateReleaseSymbolFontAssets = tasks.register<GenerateSymbolFontAssets>("generateReleaseSymbolFontAssets") {
+    requireFonts.set(providers.gradleProperty("glasmio.requireReleaseFonts").map(String::toBoolean).orElse(false))
+    sourceFont.set(layout.file(symbolFontPath.map { File(it) }))
+    sourceItalicFont.set(layout.file(italicFontPath.map { File(it) }))
+    outputDirectory.set(layout.buildDirectory.dir("generated/symbol-font/release/assets"))
+}
 androidComponents {
     onVariants(selector().withBuildType("debug")) { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(
@@ -127,6 +133,12 @@ androidComponents {
     onVariants(selector().withBuildType("demo")) { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(
             generateDemoSymbolFontAssets,
+            GenerateSymbolFontAssets::outputDirectory,
+        )
+    }
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            generateReleaseSymbolFontAssets,
             GenerateSymbolFontAssets::outputDirectory,
         )
     }
