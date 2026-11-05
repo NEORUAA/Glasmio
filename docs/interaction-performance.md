@@ -68,6 +68,12 @@ Sheet dialog attributes depend on the window and dark-mode policy; apply them wh
 
 Cascading-menu width remains measured during composition with the current collections and text styles. Let `TextMeasurer` revalidate its own cache when asynchronously resolved fonts change; title/style keys alone do not cover that invalidation. Preserve the original measurement constraints and width formula.
 
+## Header glass page references
+
+Each header toolbar button is a separate `GlassSurface` whose capture layer references the whole page `GraphicsLayer`. HWUI descends into a referenced RenderNode once per reference, so every frame walks the page subtree, including each page glass control's source, mip, atlas and output layers, for visible drawing, once per header button and once for the top progressive blur. The cost grows with the number of visible glass controls. In the Controls button section it is the main cause of scroll stutter: removing header sampling cuts RenderThread p50 from 10.4 to 5.0 ms and GPU p50 from 15.3 to 10.8 ms, while removing the page's own button glass changes almost nothing. The header filter passes themselves are minor; the page reference is the cost.
+
+Only removing a page reference helps. Intermediate shared layers are still references and are walked per consumer. The proposed follow-up is to draw both header buttons from one glass node: one page reference, one capture covering the header strip and one field containing both shapes, with per-button appearance, press and bounce animations moved into that node. Estimated gain in the button section is about −3 ms RenderThread and −2 ms GPU per frame. It requires restructuring the toolbar shell glass pipeline and a separate pixel comparison. See the [button-area investigation](../.local-research/perf-20261105/README.md#button-area-and-header-glass-after-the-uniform-fill-commit).
+
 ## Rejected experiments
 
 Role-specific highlight arithmetic was evaluated with the original continuous corners retained and reverted. The [candidate record](../.local-research/performance/first-use-20261102/highlight-candidate-source.json) retains its source identity and outcome: cold compilation and frame tails did not improve consistently across Demo and MeiloX.
@@ -77,6 +83,8 @@ Draw-only menu press backgrounds and adaptive geometry/running-state caching wer
 Explicit `noinline` boundaries on atlas samplers or control-scene functions did not reduce first-use compilation on the physical device and were removed. Enlarging the scene input to the full consumer atlas also lacked a clear benefit. Preserve normal compiler specialization and the original input extents; image bounds and target state can still require distinct Skia pipelines for the shared source.
 
 A header-sized saveLayer for the scroll-edge content fade was evaluated and rejected. Drawing below the band directly rounds once instead of through the 8-bit offscreen, which changes text edges by up to three levels. Restricting continuous-corner card clips to their corner bands replayed content three times without a GPU gain. Neither is part of the implementation; see the [Controls comparison](../.local-research/perf-20261105/README.md).
+
+Three attempts to reduce the button-section cost were rejected. Wrapping cards and grouped lists in offscreen layers to keep their clip masks in layer space ran slower (RenderThread p50 9.5 to 10.9 ms, GPU 14.1 to 15.9 ms) and changed glass inside the cards by one level through the extra 8-bit composite. Rendering header captures through an independent `HardwareRenderer` snapshot differed by up to 40 levels because of its different color mode, was unstable between snapshots and disturbed the main window's RenderNode state. A shared top-strip layer for both header buttons still referenced the page once per consumer and added a layer (RenderThread 8.6 to 9.7 ms). Sharing one sampling and mip chain between the two buttons is also not pixel-identical, because their capture grids diverge from the second mip level.
 
 Do not defer all effect invalidation to drawing: `nativeMaterialCompleted` changes the owning layout layer's clip and compositing strategy. A path clip may already be recorded before the draw callback runs, so a draw-time update can leave the first frame using the previous material's clipping.
 
