@@ -596,6 +596,14 @@ inline uint64_t navigationFloatBits(float value) {
 constexpr float kNavigationFieldNoise = 2e-4f;
 // Distance from a search endpoint within which a crossing may be a graze (see RootSearch).
 constexpr float kNavigationGrazeZone = 1.0f;
+// Subdivision accepts a chord whose roots stay within this distance of it.
+constexpr float kRefineTolerance = 0.125f;
+// Half-width of the verified window around a predicted root (see RootSearch::startDecision), and the
+// allowance for Float32 rounding of the window positions and of the caller's comparison.
+constexpr float kNavigationDecisionWindow = 0.11f;
+constexpr float kNavigationDecisionSlack = 0.002f;
+// A nearly coaxial ray's tail counts as inside when one capsule field stays below minus this.
+constexpr float kNavigationTailMargin = 0.01f;
 
 // Produces exactly the result of a 20-step bisection of [outside, inside] (the field is positive
 // outside the contour), with far fewer field evaluations. It runs as a resumable state machine:
@@ -615,33 +623,53 @@ constexpr float kNavigationGrazeZone = 1.0f;
 // Otherwise, and whenever the evaluated values contradict monotonicity, the plain bisection runs.
 struct RootSearch {
     static constexpr int kBisectionSteps = 20;
-    enum class Phase : uint8_t { WindowA, WindowB, Lo, Hi, Inside, Illinois, Replay, Bisect };
+    enum class Phase : uint8_t { WindowA, WindowB, Lo, Hi, Inside, Illinois, Replay, Bisect, DecideA, DecideB,
+                                 DecideInside };
 
     float probe = 0.0f, result = 0.0f;
+    // Set instead of [result] when a decision query proved |result - center| <= kRefineTolerance.
+    bool decided = false;
+
+    // Decision query: the caller only needs to know whether the bisection result lies within
+    // kRefineTolerance of a predicted [center]. The prediction is verified by evaluating the field at
+    // center +- kNavigationDecisionWindow. Along a monotonic ray every point outside a value above
+    // twice the rounding noise is positive, and every point inside a value at or below minus twice
+    // the noise is not, so the bisection's final interval meets that window. If the values do not
+    // prove it, the exact search starts afresh, exactly as start() would.
+    // [decidable] and [decisionInterior] state what the decision may assume; they can be proven for
+    // rays whose exact search still needs the plain bisection (singleCrossing false).
+    bool startDecision(float outsideValue, float insideValue, bool singleCrossing, bool insideIsInterior,
+                       float hintValue, float center, bool decidable, bool decisionInterior) {
+        setup(outsideValue, insideValue, singleCrossing, insideIsInterior, hintValue);
+        knownInside = decisionInterior;
+        if (decidable && tolerance > 0.0f && std::isfinite(center) &&
+            kNavigationDecisionWindow + tolerance + kNavigationDecisionSlack <= kRefineTolerance) {
+            const float window = std::copysign(kNavigationDecisionWindow, inside - outside);
+            a = center - window;
+            b = center + window;
+            if ((a - outside) * (inside - a) > 0.0f && (b - outside) * (inside - b) > 0.0f &&
+                std::abs(b - inside) > kNavigationGrazeZone && std::abs(a - outside) > kNavigationGrazeZone)
+                return request(Phase::DecideA, a);
+        }
+        return startExact();
+    }
 
     bool start(float outsideValue, float insideValue, bool singleCrossing, bool insideIsInterior,
-               float hint = std::numeric_limits<float>::quiet_NaN()) {
-        outside = outsideValue;
-        inside = insideValue;
-        interior = insideIsInterior;
-        tolerance = std::abs(inside - outside) * (1.0f / float(1 << kBisectionSteps));
-        lo = outside;
-        hi = inside;
-        flo = fhi = 0.0f;
-        windowLo = windowHi = false;
-        if (!singleCrossing) return beginBisect();
-        if (std::isfinite(hint) && tolerance > 0.0f) {
-            const float window = std::copysign(0.5f, inside - outside);
-            a = hint - window;
-            b = hint + window;
-            if ((a - outside) * (inside - a) > 0.0f && (b - outside) * (inside - b) > 0.0f)
-                return request(Phase::WindowA, a);
-        }
-        return afterWindow();
+               float hintValue = std::numeric_limits<float>::quiet_NaN()) {
+        setup(outsideValue, insideValue, singleCrossing, insideIsInterior, hintValue);
+        return startExact();
     }
 
     bool resume(float value) {
         switch (phase) {
+        case Phase::DecideA:
+            return value > 2.0f * kNavigationFieldNoise ? request(Phase::DecideB, b) : startExact();
+        case Phase::DecideB:
+            if (!(value <= -2.0f * kNavigationFieldNoise)) return startExact();
+            // As for a window bracket, the inside endpoint must be inside the contour.
+            return knownInside ? finishDecided() : request(Phase::DecideInside, inside);
+        case Phase::DecideInside:
+            return value <= 0.0f ? finishDecided() : startExact();
         case Phase::WindowA:
             if (value > 0.0f) {
                 lo = a; flo = value; windowLo = true;
@@ -699,10 +727,41 @@ private:
     float outside = 0.0f, inside = 0.0f, tolerance = 0.0f;
     float lo = 0.0f, hi = 0.0f, flo = 0.0f, fhi = 0.0f, a = 0.0f, b = 0.0f;
     float margin = 0.0f, direction = 0.0f, band = 0.0f, alongLo = 0.0f, alongHi = 0.0f;
-    float l = 0.0f, h = 0.0f, position = 0.0f;
-    bool interior = false, windowLo = false, windowHi = false;
+    float l = 0.0f, h = 0.0f, position = 0.0f, hint = 0.0f;
+    bool interior = false, windowLo = false, windowHi = false, single = false, knownInside = false;
     int side = 0, iteration = 0, step = 0;
     Phase phase = Phase::Bisect;
+
+    void setup(float outsideValue, float insideValue, bool singleCrossing, bool insideIsInterior, float hintValue) {
+        outside = outsideValue;
+        inside = insideValue;
+        single = singleCrossing;
+        interior = insideIsInterior;
+        hint = hintValue;
+        decided = false;
+        tolerance = std::abs(inside - outside) * (1.0f / float(1 << kBisectionSteps));
+    }
+
+    bool startExact() {
+        lo = outside;
+        hi = inside;
+        flo = fhi = 0.0f;
+        windowLo = windowHi = false;
+        if (!single) return beginBisect();
+        if (std::isfinite(hint) && tolerance > 0.0f) {
+            const float window = std::copysign(0.5f, inside - outside);
+            a = hint - window;
+            b = hint + window;
+            if ((a - outside) * (inside - a) > 0.0f && (b - outside) * (inside - b) > 0.0f)
+                return request(Phase::WindowA, a);
+        }
+        return afterWindow();
+    }
+
+    bool finishDecided() {
+        decided = true;
+        return false;
+    }
 
     bool request(Phase next, float at) {
         phase = next;
@@ -818,11 +877,14 @@ struct NavigationUnionPath {
     // With a common vertical centre, every column of either capsule is an interval around
     // centerY, so each search ray towards centerY crosses the union's contour at most once.
     bool singleCrossingRays;
+    // Centres within the host's one-pixel coaxial limit but not common: each column ray is
+    // proven to cross once for decisions (see tailInside).
+    bool nearlyCoaxial;
 
     // One contour root on a vertical ray: y on column x between [outer] and centerY.
     struct RootRequest {
-        float x, outer, hint;
-        bool interior;
+        float x, outer, hint, center;  // center: decision query prediction, NaN for an exact root
+        bool single, interior, decidable, decisionInterior;
     };
     struct Segment {
         float x0, y0, x1, y1;
@@ -831,8 +893,12 @@ struct NavigationUnionPath {
     };
     std::vector<RootRequest> requests;
     std::vector<float> roots;
+    // decided[i]: request i was a decision query that proved |root - prediction| <= kRefineTolerance.
+    std::vector<char> decided;
     std::vector<Segment> segments[2], refined;
-    std::vector<int> pending;
+    std::vector<int> pending, stage, survivors;
+    std::vector<float> mids;
+    std::vector<char> refine, exactMid;
 
     explicit NavigationUnionPath(const float *geometry)
         : a(geometry, true), b(geometry + 6, true),
@@ -849,6 +915,8 @@ struct NavigationUnionPath {
         guard = smoothness * 0.25f + 1.0f;
         singleCrossingRays = !hasSecond ||
             std::abs((ag[1] + ag[3]) * 0.5f - (bg[1] + bg[3]) * 0.5f) <= 1e-3f;
+        nearlyCoaxial = !singleCrossingRays &&
+            std::abs((ag[1] + ag[3]) * 0.5f - (bg[1] + bg[3]) * 0.5f) <= 1.0f;
         top -= guard;
         bottom += guard;
     }
@@ -918,20 +986,28 @@ struct NavigationUnionPath {
 #endif
 
     template <typename Field>
-    static float findRoot(float outside, float inside, Field &&field, bool singleCrossing, bool interior,
-                          float hint = std::numeric_limits<float>::quiet_NaN()) {
+    static float findRoot(float outside, float inside, Field &&field, const RootRequest &r,
+                          char *decided = nullptr) {
         RootSearch search;
-        if (search.start(outside, inside, singleCrossing, interior, hint)) {
+        if (startSearch(search, outside, inside, r)) {
             while (search.resume(field(search.probe))) {
             }
         }
+        if (decided) *decided = search.decided;
         return search.result;
+    }
+
+    static bool startSearch(RootSearch &search, float outside, float inside, const RootRequest &r) {
+        return std::isnan(r.center) ? search.start(outside, inside, r.single, r.interior, r.hint)
+            : search.startDecision(outside, inside, r.single, r.interior, r.hint, r.center, r.decidable,
+                                   r.decisionInterior);
     }
 
     float rootX(float outside, float inside) {
         // The inside endpoint is a capsule centre on the centre line.
+        const float none = std::numeric_limits<float>::quiet_NaN();
         return findRoot(outside, inside, [this](float x) { return distance(x, centerY); },
-                        singleCrossingRays, true);
+                        RootRequest{centerY, outside, none, none, singleCrossingRays, true, false, false});
     }
 
     // On a common centre line, a column within either capsule's horizontal span (by one pixel)
@@ -942,7 +1018,33 @@ struct NavigationUnionPath {
     }
 
     void request(float x, float outer, float hint) {
-        requests.push_back({x, outer, hint, centreInside(x)});
+        push(x, outer, hint, std::numeric_limits<float>::quiet_NaN());
+    }
+
+    // Asks whether the root on column x lies within kRefineTolerance of the prediction [expected];
+    // [hint] seeds the exact search when the prediction cannot be verified.
+    void requestDecision(float x, float outer, float hint, float expected) {
+        push(x, outer, hint, expected);
+    }
+
+    void push(float x, float outer, float hint, float center) {
+        bool single = singleCrossingRays, interior = centreInside(x);
+        bool decidable = single, decisionInterior = interior;
+        // Only a decision relies on the proven tail; the exact search keeps the plain bisection.
+        if (nearlyCoaxial && !std::isnan(center)) decidable = decisionInterior = tailInside(x, outer);
+        requests.push_back({x, outer, hint, center, single, interior, decidable, decisionInterior});
+    }
+
+    // With nearly common centres, a column ray is monotonic like a coaxial one until it reaches the
+    // nearer capsule centre [m]; only the short tail [m, centerY] can rise again. Each capsule field
+    // is largest at an end of that tail, and the union (a polynomial smooth minimum) never exceeds
+    // either capsule field, so when one capsule is clearly negative at both ends the tail (centerY
+    // included) is inside and the ray crosses the contour once.
+    bool tailInside(float x, float outer) const {
+        const float ca = (ag[1] + ag[3]) * 0.5f, cb = (bg[1] + bg[3]) * 0.5f;
+        const float m = outer < centerY ? std::min(ca, cb) : std::max(ca, cb);
+        return std::max(a.distance(x, m), a.distance(x, centerY)) <= -kNavigationTailMargin ||
+               std::max(b.distance(x, m), b.distance(x, centerY)) <= -kNavigationTailMargin;
     }
 
     // Solves every pending request into [roots] (same order). Each root is the exact bisection
@@ -951,6 +1053,7 @@ struct NavigationUnionPath {
     void solveRequests() {
         const int count = static_cast<int>(requests.size());
         roots.resize(count);
+        decided.resize(count);
 #if defined(__aarch64__)
         struct Lane {
             RootSearch search;
@@ -964,8 +1067,9 @@ struct NavigationUnionPath {
                 const RootRequest &r = requests[next];
                 lane.index = next++;
                 lane.x = r.x;
-                if (lane.search.start(r.outer, centerY, singleCrossingRays, r.interior, r.hint)) return;
+                if (startSearch(lane.search, r.outer, centerY, r)) return;
                 roots[lane.index] = lane.search.result;
+                decided[lane.index] = lane.search.decided;
             }
             lane.index = -1;
         };
@@ -986,6 +1090,7 @@ struct NavigationUnionPath {
                 if (lane.index < 0) continue;
                 if (!lane.search.resume(values[k])) {
                     roots[lane.index] = lane.search.result;
+                    decided[lane.index] = lane.search.decided;
                     fill(lane);
                 }
             }
@@ -994,8 +1099,7 @@ struct NavigationUnionPath {
         for (int i = 0; i < count; ++i) {
             const RootRequest &r = requests[i];
             const float x = r.x;
-            roots[i] = findRoot(r.outer, centerY, [this, x](float y) { return distance(x, y); },
-                                singleCrossingRays, r.interior, r.hint);
+            roots[i] = findRoot(r.outer, centerY, [this, x](float y) { return distance(x, y); }, r, &decided[i]);
         }
 #endif
         requests.clear();
@@ -1014,38 +1118,67 @@ struct NavigationUnionPath {
             if (pending.empty()) return;
             auto at = [this](int id) -> Segment & { return segments[id >> 24][id & ((1 << 24) - 1)]; };
             const int count = static_cast<int>(pending.size());
-            std::vector<float> mids(count);
-            std::vector<char> refine(count, 0);
-            for (int k = 0; k < count; ++k) {
+            mids.assign(count, 0.0f);
+            refine.assign(count, 0);
+            exactMid.assign(count, 0);
+            // A segment at the depth limit stays a leaf whatever its roots are.
+            stage.clear();
+            for (int k = 0; k < count; ++k) if (at(pending[k]).depth < 16) stage.push_back(k);
+            for (int k : stage) {
                 const Segment &s = at(pending[k]);
-                // The chord between known roots predicts each new root; it only narrows the search.
-                request((s.x0 + s.x1) * 0.5f, outer[pending[k] >> 24], (s.y0 + s.y1) * 0.5f);
+                const float x = (s.x0 + s.x1) * 0.5f;
+                // A wide segment is always split at its midpoint root. Otherwise the chord predicts
+                // the midpoint root, and only a failed prediction needs the root itself.
+                if (std::abs(s.x1 - s.x0) > 8.0f) request(x, outer[pending[k] >> 24], (s.y0 + s.y1) * 0.5f);
+                else requestDecision(x, outer[pending[k] >> 24], (s.y0 + s.y1) * 0.5f, (s.y0 + s.y1) * 0.5f);
             }
             solveRequests();
-            std::vector<int> stage;
-            for (int k = 0; k < count; ++k) {
+            survivors.clear();
+            for (int j = 0; j < static_cast<int>(stage.size()); ++j) {
+                const int k = stage[j];
                 const Segment &s = at(pending[k]);
-                mids[k] = roots[k];
-                refine[k] = std::abs(s.x1 - s.x0) > 8.0f || std::abs(mids[k] - (s.y0 + s.y1) * 0.5f) > 0.125f;
-                if (!refine[k]) stage.push_back(k);
+                if (decided[j]) { survivors.push_back(k); continue; }
+                mids[k] = roots[j];
+                exactMid[k] = 1;
+                refine[k] = std::abs(s.x1 - s.x0) > 8.0f ||
+                    std::abs(mids[k] - (s.y0 + s.y1) * 0.5f) > kRefineTolerance;
+                if (!refine[k]) survivors.push_back(k);
             }
+            stage.swap(survivors);
             for (int quarter = 1; quarter <= 3 && !stage.empty(); quarter += 2) {
                 for (int k : stage) {
                     const Segment &s = at(pending[k]);
                     const float x = s.x0 + (s.x1 - s.x0) * (quarter == 1 ? 0.25f : 0.75f);
-                    const float hint = quarter == 1 ? (s.y0 + mids[k]) * 0.5f : (mids[k] + s.y1) * 0.5f;
-                    request(x, outer[pending[k] >> 24], hint);
+                    const float expected = s.y0 + (s.y1 - s.y0) * (quarter == 1 ? 0.25f : 0.75f);
+                    // The exact search keeps its usual hint: the half chord through the midpoint root,
+                    // or through the verified midpoint prediction.
+                    const float mid = exactMid[k] ? mids[k] : (s.y0 + s.y1) * 0.5f;
+                    const float hint = quarter == 1 ? (s.y0 + mid) * 0.5f : (mid + s.y1) * 0.5f;
+                    requestDecision(x, outer[pending[k] >> 24], hint, expected);
                 }
                 solveRequests();
-                std::vector<int> survivors;
+                survivors.clear();
                 for (int j = 0; j < static_cast<int>(stage.size()); ++j) {
                     const int k = stage[j];
                     const Segment &s = at(pending[k]);
                     const float expected = s.y0 + (s.y1 - s.y0) * (quarter == 1 ? 0.25f : 0.75f);
-                    if (std::abs(roots[j] - expected) > 0.125f) refine[k] = 1;
+                    if (!decided[j] && std::abs(roots[j] - expected) > kRefineTolerance) refine[k] = 1;
                     else survivors.push_back(k);
                 }
                 stage.swap(survivors);
+            }
+            // Split segments whose midpoint prediction held but a quarter's did not: the new vertex
+            // needs the exact midpoint root.
+            stage.clear();
+            for (int k = 0; k < count; ++k) {
+                if (!refine[k] || exactMid[k]) continue;
+                const Segment &s = at(pending[k]);
+                request((s.x0 + s.x1) * 0.5f, outer[pending[k] >> 24], (s.y0 + s.y1) * 0.5f);
+                stage.push_back(k);
+            }
+            if (!stage.empty()) {
+                solveRequests();
+                for (int j = 0; j < static_cast<int>(stage.size()); ++j) mids[stage[j]] = roots[j];
             }
             for (int pass = 0; pass < 2; ++pass) {
                 refined.clear();
