@@ -247,7 +247,9 @@ class NavigationInnerShadowRenderer(
 
     @RequiresApi(36)
     private class NativeEdgeBlender {
-        val shader = RuntimeXfermode(MaterialEdgeBlenderShader)
+        // Complete native materials keep this renderer only as a capability. Compile the
+        // blender on its first draw; the uniform sequence starts from the same defaults.
+        val shader by lazy(LazyThreadSafetyMode.NONE) { RuntimeXfermode(MaterialEdgeBlenderShader) }
         private var recipe: NavigationMaterialRecipe? = null
         private var opacity = Float.NaN
 

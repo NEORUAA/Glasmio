@@ -6,6 +6,10 @@ Performance changes must preserve the perceived motion, live layout, glass depth
 
 `NativeControlLens` and `nativeAtlasNavigationFilter` retain immutable shader sources in the existing `BackdropEffectScopeImpl` resource store. RuntimeShader validation, uniform updates and RenderEffect snapshots still run for every effect update. Resources clear with the shader cache when the scope resets.
 
+A reset scope hands its compiled programs to a per-thread `RuntimeShaderPool`, keyed by the complete source. A new scope that needs the same source takes one instead of compiling it again on the main thread; this happens on every push/pop that recreates the tab bar or header buttons. Before reuse every float and int uniform is written to zero, the state of a freshly compiled builder. Programs with a child other than `content`, color uniforms or declarations the linear parser does not recognize are never shared. Parse only when a program is reused, never while a scope detaches. Effects and paints created earlier keep their own uniform snapshots.
+
+Renderers that hosts remember while inactive (`GlassMorphRenderer`, the inner-shadow edge blender and the vibrant highlight blender) compile their programs on first use. `GlassMorphRenderer` creates the shadow-lift shader together with its RenderEffect, so that effect still snapshots the default uniforms. See the [transition traces](../.local-research/perf-20261105/transition/README.md).
+
 A regular material source depends on the **complete field source**, managed-color flag, native-gamma-storage flag and completion mode. Keep full field strings in the source-cache key: the existing runtime-shader key contains only a field hash, and its full source comparison must continue to distinguish collisions. Dimensions, material values and completion parameters are uniforms, not source variants.
 
 Control sources depend on their resting/small/tab/precomposed/color variants and shared-stage capability; generated Gaussian sources also depend on tap limit and plane mode. Each Gaussian axis retains its own shader and uniforms while sharing its immutable source.

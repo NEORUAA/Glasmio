@@ -140,14 +140,22 @@ class GlassMorphRenderer(
     private val materialPreset: NavigationGlassMaterial? = null,
     private val materialDark: Boolean = false,
 ) {
-    private val shader = if (appearance.usesRefraction) programs?.refraction ?: RuntimeShader(TransitionRefractionShader) else null
-    private val highlight = programs?.highlight ?: RuntimeShader(TransitionHighlightShader)
-    private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = highlight }
+    // Hosts remember this renderer while inactive; most never morph. Compile each program on its
+    // first use. Shared menu programs already exist and keep their original release binding.
+    private val sharedPrograms = programs
+    private val shaderDelegate = lazy(LazyThreadSafetyMode.NONE) {
+        if (appearance.usesRefraction) programs?.refraction ?: RuntimeShader(TransitionRefractionShader) else null
+    }
+    private val shader by shaderDelegate
+    private val highlightDelegate = lazy(LazyThreadSafetyMode.NONE) { programs?.highlight ?: RuntimeShader(TransitionHighlightShader) }
+    private val highlight by highlightDelegate
+    private val highlightPaint by lazy(LazyThreadSafetyMode.NONE) { Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = highlight } }
     private val highlightBlender = if (Build.VERSION.SDK_INT >= 36) NativeVibrantColorMatrixBlender() else null
     private var sampledHighlight: Highlight? = null
     private var sampledHighlightAlpha = Float.NaN
     private val pressLight = PressHighlightRenderer()
-    private val innerShadows = NavigationInnerShadowRenderer(renderScale = renderScale)
+    private val innerShadowsDelegate = lazy(LazyThreadSafetyMode.NONE) { NavigationInnerShadowRenderer(renderScale = renderScale) }
+    private val innerShadows by innerShadowsDelegate
     private var nativeRecipe: NavigationMaterialRecipe? = null
     internal var presentationDarkFraction: Float = if (materialDark) 1f else 0f
     private var nativeRecipeDarkFraction = Float.NaN
@@ -163,8 +171,12 @@ class GlassMorphRenderer(
         useNativeProfile = true,
         nativeMaterial = materialPreset,
     )
-    private val shadowLiftShader = if (appearance.usesBackdrop) RuntimeShader(NavigationShadowLiftShader) else null
-    private val shadowLiftEffect = shadowLiftShader?.let { RenderEffect.createRuntimeShaderEffect(it, "content") }
+    // The effect is a snapshot of the shader's default uniforms; create both together, before
+    // any later uniform write, exactly as the eager construction did.
+    private val shadowLift by lazy(LazyThreadSafetyMode.NONE) {
+        if (appearance.usesBackdrop) RuntimeShader(NavigationShadowLiftShader).let { it to RenderEffect.createRuntimeShaderEffect(it, "content") }
+        else null
+    }
     private val reusableOutlinePath = Path()
     private var materialWidth = 0
     private var materialHeight = 0
@@ -247,9 +259,9 @@ class GlassMorphRenderer(
     }
 
     fun release() {
-        shader?.let { bindLiquidMenuField(it, null) }
-        bindLiquidMenuField(highlight, null)
-        innerShadows.release()
+        if (shaderDelegate.isInitialized() || sharedPrograms != null) shader?.let { bindLiquidMenuField(it, null) }
+        if (highlightDelegate.isInitialized() || sharedPrograms != null) bindLiquidMenuField(highlight, null)
+        if (innerShadowsDelegate.isInitialized()) innerShadows.release()
         dropShadow.release()
         nativeFilterScope.reset()
         atlasPasses?.release()
@@ -467,6 +479,8 @@ class GlassMorphRenderer(
             }
             atlasInputActive = false
         }
+        // Read the lazy program only on frames that actually apply the explicit refraction.
+        val shader: RuntimeShader? = if (!nativeBackgroundFilter || customOptics) this@GlassMorphRenderer.shader else null
         val refractionEffect = if (shader != null && (!nativeBackgroundFilter || customOptics)) {
             val opticalBounds = lensBounds ?: bounds
             val sampleBounds = Rect(
@@ -515,10 +529,11 @@ class GlassMorphRenderer(
         val liftProgress = shadowLiftProgress.coerceIn(0f, 1f)
         val opticalEffect = if (nativeBackgroundEffect != null && refractionEffect != null)
             RenderEffect.createChainEffect(refractionEffect, nativeBackgroundEffect) else nativeBackgroundEffect ?: refractionEffect
-        val sampledEffect = if (!usesNativeMaterial && navigationMaterial && !isDark && shadowLiftEffect != null && liftProgress > 0f) {
-            shadowLiftShader?.setFloatUniform("suppression", 1f - liftProgress)
-            if (opticalEffect != null) RenderEffect.createChainEffect(shadowLiftEffect, opticalEffect)
-            else shadowLiftEffect
+        val shadowLift = if (!usesNativeMaterial && navigationMaterial && !isDark) this@GlassMorphRenderer.shadowLift else null
+        val sampledEffect = if (shadowLift != null && liftProgress > 0f) {
+            shadowLift.first.setFloatUniform("suppression", 1f - liftProgress)
+            if (opticalEffect != null) RenderEffect.createChainEffect(shadowLift.second, opticalEffect)
+            else shadowLift.second
         } else opticalEffect
         val highlightOpacity = highlightAlpha.coerceIn(0f, 1f)
         if (sampledHighlightAlpha != highlightOpacity) {
