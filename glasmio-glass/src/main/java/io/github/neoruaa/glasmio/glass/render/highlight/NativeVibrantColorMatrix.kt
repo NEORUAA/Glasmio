@@ -119,7 +119,8 @@ float4 nativeVibrantColorMatrixOver(float4 mask, float4 sampledBackdrop, float4 
 
 @RequiresApi(36)
 internal class NativeVibrantColorMatrixBlender {
-    val shader = RuntimeXfermode(GlassColorSpaceShaderFunctions + NativeVibrantColorMatrixFunctions + """
+    // Compiled on the first prepare/draw; an unused morph or highlight renderer never needs it.
+    val shader by lazy(LazyThreadSafetyMode.NONE) { RuntimeXfermode(GlassColorSpaceShaderFunctions + NativeVibrantColorMatrixFunctions + """
 half4 main(half4 source, half4 destination) {
     if (source.a <= 0.0) return destination;
     float4 target = float4(destination);
@@ -129,7 +130,7 @@ half4 main(half4 source, half4 destination) {
     float3 working = glassNativeGammaToWorking(vibrant.rgb / max(vibrant.a, 0.000001));
     return half4(working * vibrant.a, vibrant.a);
 }
-""")
+""") }
     private var configured: NativeVibrantColorMatrix? = null
     private var configuredFraction = Float.NaN
     private val interpolation = NativeVibrantColorMatrix.HighlightInterpolation()
