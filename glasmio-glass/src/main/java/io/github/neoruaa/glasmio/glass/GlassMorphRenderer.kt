@@ -479,9 +479,14 @@ class GlassMorphRenderer(
             }
             atlasInputActive = false
         }
-        // Read the lazy program only on frames that actually apply the explicit refraction.
-        val shader: RuntimeShader? = if (!nativeBackgroundFilter || customOptics) this@GlassMorphRenderer.shader else null
-        val refractionEffect = if (shader != null && (!nativeBackgroundFilter || customOptics)) {
+        // Keep the A texture barrier; eligible menus evaluate B in final completion.
+        // Capability stays present at zero amount, without initializing the unused B builder.
+        val fuseTransitionRefraction = completeNativeMaterial && nativeBackgroundFilter && customOptics &&
+            appearance.usesRefraction && menuField != null && cornerRadii != null && filterField != null &&
+            drawContext.canvas.nativeCanvas.isHardwareAccelerated && !nativeFilterScope.colorManagedNativeGlass
+        val shader: RuntimeShader? = if (!fuseTransitionRefraction && (!nativeBackgroundFilter || customOptics))
+            this@GlassMorphRenderer.shader else null
+        val refractionEffect = if (shader != null) {
             val opticalBounds = lensBounds ?: bounds
             val sampleBounds = Rect(
                 sourceOffset.x + opticalBounds.left * sampleScale.x,
@@ -588,13 +593,35 @@ class GlassMorphRenderer(
         if (completeNativeMaterial) {
             fun Offset.sampled() = Offset(x * sampleScale.x, y * sampleScale.y)
             fun Size.sampled() = Size(width * sampleScale.x, height * sampleScale.y)
-            // Materialize the explicit transition optics at their original texture raster.
+            // Preserve the optical texture barrier: fused menus store A, fallbacks store A+B.
             // Raw L0 remains in a separate region for the native exterior completion branch.
             val base = IntSize(ceil(viewport.width * renderScale).toInt(), ceil(viewport.height * renderScale).toInt())
             material.clip = true
             material.compositingStrategy = CompositingStrategy.Offscreen
             material.renderEffect = null
             material.record(this@GlassMorphRenderer.density, recordedLayoutDirection, base) { drawLayer(refracted) }
+            val transitionRefraction = if (fuseTransitionRefraction) {
+                val opticalBounds = lensBounds ?: bounds
+                val sampleBounds = Rect(
+                    sourceOffset.x + opticalBounds.left * sampleScale.x,
+                    sourceOffset.y + opticalBounds.top * sampleScale.y,
+                    sourceOffset.x + opticalBounds.right * sampleScale.x,
+                    sourceOffset.y + opticalBounds.bottom * sampleScale.y,
+                )
+                NativeMenuTransitionRefraction(
+                    sampleExtent = base,
+                    drawingBounds = Rect(
+                        (sourceOffset.x + bounds.left * sampleScale.x) * renderScale - 1f,
+                        (sourceOffset.y + bounds.top * sampleScale.y) * renderScale - 1f,
+                        (sourceOffset.x + bounds.right * sampleScale.x) * renderScale + 1f,
+                        (sourceOffset.y + bounds.bottom * sampleScale.y) * renderScale + 1f,
+                    ),
+                    center = Offset(sampleBounds.center.x * renderScale, sampleBounds.center.y * renderScale),
+                    halfSize = Size(sampleBounds.width * renderScale / 2f, sampleBounds.height * renderScale / 2f),
+                    height = lensHeight * renderScale, amount = -lensAmount * renderScale,
+                    hasSecondary = secondaryLensBounds != null,
+                )
+            } else null
             val progress = sourceFilterProgress?.coerceIn(0f, 1f) ?: 1f
             val sourceRecipe = sourceNativeMaterial?.recipe
             // Menus retain source-shadow capability at zero opacity; other transitions keep their endpoint bounds.
@@ -617,7 +644,10 @@ class GlassMorphRenderer(
                 outputSize = Size(bounds.width * sampleScale.x, bounds.height * sampleScale.y),
                 outputDensity = scope.density * minOf(sampleScale.x, sampleScale.y),
                 textureScale = renderScale, highlightAlpha = highlightOpacity, sourceShadow = sourceShadow)
-            val completedEffect = nativeFilterScope.completeNativeFilteredGlass(base, null, isDark,
+            val completedEffect = if (transitionRefraction != null) {
+                nativeFilterScope.completeNativeMenuFilteredGlass(base, effectOrigin, requireNotNull(filterField),
+                    completion, transitionRefraction)
+            } else nativeFilterScope.completeNativeFilteredGlass(base, null, isDark,
                 materialPreset, 1f, origin = effectOrigin, field = filterField, completion = completion,
                 filteredIsNativeRaw = true)
             val outputOrigin = nativeFilterScope.materialOutputOrigin

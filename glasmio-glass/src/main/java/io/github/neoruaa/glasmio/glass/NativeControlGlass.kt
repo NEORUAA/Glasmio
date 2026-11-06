@@ -3,6 +3,8 @@ package io.github.neoruaa.glasmio.glass
 import android.graphics.BlendMode
 import android.graphics.RenderEffect
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.unit.IntRect
@@ -14,6 +16,9 @@ import io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
 import io.github.neoruaa.glasmio.glass.render.optics.glassCornerRadii
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSdfFunctions
+import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassRefractionFunctions
+import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSpectralFunctions
+import io.github.neoruaa.glasmio.glass.render.optics.CustomGlassChromaticFunctions
 import java.util.LinkedHashMap
 import kotlin.math.ceil
 import kotlin.math.max
@@ -64,6 +69,26 @@ internal fun BackdropEffectScope.nativeControlGlassImpl(
         region("filtered", filtered, base.height.toFloat()), BlendMode.PLUS)
     completeNativeFilteredGlass(base, producer, isDark, material, materialAlpha, idleColor, overlayColor,
         field = field, completion = completion)
+}
+
+/** Owned SDR menu optics over an already materialized native A plane, in effect pixels. */
+internal data class NativeMenuTransitionRefraction(
+    val sampleExtent: IntSize,
+    val drawingBounds: Rect,
+    val center: Offset,
+    val halfSize: Size,
+    val height: Float,
+    val amount: Float,
+    val hasSecondary: Boolean,
+) {
+    fun configure(shader: android.graphics.RuntimeShader) {
+        shader.setFloatUniform("transitionSampleExtent", sampleExtent.width.toFloat(), sampleExtent.height.toFloat())
+        shader.setFloatUniform("transitionDrawingBounds", drawingBounds.left, drawingBounds.top, drawingBounds.right, drawingBounds.bottom)
+        shader.setFloatUniform("transitionCenter", center.x, center.y)
+        shader.setFloatUniform("transitionHalfSize", halfSize.width, halfSize.height)
+        shader.setFloatUniform("transitionLens", height, amount)
+        shader.setFloatUniform("transitionHasSecondary", if (hasSecondary) 1f else 0f)
+    }
 }
 
 private data class NativeControlCompletionSourceKey(
@@ -124,6 +149,43 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
     return RenderEffect.createRuntimeShaderEffect(shader, "content").also { renderEffect = it.asComposeRenderEffect() }
 }
 
+/** Only the owned menu caller supplies A and raw L0; generic control sources remain unchanged. */
+internal fun BackdropEffectScope.completeNativeMenuFilteredGlass(
+    base: IntSize,
+    origin: Offset,
+    field: NativeGlassFilterField,
+    completion: NativeGlassCompletion,
+    transitionRefraction: NativeMenuTransitionRefraction,
+): RenderEffect {
+    val storage = this as BackdropEffectScopeImpl
+    val topology = completion.programTopology()
+    val atlas = NativeGlassMipAtlas(base, IntSize(base.width, base.height * 2), listOf(
+        IntRect(0, 0, base.width, base.height), IntRect(0, base.height, base.width, base.height * 2)),
+        null, storage.colorManagedNativeGlass)
+    val functions = field.shaderFunctions
+    val sources = storage.cachedResource("Glasmio.NativeControl.menuComplete.sources") {
+        object : LinkedHashMap<NativeControlCompletionSourceKey, String>(8, .75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<NativeControlCompletionSourceKey, String>?): Boolean =
+                size > 8
+        }
+    }
+    val source = sources.getOrPut(NativeControlCompletionSourceKey(functions, atlas.colorManaged,
+        filteredIsNativeRaw = true, topology = topology, samplingLayoutKey = atlas.samplingLayoutKey)) {
+        nativeGlassCompletionFieldFunctions(functions) +
+            (if (!functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") + atlas.samplingFunctions +
+            (if (atlas.colorManaged) "" else GlassColorSpaceShaderFunctions) + NativeMenuTransitionFilteredFunctions +
+            nativeGlassCompletionShader(topology)
+    }
+    val shader = obtainRuntimeShader("Glasmio.NativeControl.menuComplete.${atlas.colorManaged}.${topology.cacheKey}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
+        source).asAndroidRuntimeShader()
+    atlas.configure(shader)
+    field.configure(shader)
+    transitionRefraction.configure(shader)
+    storage.materializeNativeGlassAtlas(atlas)
+    configureNativeGlassCompletion(shader, completion, storage, origin)
+    return RenderEffect.createRuntimeShaderEffect(shader, "content").also { renderEffect = it.asComposeRenderEffect() }
+}
+
 private const val NativeControlRegionShader = """
 uniform shader content;
 uniform float2 regionSize;
@@ -154,5 +216,35 @@ float4 nativeAtlasFiltered(float2 coordinate, float3 field) {
     // Native inner/fill/outer already establishes its raw RGB/alpha contract.
     // A native outer sample with alpha below one must not be unpremultiplied here.
     return nativeAtlasBilinear(coordinate, 1);
+}
+"""
+
+/** B samples A's private SDR texture once per address; raw L0 keeps its existing sampler. */
+private const val NativeMenuTransitionFilteredFunctions = NativeControlFlushFunctions + NativeGlassRefractionFunctions + """
+uniform float2 transitionSampleExtent;
+uniform float4 transitionDrawingBounds;
+uniform float2 transitionCenter;
+uniform float2 transitionHalfSize;
+uniform float2 transitionLens;
+uniform float transitionHasSecondary;
+half4 nativeMenuTransitionSample(float2 coord) {
+    float4 rect = nativeAtlasRect(1);
+    return content.eval(rect.xy + clamp(coord, float2(0.5), transitionSampleExtent - float2(0.5)));
+}
+half4 nativeGlassSample(float2 coord, float blurRadius) { return nativeMenuTransitionSample(coord); }
+""" + NativeGlassSpectralFunctions + CustomGlassChromaticFunctions + """
+float4 nativeAtlasFiltered(float2 coord, float3 liquid) {
+    if (coord.x < transitionDrawingBounds.x || coord.y < transitionDrawingBounds.y ||
+        coord.x > transitionDrawingBounds.z || coord.y > transitionDrawingBounds.w) return float4(0.0);
+    if (transitionLens.x <= 0.0 || transitionLens.y == 0.0) return float4(nativeMenuTransitionSample(coord));
+    float2 p = coord - transitionCenter;
+    float sd = liquid.x;
+    if (transitionHasSecondary < 0.5 && (abs(p.x) > transitionHalfSize.x + 1.0 || abs(p.y) > transitionHalfSize.y + 1.0)) return float4(0.0);
+    if (-sd >= max(transitionLens.x, 0.0)) return float4(nativeMenuTransitionSample(coord));
+    float d = nativeGlassDisplacement(sd, 1.0 / transitionLens.x, transitionLens.y);
+    float2 grad = liquid.yz;
+    float2 refracted = coord + d * grad;
+    return float4(nativeGlassAberrate(refracted,
+        customGlassChromaticVector(d * grad, p, transitionHalfSize), 0.0));
 }
 """
