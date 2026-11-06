@@ -54,6 +54,12 @@ Owned materialized inputs use HWUI's linear image sampler when stored channels n
 
 Continuous corners and their optical gradients are perceptually important. Tab scene/consumer programs and navigation unions retain the original continuous-corner field; do not replace it with a circular capsule or circular rounded rectangle. Preserve the union's affine axes, gradient, bridge, smoothness and presentation transforms as well as the visible Compose outline.
 
+The empty shared SDR navigation base fuses its dual press glow into native material completion on API 36+. Managed WCG/HDR colors retain the original destination-based overlay. Apply coverage only to the glow delta, retain the original color transfers, and skip the separate overlay only after completion succeeds. Child foregrounds and incompatible paths retain their original overlay order. The fused foreground still reads the press sample during drawing so press uniforms remain live after geometry and backdrop motion stop.
+
+The circular press shadow collects the original fixed eight-node quadrature into a degree-eight Horner polynomial. Preserve the Gaussian factor, normalized-distance cap and coverage clamp. This changes floating-point evaluation order, not the effective quadrature nodes.
+
+Menus retain source-shadow capability at zero opacity so settling does not select another completion program. Zero opacity skips its SDF work.
+
 Material programs omit generic fill operations only when the recipe and its alternate appearance have no fill layers. Source and target recipes have independent topology bits. All declarations and live appearance/tint/opacity updates remain available; custom recipes with fills use the complete implementation.
 
 The fixed tint-mask Bezier uses four clamped Newton iterations instead of twelve bisections. Its x derivative remains above .6429 on [0,1]; the maximum easing difference from the previous finite bisection is below .000182. Control points, coverage and the final y polynomial are unchanged.
@@ -103,6 +109,8 @@ Verify the target package, UID, PID and window before attributing frames. MeiloX
 Report all-frame long-latency shares, p95/p99, deadline misses and actual presentation gaps. Keep app SurfaceFrame latency, display presentation intervals and scheduled CPU time distinct. A layer's low buffer production rate can include stationary or obscured content; call it animation FPS only when continued visual motion is established. Include cold startup and route preparation in the whole sequence, with interaction phases also reported separately. Preserve per-window attribution for sheets and menus.
 
 ## Evidence
+
+The [selected-stash comparison](../.local-research/performance/stash-pick-20261106/RESULTS.md) measures shared navigation press completion, stable menu-shadow capability and the press polynomial against PR-merged main. Broader radius/union and hardware-transport candidates are excluded.
 
 Cold-process comparisons and supporting probes for capture replay, native arithmetic and reader invalidation are retained under [`.local-research/performance/cold-20261030/`](../.local-research/performance/cold-20261030/REPORT.md). Use runs with cleared shader caches as primary performance evidence, and report repeated interactions separately.
 

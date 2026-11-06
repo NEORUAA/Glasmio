@@ -597,7 +597,9 @@ class GlassMorphRenderer(
             material.record(this@GlassMorphRenderer.density, recordedLayoutDirection, base) { drawLayer(refracted) }
             val progress = sourceFilterProgress?.coerceIn(0f, 1f) ?: 1f
             val sourceRecipe = sourceNativeMaterial?.recipe
-            val sourceShadow = if (sourceRecipe != null && secondaryLensBounds != null && progress < 1f) {
+            // Menus retain source-shadow capability at zero opacity; other transitions keep their endpoint bounds.
+            val sourceShadow = if (sourceRecipe != null && secondaryLensBounds != null &&
+                (progress < 1f || menuField != null)) {
                 val originalExtent = sourceNativeMaterial.minimumDimension.takeIf { it.isFinite() }
                     ?: secondaryLensBounds.size.minDimension / scope.density
                 NativeGlassSourceShadow(navigationNativeShadowProfile(originalExtent, sourceFilterMaterial),

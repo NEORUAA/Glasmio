@@ -717,6 +717,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
     sampledPressHighlight: ((Size) -> SampledPressHighlight?)? = null,
     darkFraction: Float = if (isDark) 1f else 0f,
     backgroundOverlay: (DrawScope.() -> Unit)? = null,
+    fusePressOverlayIntoCompletion: Boolean = false,
 ): Modifier {
     val nativeRecipe = if (navigationMaterial && innerShadows != null && surfaceOverlay == null &&
         sampleBackdrop && appearance.usesBackdrop) {
@@ -734,6 +735,11 @@ internal fun Modifier.navigationGlassBackgroundResolved(
             navigationGlassCaptureScale(size.minDimension / density.density) else 1f
     }
     val sampledPressRenderer = if (Build.VERSION.SDK_INT < 36 && sampledPressHighlight != null) PressHighlightRenderer() else null
+    // Only the shared bottom base opts in: it has no child content before its press overlay.
+    val canFusePressOverlay = fusePressOverlayIntoCompletion && Build.VERSION.SDK_INT >= 36 &&
+        sampledPressHighlight != null && pressOverlay != null && nativeRecipe != null &&
+        !appearance.reduceTransparency && surfaceOverlay == null && backgroundOverlay == null
+    var completedPressOverlay = false
     var geometryExtent = Float.NaN
     var cachedGeometry: NavigationGlassGeometryProfile? = null
     return this.then(
@@ -758,7 +764,9 @@ internal fun Modifier.navigationGlassBackgroundResolved(
         samplingScale = samplingScale,
         shape = shape,
         effects = {
+            completedPressOverlay = false
             if (sampleBackdrop && appearance.usesBackdrop) {
+                val storage = this as? io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
                 val surfaceShape = shape()
                 val extent = ((surfaceShape as? NavigationGlassUnionShape)?.minimumDimension ?: size.minDimension) / density
                 val geometry = if (cachedGeometry == null || geometryExtent != extent) {
@@ -768,13 +776,17 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                 val amount = if (refractionAmount.value.isFinite()) refractionAmount.toPx() else geometry.innerAmount * density
                 val nativeOptics = !refractionHeight.value.isFinite() && !refractionAmount.value.isFinite()
                 val contactShape = surfaceShape as? LiquidContactShape
+                val pressGlow = if (canFusePressOverlay && storage != null && storage.nativeGlassHardwareRendering &&
+                    !storage.colorManagedNativeGlass) {
+                    NativeGlassPressGlow(sampledPressHighlight?.invoke(storage.fullSize))
+                } else null
                 val completion = nativeRecipe?.let { recipe ->
                     NativeGlassCompletion(recipe, isDark,
                         if (material == NavigationGlassMaterial.Clear) 1f else 0f,
                         materialAlpha = materialPaintAlpha, edgeAlpha = innerShadowAlpha,
                         shadow = if (dropShadow == null) navigationNativeShadowProfile(extent, material) else null,
                         shadowAlpha = shadowAlpha, highlightAlpha = surfaceHighlight.alpha,
-                        highlightAngle = highlightAngle, darkFraction = darkFraction)
+                        highlightAngle = highlightAngle, darkFraction = darkFraction, pressGlow = pressGlow)
                 }
                 val completionBand = completion?.shadow?.let { (it.radius * 2f + 8f) * density + 2f } ?: 0f
                 val nativeField = if (nativeOptics || completion != null) when (surfaceShape) {
@@ -811,6 +823,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                         sourcePadding = maxOf(frost * 3f, kotlin.math.abs(amount) * 2f), optics = explicitOptics)
                     else explicitOptics()
                 }
+                completedPressOverlay = pressGlow != null && storage?.nativeMaterialCompleted == true
                 if (nativeRecipe != null && !completeNativeMaterial && Build.VERSION.SDK_INT < 36) {
                     val coating = requireNotNull(innerShadows).materialEffect(
                         nativeRecipe, materialPaintAlpha, size.minDimension / density,
@@ -885,7 +898,12 @@ internal fun Modifier.navigationGlassBackgroundResolved(
             backgroundOverlay?.invoke(this)
         },
         onDrawFront = {
-            pressOverlay?.invoke(this)
+            if (completedPressOverlay) {
+                // Keep press state in the draw read set after its overlay is fused.
+                sampledPressHighlight?.invoke(size)
+            } else {
+                pressOverlay?.invoke(this)
+            }
         },
     )
 }

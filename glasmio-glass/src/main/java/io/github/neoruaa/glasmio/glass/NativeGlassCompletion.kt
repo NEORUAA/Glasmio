@@ -35,7 +35,11 @@ internal data class NativeGlassCompletion(
     val highlightAngle: Float = 0f,
     val sourceShadow: NativeGlassSourceShadow? = null,
     val darkFraction: Float = if (isDark) 1f else 0f,
+    val pressGlow: NativeGlassPressGlow? = null,
 )
+
+/** A present capability keeps its shader topology even when no member is pressed. */
+internal data class NativeGlassPressGlow(val sample: SampledPressHighlight?)
 
 /** Recipe structure stays active even when an animation temporarily gives it zero opacity. */
 internal data class NativeGlassCompletionTopology(
@@ -45,11 +49,13 @@ internal data class NativeGlassCompletionTopology(
     val hasSourceShadow: Boolean = true,
     val hasTargetFills: Boolean = true,
     val hasSourceFills: Boolean = true,
+    val hasPressGlow: Boolean = false,
 ) {
     val cacheKey: Int
         get() = (if (hasSourceRecipe) 4 else 0) or (if (hasTargetAppearance) 2 else 0) or
             (if (hasSourceAppearance) 1 else 0) or (if (hasSourceShadow) 8 else 0) or
-            (if (hasTargetFills) 16 else 0) or (if (hasSourceFills) 32 else 0)
+            (if (hasTargetFills) 16 else 0) or (if (hasSourceFills) 32 else 0) or
+            (if (hasPressGlow) 64 else 0)
 }
 
 internal fun NativeGlassCompletion.programTopology(): NativeGlassCompletionTopology =
@@ -60,6 +66,7 @@ internal fun NativeGlassCompletion.programTopology(): NativeGlassCompletionTopol
         hasSourceShadow = sourceShadow != null,
         hasTargetFills = recipe.hasFillLayers(),
         hasSourceFills = sourceRecipe?.hasFillLayers() == true,
+        hasPressGlow = pressGlow != null,
     )
 
 internal data class NativeGlassSourceShadow(
@@ -121,6 +128,20 @@ internal fun configureNativeGlassCompletion(
     }
     updateNavigationMaterialUniforms(completion.sourceRecipe, completion.sourceAlpha) { name, value ->
         shader.setFloatUniform("source_$name", value)
+    }
+    completion.pressGlow?.let { glow ->
+        val sample = glow.sample
+        val bounds = sample?.bounds ?: Rect.Zero
+        val press = sample?.highlight
+        val position = press?.position ?: Offset.Zero
+        configureNativePressGlow(shader,
+            progress = if (bounds.isEmpty) 0f else press?.glowProgress ?: 0f,
+            position = bounds.topLeft + Offset(bounds.width * position.x, bounds.height * position.y),
+            bounds = bounds, density = density, clampPosition = true, horizontalRadius = null,
+            isDark = completion.isDark, tint = null, clear = false,
+            dissipationProgress = press?.dissipationProgress ?: 0f,
+            boundsHighlight = sample?.boundsHighlight ?: false,
+        )
     }
 }
 
@@ -238,7 +259,7 @@ half4 main(float2 coordinate) {
 """
 
 private const val NativeGlassCompletionSourceShadowBlock = """
-    if (nativeSourceShadow.x > 0.0) {
+    if (nativeSourceShadow.x > 0.0 && nativeSourceShadow.y > 0.0) {
         float d = nativeGlassRoundedField(p - nativeSourceShadowBounds.xy - float2(0.0, nativeSourceShadow.z),
             nativeSourceShadowBounds.zw, nativeSourceShadowRadii, .5).x;
         float sourceShadow = nativeGaussianTail(d / nativeSourceShadow.x) * nativeSourceShadow.y;
@@ -273,6 +294,22 @@ private const val NativeGlassCompletionShaderSuffix = """
 }
 """
 
+/** Preserve the transparent capture's transfer; only the foreground delta receives coverage. */
+private const val NativeGlassCompletionPressGlowSuffix = """
+    float4 encoded = float4(half4(nativeAtlasEncodeRelative(completed, originalRaw)));
+    if (coverage > 0.0 && (pressOpacity.x > 0.0 || pressOpacity.y > 0.0)) {
+        half2 mask = half2(pressOpacity.x * nativePressBigMask(p), pressOpacity.y * nativePressShadow(p));
+        if (mask.x > 0.0 || mask.y > 0.0) {
+            half4 target = half4(glassWorkingToNativeGammaPremul(encoded));
+            half4 glowing = nativeApplyPressGlow(target, float(mask.x), float(mask.y), pressDodgeGain);
+            float4 working = float4(half4(glassNativeGammaToWorkingPremul(float4(glowing))));
+            encoded += coverage * (working - encoded);
+        }
+    }
+    return half4(encoded);
+}
+"""
+
 /** Keep the full uniform layout while bounding the reachable material graph to its recipes. */
 internal fun nativeGlassCompletionShader(topology: NativeGlassCompletionTopology): String {
     val sourceFace = when {
@@ -291,7 +328,8 @@ internal fun nativeGlassCompletionShader(topology: NativeGlassCompletionTopology
     }
     val targetAlternate = if (topology.hasTargetAppearance) "alternate" else "false"
     return navigationMaterialNativeShaderFunctions(topology.hasTargetFills) +
-        navigationMaterialSourceShaderFunctions(topology.hasSourceFills) + NativeGlassCompletionShaderPrefix + """
+        navigationMaterialSourceShaderFunctions(topology.hasSourceFills) + NativeGlassCompletionShaderPrefix +
+        (if (topology.hasPressGlow) NativePressGlowApplyFunctions + NativePressGlowMaskFunctions else "") + """
 float4 nativeCompletionFaceForAppearance(float4 sampled, bool targetAlternate, bool sourceAlternate) {
     float4 result = sampled;
     if (source_materialOpacity > 0.0) result = mix(sampled, $sourceFace, source_materialOpacity);
@@ -341,7 +379,7 @@ float4 nativeCompletionTint(float4 destination, float3 original, float mask, flo
     }
 """)
         }
-    } + NativeGlassCompletionShaderSuffix
+    } + if (topology.hasPressGlow) NativeGlassCompletionPressGlowSuffix else NativeGlassCompletionShaderSuffix
 }
 
 /** Full graph retained for callers without known recipe structure. */

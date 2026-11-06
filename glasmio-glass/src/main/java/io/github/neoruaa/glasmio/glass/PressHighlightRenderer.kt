@@ -138,7 +138,7 @@ internal fun configureNativePressGlow(
 }
 
 /** Native touch matrices omit inputClamp (default zero); the separate top CASDF keeps its 1.2 cap. */
-internal const val NativePressGlowTransfer = NativeVibrantColorMatrixTransferFunctions + """
+internal const val NativePressGlowApplyFunctions = """
 half4 nativeApplyPressGlow(half4 target, float bigOpacity, float littleOpacity, float gain) {
     float4 result = float4(target);
     result = nativeVibrantColorMatrixApplyOver(float4(0.0, 0.0, 0.0, bigOpacity), result, result,
@@ -155,8 +155,11 @@ half4 nativeApplyPressGlow(half4 target, float bigOpacity, float littleOpacity, 
 }
 """
 
+internal const val NativePressGlowTransfer =
+    NativeVibrantColorMatrixTransferFunctions + NativePressGlowApplyFunctions
+
 /** CALayer's circular white shadow is the source alpha of the little vibrant matrix layer. */
-internal const val NativePressGlowFunctions = NativePressGlowTransfer + """
+internal const val NativePressGlowMaskFunctions = """
 uniform float2 pressCenter;
 uniform float2 pressRadius;
 uniform float2 pressOpacity;
@@ -168,28 +171,27 @@ float nativePressBigMask(float2 p) {
 }
 float nativePressShadow(float2 p) {
     float normalizedDistance = length((p - pressCenter) / max(pressRadius, float2(0.0001)));
-    // Integrate a circular bounds path against its Gaussian shadow, rather than a radial ramp.
-    // Eight-point Gauss-Legendre quadrature on the normalized path radius keeps this GPU-only.
     float x = min(normalizedDistance, 5.0);
-    float integral = 0.0;
-    for (int i = 0; i < 8; ++i) {
-        float t = i == 0 ? .0198550718 : i == 1 ? .1016667613 : i == 2 ? .2372337950
-            : i == 3 ? .4082826788 : i == 4 ? .5917173212 : i == 5 ? .7627662050
-            : i == 6 ? .8983332387 : .9801449282;
-        float w = i == 0 || i == 7 ? .0506142681 : i == 1 || i == 6 ? .1111905172
-            : i == 2 || i == 5 ? .1568533229 : .1813418917;
-        float q = x * x * t * t * 0.25;
-        float bessel = ((((((((6.151187327e-10 * q + 3.936759889e-8) * q + 1.929012346e-6)
-            * q + 0.00006944444444) * q + 0.001736111111) * q + 0.02777777778)
-            * q + 0.25) * q + 1.0) * q + 1.0);
-        integral += w * t * exp(-0.5 * t * t) * bessel;
-    }
-    return clamp(exp(-0.5 * x * x) * integral, 0.0, 1.0);
+    float z = x * x;
+    // Collect the original eight-point Gauss-Legendre quadrature's fixed degree-eight
+    // Bessel expansion into powers of x squared, preserving its nodes and truncation.
+    float integral = 3.32834397e-16;
+    integral = integral * z + 9.64113704e-14;
+    integral = integral * z + 2.17530282e-11;
+    integral = integral * z + 3.68878572e-9;
+    integral = integral * z + 4.48217776e-7;
+    integral = integral * z + 0.0000364921361;
+    integral = integral * z + 0.00179845968;
+    integral = integral * z + 0.0451020040;
+    integral = integral * z + 0.393469334;
+    return clamp(exp(-0.5 * z) * integral, 0.0, 1.0);
 }
 half4 nativePressGlow(half4 target, float2 p) {
     return nativeApplyPressGlow(target, pressOpacity.x * nativePressBigMask(p), pressOpacity.y * nativePressShadow(p), pressDodgeGain);
 }
 """
+
+internal const val NativePressGlowFunctions = NativePressGlowTransfer + NativePressGlowMaskFunctions
 
 internal const val PressMaskMain = """
 half4 main(float2 p) {

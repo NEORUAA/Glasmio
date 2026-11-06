@@ -140,6 +140,7 @@ fun BottomNavigationContact(
                         sampledPressHighlight = {
                             renderedSurface.value?.let { contact.sampledPressHighlight(it.bounds.topLeft) }
                         },
+                        fusePressOverlayIntoCompletion = true,
                     )
                 }
                 Box(Modifier.matchParentSize()
