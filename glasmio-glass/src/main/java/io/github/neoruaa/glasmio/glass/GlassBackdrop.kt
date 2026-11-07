@@ -42,6 +42,7 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.hasBuiltInLayerBlockIndependentSource
 import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlin.math.ceil
 
@@ -121,8 +122,8 @@ private fun BackdropHost(
 
 fun Modifier.glassBackdropSource(backdrop: LayerBackdrop): Modifier = layerBackdrop(backdrop)
 
-/** Window-space positions of backdrop source layers, for cross-window sampling. */
-private val backdropSourcePositions = WeakHashMap<LayerBackdrop, LayoutCoordinates>()
+/** Weak values prevent modifier callbacks from retaining their backdrop keys and detached trees. */
+private val backdropSourcePositions = WeakHashMap<LayerBackdrop, WeakReference<LayoutCoordinates>>()
 private val backdropSourceFrames = WeakHashMap<LayerBackdrop, State<Int>>()
 
 /** Attach next to a [layerBackdrop] recording so dialog-window glass can locate the source. */
@@ -130,7 +131,7 @@ fun Modifier.trackBackdropPosition(backdrop: LayerBackdrop, frameVersion: State<
     frameVersion?.let { backdropSourceFrames[backdrop] = it }
     return onGloballyPositioned { coordinates ->
         if (coordinates.isAttached) {
-            backdropSourcePositions[backdrop] = coordinates
+            backdropSourcePositions[backdrop] = WeakReference(coordinates)
         }
     }
 }
@@ -166,7 +167,7 @@ class CrossWindowBackdrop(
     ) {
         val glassCoordinates = coordinates ?: return
         if (!glassCoordinates.isAttached) return
-        val sourceCoordinates = backdropSourcePositions[source]?.takeIf { it.isAttached } ?: return
+        val sourceCoordinates = backdropSourcePositions[source]?.get()?.takeIf { it.isAttached } ?: return
         // A window draw includes foreground changes isolated in child graphics layers.
         val frame = if (glassCoordinates.findRootCoordinates() !== sourceCoordinates.findRootCoordinates()) {
             (sourceFrame ?: backdropSourceFrames[source])?.value
@@ -355,7 +356,7 @@ private class SharedGlassBackdrop(
     }
 
     private fun sample(density: Density, coordinates: LayoutCoordinates?, top: Float): Backdrop {
-        val recorded = backdropSourcePositions[source]
+        val recorded = backdropSourcePositions[source]?.get()
         if (coordinates?.isAttached != true || recorded?.isAttached != true) return full
         val sourceTop = coordinates.positionOnScreen().y - recorded.positionOnScreen().y + top
         val bandTop = source.graphicsLayer.size.height - with(density) { BottomCaptureHeight.toPx() }
