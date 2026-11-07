@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
 import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
 import io.github.neoruaa.glasmio.glass.render.effects.blur
 import io.github.neoruaa.glasmio.glass.render.effects.runtimeShaderEffect
@@ -179,13 +180,18 @@ fun Modifier.progressiveBlurBackdrop(
     backdrop: Backdrop,
     progress: Float,
     maxRadius: Dp = 10.dp,
-): Modifier = graphicsLayer {
-    alpha = progress.coerceIn(0f, 1f)
-}.drawPlainBackdrop(
-    backdrop = backdrop,
-    shape = { RectangleShape },
-    effects = { progressiveBackdropBlur(maxRadius.toPx()) },
-)
+): Modifier {
+    val clampedProgress = progress.coerceIn(0f, 1f)
+    return graphicsLayer {
+        alpha = clampedProgress
+    }.drawPlainBackdrop(
+        // HWUI prepares invisible child trees too. Keep the filter node and its
+        // shader cache, but detach the unused source graph at the zero endpoint.
+        backdrop = if (clampedProgress == 0f) emptyBackdrop() else backdrop,
+        shape = { RectangleShape },
+        effects = { progressiveBackdropBlur(maxRadius.toPx()) },
+    )
+}
 
 /**
  * Apply to foreground content before recording the blur source, leaving its background separate.
