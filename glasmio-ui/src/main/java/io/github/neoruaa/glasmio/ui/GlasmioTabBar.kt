@@ -233,6 +233,10 @@ fun <T> GlasmioTabBar(
         }
         val currentCenterFor by rememberUpdatedState(::centerFor)
         val currentIndexFor by rememberUpdatedState(::indexFor)
+        val currentPressedIndex by rememberUpdatedState<(Offset) -> Int> { position ->
+            val logicalX = if (isLtr) position.x else totalWidthPx - sidebarWidthPx - position.x
+            lefts.indexOfLast { it <= logicalX + sidebarWidthPx }.coerceAtLeast(0)
+        }
         val dragOffset = remember { Animatable(0f) }
         val animation = remember(scope, tabs.size, isLtr) {
             DampedDragAnimation(
@@ -244,11 +248,15 @@ fun <T> GlasmioTabBar(
                 pressedScale = 78f / 56f,
                 dragCoordinateSpace = { coordinates },
                 lensStyle = NativeControlLensStyle.TabBarIndicator,
-                onDragStarted = {},
+                onDragStarted = { position -> updateValue(currentPressedIndex(position).toFloat()) },
                 onDragStopped = {
                     val index = targetValue.roundToInt().coerceIn(0, currentItems.lastIndex)
                     if (index != currentSelection) select(currentItems[index].key)
                     animateToValue(index.toFloat())
+                    scope.launch { dragOffset.animateTo(0f, spring(1f, 300f, .5f)) }
+                },
+                onDragCancelled = {
+                    updateValue(currentSelection.coerceAtLeast(0).toFloat())
                     scope.launch { dragOffset.animateTo(0f, spring(1f, 300f, .5f)) }
                 },
                 onDrag = { _, amount ->
@@ -286,6 +294,7 @@ fun <T> GlasmioTabBar(
         LaunchedEffect(presentation.interactive) {
             if (!presentation.interactive) {
                 highlight.cancelPress()
+                animation.updateValue(currentSelection.coerceAtLeast(0).toFloat())
                 animation.release()
             }
         }
@@ -366,7 +375,7 @@ fun <T> GlasmioTabBar(
                 }
             }
         }
-        Row(Modifier.fillMaxSize().then(if (presentation.interactive) highlight.gestureModifier else Modifier)
+        Row(Modifier.fillMaxSize()
             .padding(GlasmioTabBarDefaults.ContentPadding).clip(Capsule())
             .then(panelTransform)) { Labels(interactive = true) }
 
@@ -415,9 +424,15 @@ fun <T> GlasmioTabBar(
                         if (!appearance.usesBackdrop) drawRect(colors.content.copy(alpha = .1f))
                     },
                 ))
-            Box(Modifier.fillMaxSize().then(if (presentation.interactive) {
-                highlight.gestureModifier.then(animation.modifier)
-            } else Modifier))
         }
+        if (presentation.interactive) Box(
+            Modifier.fillMaxSize()
+                .padding(
+                    start = with(density) { (paddingPx + sidebarWidthPx).toDp() },
+                    end = GlasmioTabBarDefaults.ContentPadding,
+                )
+                .then(highlight.gestureModifier)
+                .then(animation.modifier),
+        )
     }
 }

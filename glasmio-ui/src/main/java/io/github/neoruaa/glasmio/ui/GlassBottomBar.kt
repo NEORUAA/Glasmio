@@ -400,21 +400,9 @@ fun <T> GlasmioNavigationBar(
                 layout(width, height) { placeable.placeRelative(0, 0) }
             }
         }
-        val indicatorHitBoundsModifier = remember(compactState, expandedTabs, tabItems.size) {
-            Modifier.layout { measurable, constraints ->
-                val overlap = (expandedTabs.widthPx - expandedTabs.stepPx).coerceAtLeast(0f) *
-                    (1f - compactState.value) / 2f
-                val startInset = if (selectedIndexState.value > 0) overlap.roundToInt() else 0
-                val endInset = if (selectedIndexState.value < tabItems.lastIndex) overlap.roundToInt() else 0
-                val width = (constraints.maxWidth - startInset - endInset).coerceAtLeast(1)
-                val placeable = measurable.measure(
-                    androidx.compose.ui.unit.Constraints.fixed(width, constraints.maxHeight),
-                )
-                layout(constraints.maxWidth, constraints.maxHeight) {
-                    placeable.placeRelative(startInset, 0)
-                }
-            }
-        }
+        val currentExpandedTabs = rememberUpdatedState(expandedTabs)
+        val currentFullWidthPx = rememberUpdatedState(fullWidthPx)
+        val currentPaddingPx = rememberUpdatedState(paddingPx)
         val offsetAnimation = remember { Animatable(0f) }
         val selectionPressOrigin = remember { mutableStateOf(true) }
         val dragAnimation = remember(animationScope, tabItems.size, isLtr) {
@@ -426,7 +414,15 @@ fun <T> GlasmioNavigationBar(
                 initialScale = 1f,
                 pressedScale = 78f / 56f,
                 dragCoordinateSpace = { dragCoordinateSpace.value },
-                onDragStarted = { selectionPressOrigin.value = compactState.value == 0f },
+                onDragStarted = { position ->
+                    selectionPressOrigin.value = compactState.value == 0f
+                    val logicalX = if (isLtr) position.x else currentFullWidthPx.value - position.x
+                    val geometry = currentExpandedTabs.value
+                    val index = ((logicalX - currentPaddingPx.value - geometry.widthPx / 2f) /
+                        geometry.stepPx.coerceAtLeast(1f)).fastRoundToInt()
+                        .fastCoerceIn(0, tabItemsState.value.lastIndex)
+                    updateValue(index.toFloat())
+                },
                 onDragStopped = {
                     if (compactState.value >= 0.74f) {
                         onExpandState.value()
@@ -441,6 +437,10 @@ fun <T> GlasmioNavigationBar(
                     animationScope.launch {
                         offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
                     }
+                },
+                onDragCancelled = {
+                    updateValue(selectedIndexState.value.toFloat())
+                    animationScope.launch { offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f)) }
                 },
                 onDrag = { _, dragAmount ->
                     if (compactState.value >= 0.74f) return@DampedDragAnimation
@@ -862,7 +862,6 @@ fun <T> GlasmioNavigationBar(
                 modifier = Modifier
                     .then(surfaceSizeModifier)
                     .then(commonTransform)
-                    .then(interactiveHighlight.gestureModifier)
                     .then(if (compactMode) Modifier.clearAndSetSemantics {} else Modifier)
                     .padding(horizontal = 4.dp)
                     .navigationContentPadding { 4.dp }
@@ -1006,13 +1005,17 @@ fun <T> GlasmioNavigationBar(
                         )
                         .then(indicatorBackdropModifier),
                 )
-                Box(
-                    Modifier.fillMaxSize()
-                        .then(indicatorHitBoundsModifier)
-                        .then(if (!compactMode) interactiveHighlight.gestureModifier else Modifier)
-                        .then(if (!compactMode) dragAnimation.modifier else Modifier),
-                )
             }
+        }
+        if (!compactMode) CompositionLocalProvider(LocalViewConfiguration provides navigationViewConfiguration) {
+            // Keep input stationary and full-width while the lens moves to the pressed tab.
+            // Per-item click semantics and keyboard activation remain in the content row.
+            Box(
+                Modifier.then(surfaceSizeModifier)
+                    .then(commonTransform)
+                    .then(interactiveHighlight.gestureModifier)
+                    .then(dragAnimation.modifier),
+            )
         }
         if (compactMode) CompositionLocalProvider(LocalViewConfiguration provides navigationViewConfiguration) {
             // Once compacting, the entire main platter expands navigation. Keeping this

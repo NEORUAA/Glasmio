@@ -64,6 +64,7 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -2654,6 +2655,131 @@ half4 main(half4 src, half4 dst) {
     private fun ContactSharingCompositionProbe(member: BottomControlContactMember, onComposition: (Boolean) -> Unit) {
         val sharing = member.sharesSurface
         SideEffect { onComposition(sharing) }
+    }
+
+    @Test
+    fun landscapeTabPressSupportsPreviewCancelDragAndIndependentSidebar() {
+        val selected = mutableStateOf(library.key)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val requests = mutableListOf<String>()
+        var sidebarRequests = 0
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    GlasmioTabBar(
+                        items = listOf(library, GlasmioTabItem("long", "Longer tab label", SfSymbol.MusicNoteList)),
+                        selectedKey = selected.value,
+                        onSelected = { requests += it; selected.value = it },
+                        onSearchClick = { requests += "search"; selected.value = "search" },
+                        searchKey = "search",
+                        onSidebarToggle = { sidebarRequests++ },
+                        modifier = Modifier.testTag("landscape-press"),
+                    )
+                }
+            }
+        }
+        val bar = compose.onNodeWithTag("landscape-press")
+        fun center(label: String): Offset {
+            val tab = compose.onNodeWithContentDescription(label).fetchSemanticsNode().boundsInRoot
+            return tab.center - bar.fetchSemanticsNode().boundsInRoot.topLeft
+        }
+        listOf(LayoutDirection.Ltr, LayoutDirection.Rtl).forEach { layoutDirection ->
+            compose.runOnIdle {
+                direction.value = layoutDirection
+                selected.value = library.key
+                requests.clear()
+            }
+            val target = center("Longer tab label")
+            val search = center("Search")
+            val originalIndicator = compose.onNodeWithTag("LandscapeNavigationIndicator").fetchSemanticsNode().boundsInRoot
+            bar.performTouchInput { down(target) }
+            compose.runOnIdle { assertTrue("A held landscape preview leaves the route selected", requests.isEmpty()) }
+            val preview = compose.onNodeWithTag("LandscapeNavigationIndicator").fetchSemanticsNode().boundsInRoot
+            assertTrue("The lens must move on down before navigation commits", abs(preview.center.x - originalIndicator.center.x) > 1f)
+            bar.performTouchInput { cancel() }
+            compose.runOnIdle { assertTrue(requests.isEmpty()) }
+            val restored = compose.onNodeWithTag("LandscapeNavigationIndicator").fetchSemanticsNode().boundsInRoot
+            assertEquals("Cancel restores the original lens", originalIndicator.center.x, restored.center.x, 1f)
+            bar.performTouchInput { down(target); up() }
+            compose.runOnIdle { assertEquals(listOf("long"), requests) }
+            val dragStart = center("Longer tab label")
+            bar.performTouchInput { down(dragStart); moveTo(search); up() }
+            compose.runOnIdle { assertEquals(listOf("long", "search"), requests) }
+            val sidebar = center("Show Sidebar")
+            bar.performTouchInput { click(sidebar) }
+            compose.runOnIdle { assertEquals(listOf("long", "search"), requests) }
+        }
+        compose.runOnIdle { assertEquals(2, sidebarRequests) }
+    }
+
+    @Test
+    fun navigationPressPreviewsWithoutSelectingAndCancelRestoresTheRoute() {
+        val items = listOf(
+            library,
+            GlasmioTabItem("search", "Search", SfSymbol.Search),
+            GlasmioTabItem("more", "More", SfSymbol.MusicNoteList),
+        )
+        val selected = mutableStateOf(library.key)
+        val direction = mutableStateOf(LayoutDirection.Ltr)
+        val compact = mutableFloatStateOf(0f)
+        val requests = mutableListOf<String>()
+        val itemBounds = mutableMapOf<String, Rect>()
+        var barBounds = Rect.Zero
+        var expansions = 0
+        compose.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
+                    GlasmioNavigationBar(
+                        items = items,
+                        selectedKey = selected.value,
+                        onSelected = { requests += it; selected.value = it },
+                        onExpand = { expansions++ },
+                        compactProgress = compact,
+                        compactSize = 48.dp,
+                        modifier = Modifier.width(320.dp).testTag("press-navigation")
+                            .onGloballyPositioned { barBounds = it.boundsInWindow() },
+                        onItemBoundsChanged = { key, bounds -> itemBounds[key] = bounds },
+                    )
+                }
+            }
+        }
+        val bar = compose.onNodeWithTag("press-navigation")
+        fun center(key: String) = compose.runOnIdle { itemBounds.getValue(key).center - barBounds.topLeft }
+        listOf(LayoutDirection.Ltr, LayoutDirection.Rtl).forEach { layoutDirection ->
+            compose.runOnIdle {
+                direction.value = layoutDirection
+                selected.value = library.key
+                requests.clear()
+            }
+            val searchCenter = center("search")
+            val moreCenter = center("more")
+            bar.performTouchInput { down(searchCenter) }
+            compose.runOnIdle {
+                assertTrue("A held preview never commits navigation", requests.isEmpty())
+                assertEquals(library.key, selected.value)
+            }
+            bar.performTouchInput { cancel() }
+            compose.runOnIdle {
+                assertTrue("Cancellation never commits the preview", requests.isEmpty())
+                assertEquals(library.key, selected.value)
+            }
+            val selectedCenter = center(library.key)
+            bar.performTouchInput { down(selectedCenter); up() }
+            compose.runOnIdle { assertTrue("Releasing the selected tab emits no change", requests.isEmpty()) }
+            bar.performTouchInput { down(searchCenter); moveTo(moreCenter); up() }
+            compose.runOnIdle {
+                assertEquals("Dragging from an unselected tab commits only the release target", listOf("more"), requests)
+                assertEquals("more", selected.value)
+            }
+            compose.onNodeWithContentDescription("Search").performClick()
+            compose.runOnIdle { assertEquals(listOf("more", "search"), requests) }
+        }
+        compose.runOnIdle { compact.floatValue = 1f; requests.clear() }
+        bar.performTouchInput { click() }
+        compose.runOnIdle {
+            assertEquals("Compact input still expands the bar", 1, expansions)
+            assertTrue(requests.isEmpty())
+        }
     }
 
     @Test

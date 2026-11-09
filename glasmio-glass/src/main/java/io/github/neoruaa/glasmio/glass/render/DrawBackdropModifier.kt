@@ -45,6 +45,7 @@ import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.ObserverModifierNode
 import androidx.compose.ui.node.observeReads
+import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.node.requireView
 import androidx.compose.ui.platform.InspectorInfo
@@ -386,6 +387,7 @@ private class DrawBackdropNode(
     private val foregroundClipPath = Path()
     private var foregroundClipRoundRect: RoundRect? = null
     private var completedLayout by mutableStateOf(false)
+    private var effectsDirty = true
 
     private val layoutLayerBlock: GraphicsLayerScope.() -> Unit = {
         // The native background owns its SDF coverage, including the exterior key/fill strip.
@@ -656,8 +658,10 @@ private class DrawBackdropNode(
         val headroom = nativeGlassDisplayHeadroom(requireView())
         val headroomChanged = effectScope.nativeGlassHeadroom != headroom
         effectScope.nativeGlassHeadroom = headroom
-        if (effectScope.update(this, samplingScale(size, this)) || colorSpaceChanged || headroomChanged) {
+        val geometryChanged = effectScope.update(this, samplingScale(size, this))
+        if (effectsDirty || geometryChanged || colorSpaceChanged || headroomChanged) {
             observeEffects()
+            effectsDirty = false
         }
 
         onDrawBehind?.invoke(this)
@@ -984,7 +988,10 @@ private class DrawBackdropNode(
     }
 
     fun invalidateDrawCache() {
-        observeEffects()
+        // Publish the filter only while recording its matching source planes. Applying it
+        // to a retained atlas from the previous frame can expose rectangular artifacts.
+        effectsDirty = true
+        invalidateDraw()
     }
 
     private fun observeEffects() {
@@ -1005,8 +1012,7 @@ private class DrawBackdropNode(
         val graphicsContext = requireGraphicsContext()
         graphicsLayer = graphicsContext.createGraphicsLayer()
         observeBackdropSource()
-
-        observeEffects()
+        effectsDirty = true
     }
 
     override fun onDetach() {
