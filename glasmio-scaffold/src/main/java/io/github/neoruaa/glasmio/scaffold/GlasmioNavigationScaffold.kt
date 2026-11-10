@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.LayerOutsets
 import androidx.compose.ui.graphics.graphicsLayer
@@ -20,6 +21,9 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -76,6 +80,7 @@ data class GlasmioHeaderGroup(
     val key: Any,
     val actions: List<GlasmioHeaderAction>,
     val style: GlasmioToolbarActionStyle = GlasmioToolbarActionStyle.Merged,
+    val search: GlasmioHeaderSearchState? = null,
 ) {
     init { require(actions.map { it.key }.distinct().size == actions.size) { "Duplicate header action keys" } }
 }
@@ -583,24 +588,35 @@ private fun GlasmioNavigationHeader(
     val displaySourceTrailing = overflowSourceGroups(source.trailing, "trailing", trailingOverflow, overflowEnabled)
     val displayTargetTrailing = overflowSourceGroups(target.trailing, "trailing", trailingOverflow, overflowEnabled)
     val density = LocalDensity.current
+    val searchGroups = (owner.leading + owner.trailing).filter { it.search != null }
+    var searchOrigin by remember { mutableStateOf<Offset?>(null) }
+    val searchVisible by remember(searchGroups.map { it.search }) {
+        derivedStateOf { searchGroups.any { it.search!!.configuration.value.active || it.search.progress.value > 0f } }
+    }
     // Retained groups are disposed only after their own tracks settle, not when the body ends.
     CompositionLocalProvider(LocalContentColor provides LocalGlassColors.current.content) {
-        Box(modifier.height(GlasmioToolbarDefaults.Height)
+        Box(modifier.height(if (searchVisible) GlasmioAdaptiveNavigationDefaults.SearchTopPadding + 48.dp else GlasmioToolbarDefaults.Height)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-            .padding(horizontal = IosPageHorizontalPadding)) {
-            HeaderSide(displaySourceLeading, displayTargetLeading,
-                if (owner === source) displaySourceLeading else displayTargetLeading,
-                retainedLeading, progress, tracking,
-                Modifier.align(Alignment.CenterStart), leading = true) { old, new ->
-                titles.publish(frame.fromEntryKey, true, source.leading, overflowEnabled, old, density)
-                titles.publish(frame.toEntryKey, true, target.leading, overflowEnabled, new, density)
+            .padding(horizontal = IosPageHorizontalPadding)
+            .onGloballyPositioned { searchOrigin = it.positionInWindow() }) {
+            Box(Modifier.fillMaxWidth().height(GlasmioToolbarDefaults.Height)) {
+                HeaderSide(displaySourceLeading, displayTargetLeading,
+                    if (owner === source) displaySourceLeading else displayTargetLeading,
+                    retainedLeading, progress, tracking,
+                    Modifier.align(Alignment.CenterStart), leading = true) { old, new ->
+                    titles.publish(frame.fromEntryKey, true, source.leading, overflowEnabled, old, density)
+                    titles.publish(frame.toEntryKey, true, target.leading, overflowEnabled, new, density)
+                }
+                HeaderSide(displaySourceTrailing, displayTargetTrailing,
+                    if (owner === source) displaySourceTrailing else displayTargetTrailing,
+                    retainedTrailing, progress, tracking,
+                    Modifier.align(Alignment.CenterEnd), leading = false) { old, new ->
+                    titles.publish(frame.fromEntryKey, false, source.trailing, overflowEnabled, old, density)
+                    titles.publish(frame.toEntryKey, false, target.trailing, overflowEnabled, new, density)
+                }
             }
-            HeaderSide(displaySourceTrailing, displayTargetTrailing,
-                if (owner === source) displaySourceTrailing else displayTargetTrailing,
-                retainedTrailing, progress, tracking,
-                Modifier.align(Alignment.CenterEnd), leading = false) { old, new ->
-                titles.publish(frame.fromEntryKey, false, source.trailing, overflowEnabled, old, density)
-                titles.publish(frame.toEntryKey, false, target.trailing, overflowEnabled, new, density)
+            searchGroups.forEach { group ->
+                key(group.search) { GlasmioHeaderSearchLayer(group, searchOrigin) }
             }
             if (leadingOverflow.expanded) {
                 GlasmioCascadingMenu(
@@ -797,9 +813,16 @@ private fun HeaderGroup(
     val sx = if (reduced.value) 1f else state.pulse.scale(state.width.value, pointLimit, true)
     val sy = if (reduced.value) 1f else state.pulse.scale(height, pointLimit, false)
     val appearScale = if (reduced.value) 1f else 1.2f - .2f * presence
+    val search = owner?.search
+    val searchOwnsSurface by remember(search) {
+        derivedStateOf { search != null && (search.configuration.value.active || search.progress.value > 0f) }
+    }
     GlasmioToolbarActionHost(
-        modifier = Modifier.testTag("GlasmioHeaderGroup:${fallback.key}").graphicsLayer {
-            alpha = presence
+        modifier = Modifier.testTag("GlasmioHeaderGroup:${fallback.key}")
+            .onGloballyPositioned { coordinates -> search?.sourceBounds = coordinates.boundsInWindow() }
+            .then(if (searchOwnsSurface) Modifier.clearAndSetSemantics {} else Modifier)
+            .graphicsLayer {
+            alpha = if (searchOwnsSurface) 0f else presence
             // Group opacity allocates an offscreen layer. Preserve the enlarged shell and
             // its shadow outside the layout slot throughout appearance and disappearance.
             outsets = LayerOutsets(64.dp, 64.dp, 64.dp, 64.dp)
@@ -906,7 +929,8 @@ private fun HeaderGroup(
         val hitActions = owner?.actions ?: (to ?: from ?: fallback).actions
         val hits = hitActions.map { action ->
             val layer = state.layers[LayerKey(action.key, action.visualKey)]
-            val ownsInteraction = owner?.actions?.any { it.key == action.key } == true
+            val ownsInteraction = owner?.actions?.any { it.key == action.key } == true &&
+                !searchOwnsSurface
             val hit = subcompose("hit" to action.key) {
                 GlassSurface(
                     modifier = Modifier.fillMaxSize()

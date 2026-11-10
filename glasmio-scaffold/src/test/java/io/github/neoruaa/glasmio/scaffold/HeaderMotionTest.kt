@@ -4,6 +4,8 @@ import org.junit.Assert.*
 import org.junit.Test
 import kotlin.math.abs
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.text.input.TextFieldValue
 import io.github.neoruaa.glasmio.scaffold.navigation.IosSwipeBackArbitrator
 import io.github.neoruaa.glasmio.scaffold.navigation.IosSwipeBackRelease
 import io.github.neoruaa.glasmio.scaffold.navigation.IosNavigationEasing
@@ -12,6 +14,27 @@ import io.github.neoruaa.glasmio.scaffold.navigation.iosNavigationFraction
 import io.github.neoruaa.glasmio.scaffold.navigation.iosNavigationParallaxOffset
 
 class HeaderMotionTest {
+    @Test fun headerSearchAcknowledgesTypingBeforeThePagePublishesItsNextFrame() {
+        val edits = mutableListOf<String>()
+        val configuration = mutableStateOf(HeaderSearchConfiguration(
+            active = true,
+            onQueryChange = { edits += it.text },
+            onSearch = {},
+            onDismiss = {},
+            placeholder = "Search",
+            cancelLabel = "Cancel",
+            autoFocus = false,
+        ))
+        val search = GlasmioHeaderSearchState(TextFieldValue(), configuration, GlasmioSearchTransition(1f))
+        search.updateQuery(TextFieldValue("Alb"))
+        search.updateQuery(TextFieldValue("Albemuth"))
+        assertEquals("Albemuth", search.query.text)
+        assertEquals(listOf("Alb", "Albemuth"), edits)
+
+        search.updateQuery(TextFieldValue())
+        assertEquals("", search.query.text)
+    }
+
     @Test fun tabSidebarMorphGatesItsMaterialContentAndDirectionalSafeArea() {
         val tabs = Rect(400f, 40f, 900f, 84f)
         val sidebar = Rect(0f, 0f, 320f, 834f)

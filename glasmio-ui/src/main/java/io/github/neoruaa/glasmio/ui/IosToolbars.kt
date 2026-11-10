@@ -49,8 +49,10 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -414,9 +416,12 @@ fun GlasmioSearchToolbar(
     focusRequester: FocusRequester = remember { FocusRequester() },
     autoFocus: Boolean = true,
     morphProgress: Float = 1f,
+    collapsedContent: (@Composable BoxScope.() -> Unit)? = null,
+    enabled: Boolean = true,
 ) {
     val colors = LocalGlassColors.current
     val backdrop = LocalGlassBackdrop.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val progress = morphProgress.coerceIn(0f, 1f)
     val contentReveal = ((progress - 0.25f) / 0.45f).coerceIn(0f, 1f)
     val cancelReveal = ((progress - 0.35f) / 0.45f).coerceIn(0f, 1f)
@@ -431,7 +436,9 @@ fun GlasmioSearchToolbar(
             style = style,
         ) {
             Row(
-                Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                Modifier.fillMaxSize().padding(horizontal = 12.dp).graphicsLayer {
+                    alpha = if (collapsedContent == null) 1f else ((progress - 0.1f) / 0.35f).coerceIn(0f, 1f)
+                },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 SfIcon("magnifyingglass", null, size = 21.dp, tint = colors.secondaryContent)
@@ -440,6 +447,7 @@ fun GlasmioSearchToolbar(
                     GlasmioEditableTextField(
                         value = query,
                         onValueChange = onQueryChange,
+                        enabled = enabled,
                         modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                         singleLine = true,
                         textStyle = IosTypography.body.copy(color = colors.content),
@@ -457,12 +465,17 @@ fun GlasmioSearchToolbar(
                 if (query.text.isNotEmpty()) {
                     Box(
                         Modifier.size(32.dp).graphicsLayer { alpha = contentReveal }
-                            .clickable { onQueryChange(TextFieldValue()) },
+                            .clickable(enabled = enabled) { onQueryChange(TextFieldValue()) },
                         contentAlignment = Alignment.Center,
                     ) {
                         SfIcon("xmark.circle", null, size = 18.dp, tint = colors.secondaryContent)
                     }
                 }
+            }
+            if (collapsedContent != null && progress < 0.3f) {
+                Box(Modifier.fillMaxSize().graphicsLayer {
+                    alpha = (1f - progress / 0.3f).coerceIn(0f, 1f)
+                }.clearAndSetSemantics {}, content = collapsedContent)
             }
         }
         Spacer(Modifier.width(8.dp * cancelReveal))
@@ -481,14 +494,17 @@ fun GlasmioSearchToolbar(
                 backdrop = backdrop,
                 style = style,
                 modifier = Modifier.size(48.dp).testTag("GlasmioSearchCancelSurface"),
-                enabled = cancelReveal > 0.5f,
+                enabled = enabled && cancelReveal > 0.5f,
             ) {
                 SfIcon("xmark", cancelLabel, size = 20.dp, tint = colors.content)
             }
         }
     }
-    LaunchedEffect(autoFocus) {
-        if (autoFocus) focusRequester.requestFocus()
+    LaunchedEffect(autoFocus, enabled) {
+        if (autoFocus && enabled) {
+            focusRequester.requestFocus()
+            keyboard?.show()
+        }
     }
 }
 
