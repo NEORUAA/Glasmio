@@ -600,7 +600,10 @@ fun Modifier.navigationLensSourceBackground(
 )
 }
 
-/** Shared outer navigation-glass material used by the expanded nav and floating controls. */
+/**
+ * Shared outer navigation-glass material used by the expanded nav and floating controls.
+ * [shadowMaterial] can reuse a control's shadow profile without changing its optical material.
+ */
 fun Modifier.navigationGlassBackground(
     backdrop: Backdrop,
     shape: () -> Shape,
@@ -635,6 +638,7 @@ fun Modifier.navigationGlassBackground(
     prominentTint: Color? = null,
     luminanceState: BackdropLuminance? = null,
     materialContext: GlassMaterialContext? = null,
+    shadowMaterial: NavigationGlassMaterial? = material,
     backgroundOverlay: (DrawScope.() -> Unit)? = null,
 ): Modifier = composed {
     val context = materialContext ?: run {
@@ -678,6 +682,7 @@ fun Modifier.navigationGlassBackground(
         prominentTint = prominentTint,
         luminanceState = context.luminanceState,
         backgroundOverlay = backgroundOverlay,
+        shadowMaterial = shadowMaterial,
     )
 }
 
@@ -718,6 +723,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
     darkFraction: Float = if (isDark) 1f else 0f,
     backgroundOverlay: (DrawScope.() -> Unit)? = null,
     fusePressOverlayIntoCompletion: Boolean = false,
+    shadowMaterial: NavigationGlassMaterial? = material,
 ): Modifier {
     val nativeRecipe = if (navigationMaterial && innerShadows != null && surfaceOverlay == null &&
         sampleBackdrop && appearance.usesBackdrop) {
@@ -753,7 +759,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                     }
                 },
                 useNativeProfile = true,
-                nativeMaterial = material,
+                nativeMaterial = shadowMaterial,
             )
         } else Modifier,
     )
@@ -784,7 +790,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                     NativeGlassCompletion(recipe, isDark,
                         if (material == NavigationGlassMaterial.Clear) 1f else 0f,
                         materialAlpha = materialPaintAlpha, edgeAlpha = innerShadowAlpha,
-                        shadow = if (dropShadow == null) navigationNativeShadowProfile(extent, material) else null,
+                        shadow = if (dropShadow == null) navigationNativeShadowProfile(extent, shadowMaterial) else null,
                         shadowAlpha = shadowAlpha, highlightAlpha = surfaceHighlight.alpha,
                         highlightAngle = highlightAngle, darkFraction = darkFraction, pressGlow = pressGlow)
                 }

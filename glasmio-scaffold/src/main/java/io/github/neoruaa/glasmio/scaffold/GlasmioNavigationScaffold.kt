@@ -2,6 +2,7 @@ package io.github.neoruaa.glasmio.scaffold
 
 import android.graphics.RenderEffect
 import android.graphics.Shader
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.LocalContentColor
@@ -17,13 +18,15 @@ import androidx.compose.ui.graphics.LayerOutsets
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.SubcomposeLayout
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
@@ -33,6 +36,8 @@ import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.ui.*
 import io.github.neoruaa.glasmio.icons.LocalSfToolbarSymbols
+import io.github.neoruaa.glasmio.icons.SfIcon
+import io.github.neoruaa.glasmio.icons.SfSymbol
 import kotlin.math.roundToInt
 import kotlinx.coroutines.currentCoroutineContext
 
@@ -81,8 +86,60 @@ data class GlasmioHeaderAction(
     val onClick: () -> Unit,
     val enabled: Boolean = true,
     val menuAnchor: GlasmioMenuAnchorState? = null,
+    /** Optional symbol fallback for consumers that represent this action without its content. */
+    val overflowSystemName: String? = null,
     val content: @Composable () -> Unit,
 )
+
+private class HeaderOverflowState {
+    val anchor = GlasmioMenuAnchorState()
+    var expanded by mutableStateOf(false)
+}
+
+private fun overflowSourceGroups(
+    groups: List<GlasmioHeaderGroup>,
+    side: String,
+    state: HeaderOverflowState,
+    enabled: Boolean,
+): List<GlasmioHeaderGroup> {
+    val actionCount = groups.sumOf { it.actions.size }
+    val merged = groups.filter { it.style == GlasmioToolbarActionStyle.Merged && it.actions.isNotEmpty() }
+    if (!enabled || actionCount <= 3 || merged.isEmpty()) return groups
+    val overflow = GlasmioHeaderAction(
+        key = "__glasmio-overflow-$side",
+        visualKey = "__glasmio-overflow-$side",
+        contentDescription = "More Actions",
+        onClick = { state.expanded = true },
+        menuAnchor = state.anchor,
+    ) { SfIcon(SfSymbol.Ellipsis, null) }
+    return groups.filter { it.style != GlasmioToolbarActionStyle.Merged || it.actions.isEmpty() } + GlasmioHeaderGroup(
+        key = "__glasmio-overflow-$side",
+        actions = listOf(overflow),
+        style = GlasmioToolbarActionStyle.Separated,
+    )
+}
+
+private fun overflowItems(
+    groups: List<GlasmioHeaderGroup>,
+    dismiss: () -> Unit,
+): List<GlasmioCascadingMenuItem> =
+    groups.filter { it.style == GlasmioToolbarActionStyle.Merged }
+        .flatMap { group -> group.actions.map { action ->
+            GlasmioCascadingMenuItem(
+                title = action.contentDescription,
+                systemName = action.overflowSystemName,
+                icon = {
+                    CompositionLocalProvider(LocalSfToolbarSymbols provides true) {
+                        action.content()
+                    }
+                },
+                enabled = action.enabled,
+                onClick = {
+                    dismiss()
+                    action.onClick()
+                },
+            )
+        } }
 
 private data class HeaderEndpointKey(val group: Any, val actions: List<LayerKey>)
 private fun endpointKeys(groups: List<GlasmioHeaderGroup>): List<HeaderEndpointKey> =
@@ -105,6 +162,7 @@ private fun GlasmioHeaderSpec.pageTitleSpec() = PageTitleSpec(
 
 private data class HeaderEndpointWidth(
     val keys: List<HeaderEndpointKey>,
+    val overflow: Boolean,
     val width: Int,
     val density: Float,
     val fontScale: Float,
@@ -134,9 +192,9 @@ private class PageTitleRegistry {
         entry(frame.toEntryKey).spec = target.pageTitleSpec()
         prune()
     }
-    fun publish(key: Any, leading: Boolean, groups: List<GlasmioHeaderGroup>, width: Int?, density: Density) {
+    fun publish(key: Any, leading: Boolean, groups: List<GlasmioHeaderGroup>, overflow: Boolean, width: Int?, density: Density) {
         if (width == null || key !in active && key !in mounted) return
-        val value = HeaderEndpointWidth(endpointKeys(groups), width, density.density, density.fontScale)
+        val value = HeaderEndpointWidth(endpointKeys(groups), overflow, width, density.density, density.fontScale)
         val entry = entry(key)
         if (leading) entry.leading = value else entry.trailing = value
     }
@@ -167,24 +225,71 @@ fun GlasmioPageTitle(entryKey: Any, modifier: Modifier = Modifier) {
     }
     val leading = width(spec.leading, entry.leading) ?: return
     val trailing = width(spec.trailing, entry.trailing) ?: return
-    val startsAtLeading = spec.style == GlasmioTopBarStyle.TwoLineLeading || spec.style == GlasmioTopBarStyle.CompactLargeTitle
-    val widest = maxOf(leading, trailing)
-    val start = with(density) { (if (startsAtLeading) leading else widest).toDp() } +
-        if ((if (startsAtLeading) leading else widest) > 0) 8.dp else 0.dp
-    val end = with(density) { (if (startsAtLeading) trailing else widest).toDp() } +
-        if ((if (startsAtLeading) trailing else widest) > 0) 8.dp else 0.dp
+    // Root pages without a back/leading action keep the large-title leading layout;
+    // pages with navigation actions use the centered title treatment.
+    val startsAtLeading = leading == 0 ||
+        spec.style == GlasmioTopBarStyle.TwoLineLeading ||
+        spec.style == GlasmioTopBarStyle.CompactLargeTitle
+    val titleStyle = if (spec.style == GlasmioTopBarStyle.CompactLargeTitle) IosTypography.largeTitle else IosTypography.headline
+    val subtitleStyle = IosTypography.caption
+    val textMeasurer = rememberTextMeasurer()
+    val titleWidthPx = remember(spec.title, titleStyle, textMeasurer) {
+        textMeasurer.measure(AnnotatedString(spec.title), titleStyle, maxLines = 1, softWrap = false).size.width
+    }
+    val subtitleWidthPx = spec.subtitle?.let { subtitle ->
+        remember(subtitle, subtitleStyle, textMeasurer) {
+            textMeasurer.measure(AnnotatedString(subtitle), subtitleStyle, maxLines = 1, softWrap = false).size.width
+        }
+    }
     val colors = spec.colors ?: LocalGlassColors.current
     CompositionLocalProvider(LocalGlassColors provides colors, LocalContentColor provides colors.content) {
-        Box(modifier.fillMaxWidth().glasmioAdaptiveContent().statusBarsPadding().height(GlasmioToolbarDefaults.Height).padding(horizontal = IosPageHorizontalPadding)) {
+        BoxWithConstraints(modifier.fillMaxWidth().glasmioAdaptiveContent()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+            .statusBarsPadding().height(GlasmioToolbarDefaults.Height).padding(horizontal = IosPageHorizontalPadding)) {
+            val availableWidthPx = with(density) { maxWidth.toPx() }
+            val safeStartPx = with(density) { (leading.toDp() + if (leading > 0) 8.dp else 0.dp).toPx() }
+            val safeEndPx = with(density) { (trailing.toDp() + if (trailing > 0) 8.dp else 0.dp).toPx() }
+            val safeRightPx = availableWidthPx - safeEndPx
+            fun fitsCentered(width: Int?): Boolean {
+                if (width == null) return true
+                val centeredLeft = (availableWidthPx - width) / 2f
+                return centeredLeft >= safeStartPx && centeredLeft + width <= safeRightPx
+            }
+            val titleSqueezed = !startsAtLeading && !fitsCentered(titleWidthPx)
+            val subtitleSqueezed = !startsAtLeading && !fitsCentered(subtitleWidthPx)
+            val safeModifier = Modifier.fillMaxWidth().padding(
+                start = with(density) { safeStartPx.toDp() },
+                end = with(density) { safeEndPx.toDp() },
+            )
             Column(
                 Modifier.align(if (startsAtLeading) Alignment.CenterStart else Alignment.Center)
-                    .fillMaxWidth().padding(start = start, end = end)
+                    .fillMaxWidth()
                     .graphicsLayer { alpha = (spec.scrollState?.collapseProgress?.invoke() ?: 1f).coerceIn(0f, 1f) },
                 horizontalAlignment = if (startsAtLeading) Alignment.Start else Alignment.CenterHorizontally,
             ) {
-                Text(spec.title, style = if (spec.style == GlasmioTopBarStyle.CompactLargeTitle) IosTypography.largeTitle else IosTypography.headline,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                spec.subtitle?.let { Text(it, style = IosTypography.caption, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                GlasmioToolbarTitle(
+                    text = spec.title,
+                    style = titleStyle,
+                    modifier = if (startsAtLeading || titleSqueezed) safeModifier else Modifier.fillMaxWidth(),
+                    textAlign = when {
+                        startsAtLeading -> TextAlign.Start
+                        titleSqueezed -> TextAlign.End
+                        else -> TextAlign.Center
+                    },
+                )
+                spec.subtitle?.let {
+                    GlasmioToolbarTitle(
+                        text = it,
+                        style = subtitleStyle,
+                        modifier = if (startsAtLeading || subtitleSqueezed) safeModifier else Modifier.fillMaxWidth(),
+                        color = LocalGlassColors.current.secondaryContent,
+                        textAlign = when {
+                            startsAtLeading -> TextAlign.Start
+                            subtitleSqueezed -> TextAlign.End
+                            else -> TextAlign.Center
+                        },
+                    )
+                }
             }
         }
     }
@@ -199,6 +304,8 @@ fun GlasmioNavigationScaffold(
     bottomBar: @Composable BoxScope.() -> Unit = {},
     /** Centered regular-width navigation, bounded by the measured shared button groups. */
     topBar: (@Composable (availableWidth: Dp) -> Unit)? = null,
+    /** Natural width of the top navigation surface, used to decide when actions must fold. */
+    topBarPreferredWidth: Dp? = null,
     contentBackdrop: LayerBackdrop = rememberLayerBackdrop(),
     content: @Composable (PaddingValues) -> Unit,
 ) {
@@ -215,6 +322,12 @@ fun GlasmioNavigationScaffold(
     val source = key(frame.fromEntryKey) { header(frame.fromEntryKey) }
     val target = key(frame.toEntryKey) { header(frame.toEntryKey) }
     val titles = remember { PageTitleRegistry() }
+    var forceTopBarOverflow by remember { mutableStateOf(false) }
+    // A reset must not erase a fresh fold requested by this layout's SideEffect.
+    val overflowWasForced = forceTopBarOverflow
+    LaunchedEffect(frame.fromEntryKey, frame.toEntryKey, topBarPreferredWidth) {
+        if (overflowWasForced) forceTopBarOverflow = false
+    }
     val adaptive = LocalAdaptiveSidebarCoordinator.current
     DisposableEffect(adaptive, topBar != null) {
         if (adaptive != null && topBar != null) adaptive.tabHosts++
@@ -231,9 +344,22 @@ fun GlasmioNavigationScaffold(
         GlasmioBackdropProvider(backdrop) {
             val owner = if (frame.phase == GlasmioNavigationPhase.Tracking || frame.phase == GlasmioNavigationPhase.Canceling) source else target
             CompositionLocalProvider(LocalGlassColors provides (owner.colors ?: LocalGlassColors.current)) {
-            GlasmioNavigationHeader(source, target, frame, titles, Modifier.fillMaxWidth().glasmioAdaptiveContent().padding(top = status))
+            GlasmioNavigationHeader(
+                source,
+                target,
+                frame,
+                titles,
+                topBar != null,
+                forceTopBarOverflow,
+                Modifier.fillMaxWidth().glasmioAdaptiveContent().padding(top = status),
+            )
             if (topBar != null) {
-                GlasmioTopNavigationSlot(frame, source, target, titles, status, topBar)
+                GlasmioTopNavigationSlot(
+                    frame, source, target, titles, status, topBar, topBarPreferredWidth,
+                    forceTopBarOverflow,
+                    onOverflowNeeded = { if (!forceTopBarOverflow) forceTopBarOverflow = true },
+                    onLayoutWidthChanged = { forceTopBarOverflow = false },
+                )
             }
             }
             bottomBar()
@@ -250,6 +376,10 @@ private fun GlasmioTopNavigationSlot(
     titles: PageTitleRegistry,
     status: Dp,
     content: @Composable (Dp) -> Unit,
+    preferredWidth: Dp?,
+    forceOverflow: Boolean,
+    onOverflowNeeded: () -> Unit,
+    onLayoutWidthChanged: () -> Unit,
 ) {
     val density = LocalDensity.current
     val adaptive = LocalAdaptiveSidebarCoordinator.current
@@ -259,7 +389,8 @@ private fun GlasmioTopNavigationSlot(
         val entry = titles.entry(key)
         val measured = (if (leading) entry.leading else entry.trailing) ?: return null
         return measured.width.takeIf {
-            measured.keys == endpointKeys(groups) && measured.density == density.density && measured.fontScale == density.fontScale
+            measured.density == density.density && measured.fontScale == density.fontScale &&
+                measured.keys == endpointKeys(groups) && measured.overflow == forceOverflow
         }
     }
     val sides = listOf(
@@ -267,20 +398,71 @@ private fun GlasmioTopNavigationSlot(
         width(frame.toEntryKey, target, true), width(frame.toEntryKey, target, false),
     )
     val ready = sides.all { it != null }
-    var lastSide by remember { mutableStateOf(0.dp) }
-    val side = if (ready) with(density) { sides.filterNotNull().max().toDp() } else lastSide
-    SideEffect { if (ready) lastSide = side }
+    var lastLeadingSide by remember { mutableStateOf(0.dp) }
+    var lastTrailingSide by remember { mutableStateOf(0.dp) }
+    val leadingSide = if (ready) with(density) { maxOf(sides[0] ?: 0, sides[2] ?: 0).toDp() } else lastLeadingSide
+    val trailingSide = if (ready) with(density) { maxOf(sides[1] ?: 0, sides[3] ?: 0).toDp() } else lastTrailingSide
+    val side = maxOf(leadingSide, trailingSide)
+    SideEffect {
+        if (ready) {
+            lastLeadingSide = leadingSide
+            lastTrailingSide = trailingSide
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxWidth().padding(top = status).height(GlasmioToolbarDefaults.Height)
         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-        .padding(horizontal = IosPageHorizontalPadding + side + if (side > 0.dp) 8.dp else 0.dp)
-        .graphicsLayer { alpha = if (ready || lastSide > 0.dp) 1f else 0f },
-        contentAlignment = Alignment.Center,
+        .graphicsLayer { alpha = if (ready || lastLeadingSide > 0.dp || lastTrailingSide > 0.dp) 1f else 0f },
+        contentAlignment = Alignment.TopStart,
     ) {
-        val availableWidth = maxWidth
+        // Folded widths cannot decide whether the natural actions fit after a resize.
+        // Remeasure the unfolded endpoints once against the new safe viewport.
+        LaunchedEffect(maxWidth) { if (forceOverflow) onLayoutWidthChanged() }
+        val centeredInset = IosPageHorizontalPadding + side + if (side > 0.dp) 8.dp else 0.dp
+        val centeredWidth = (maxWidth - centeredInset * 2).coerceAtLeast(0.dp)
+        val asymmetricStart = IosPageHorizontalPadding + leadingSide + if (leadingSide > 0.dp) 8.dp else 0.dp
+        val asymmetricEnd = IosPageHorizontalPadding + trailingSide + if (trailingSide > 0.dp) 8.dp else 0.dp
+        val asymmetricWidth = (maxWidth - asymmetricStart - asymmetricEnd).coerceAtLeast(0.dp)
+        val preferredPx = preferredWidth?.let { with(density) { it.toPx() } }
+        val centeredPx = with(density) { centeredWidth.toPx() }
+        val asymmetricPx = with(density) { asymmetricWidth.toPx() }
+        val squeezeToRemainingSpace = preferredPx != null &&
+            preferredPx > centeredPx && preferredPx <= asymmetricPx
+        // Do not decide overflow from an in-flight endpoint measurement. During a
+        // navigation transition the retained action host briefly reports its old
+        // or zero-width geometry; folding from that transient value leaves the
+        // target page stuck with an unnecessary ellipsis after it settles.
+        if (ready && frame.phase == GlasmioNavigationPhase.Idle &&
+            !forceOverflow && preferredPx != null && preferredPx > asymmetricPx) {
+            SideEffect { onOverflowNeeded() }
+        }
+        val startBound = if (squeezeToRemainingSpace) with(density) { asymmetricStart.toPx() } else with(density) { centeredInset.toPx() }
+        val endBound = if (squeezeToRemainingSpace) with(density) { asymmetricEnd.toPx() } else with(density) { centeredInset.toPx() }
+        val maxAvailablePx = if (squeezeToRemainingSpace) asymmetricPx else centeredPx
+        val renderedWidthPx = preferredPx?.coerceAtMost(maxAvailablePx) ?: maxAvailablePx
+        // Keep the tab bar centered in the full toolbar whenever possible. If the
+        // side actions make that unsafe, clamp only the centered origin to the
+        // remaining safe interval; do not center it inside the whole asymmetric
+        // interval, which would push it much farther than the actions require.
+        val centeredOriginPx = (with(density) { maxWidth.toPx() } - renderedWidthPx) / 2f
+        val maxOriginPx = (with(density) { maxWidth.toPx() } - endBound - renderedWidthPx).coerceAtLeast(startBound)
+        val originPx = centeredOriginPx.coerceIn(startBound, maxOriginPx)
+        val presentedOrigin = animateFloatAsState(
+            targetValue = originPx,
+            animationSpec = GlasmioHeaderCollapseDefaults.Spring,
+            label = "TopTabsOrigin",
+        )
+        val availableWidth = with(density) { renderedWidthPx.toDp() }
         if (availableWidth >= 44.dp) {
             CompositionLocalProvider(LocalGlasmioTabBarPresentation provides
                 (adaptive?.tabPresentation ?: LocalGlasmioTabBarPresentation.current)) {
-                Box(Modifier.onGloballyPositioned { adaptive?.publishTabsBounds(it.boundsInWindow()) }) {
+                Box(
+                    Modifier.fillMaxHeight()
+                        .width(availableWidth)
+                        // Read the spring during placement so sliding the tabs does not
+                        // recompose the page or rebuild its glass/content layers.
+                        .offset { IntOffset(presentedOrigin.value.roundToInt(), 0) },
+                    contentAlignment = Alignment.Center,
+                ) {
                     content(availableWidth)
                 }
             }
@@ -289,7 +471,7 @@ private fun GlasmioTopNavigationSlot(
 }
 
 /**
- * Page-owned body and scroll-edge blur. Insets are supplied by the navigation host.
+ * Page-owned body and scroll-edge blur. Horizontal system insets apply only to the foreground.
  * The untouched background and faded foreground feed [backdrop]; the complete blur profile is
  * overlaid afterward so it follows this page's transitions without restoring unfaded content.
  * Descendant glass controls keep their existing backdrop provider.
@@ -317,7 +499,9 @@ fun GlasmioPageBody(
                 Modifier.matchParentSize()
                     .then(if (backgroundBrush != null) Modifier.background(backgroundBrush) else Modifier.background(backgroundColor)),
             ) { background?.invoke(this) }
-            Box(Modifier.fillMaxSize().glasmioAdaptiveContent().scrollEdgeContentFade(progress, headerHeight, headerTop = statusBarHeight)) {
+            Box(Modifier.fillMaxSize().glasmioAdaptiveContent()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                .scrollEdgeContentFade(progress, headerHeight, headerTop = statusBarHeight)) {
                 GlasmioOverscrollHost { content(contentPadding) }
             }
         }
@@ -381,6 +565,8 @@ private fun GlasmioNavigationHeader(
     target: GlasmioHeaderSpec,
     frame: GlasmioNavigationFrame,
     titles: PageTitleRegistry,
+    hasTopBar: Boolean,
+    forceOverflow: Boolean,
     modifier: Modifier,
 ) {
     val tracking = frame.phase == GlasmioNavigationPhase.Tracking
@@ -389,21 +575,58 @@ private fun GlasmioNavigationHeader(
     val progress = when { tracking -> frame.gestureProgress.coerceIn(0f, 1f); canceling -> 0f; else -> 1f }
     val retainedLeading = remember { linkedMapOf<Any, GlasmioHeaderGroup>() }
     val retainedTrailing = remember { linkedMapOf<Any, GlasmioHeaderGroup>() }
+    val leadingOverflow = remember { HeaderOverflowState() }
+    val trailingOverflow = remember { HeaderOverflowState() }
+    val overflowEnabled = hasTopBar && forceOverflow
+    val displaySourceLeading = overflowSourceGroups(source.leading, "leading", leadingOverflow, overflowEnabled)
+    val displayTargetLeading = overflowSourceGroups(target.leading, "leading", leadingOverflow, overflowEnabled)
+    val displaySourceTrailing = overflowSourceGroups(source.trailing, "trailing", trailingOverflow, overflowEnabled)
+    val displayTargetTrailing = overflowSourceGroups(target.trailing, "trailing", trailingOverflow, overflowEnabled)
     val density = LocalDensity.current
     // Retained groups are disposed only after their own tracks settle, not when the body ends.
     CompositionLocalProvider(LocalContentColor provides LocalGlassColors.current.content) {
         Box(modifier.height(GlasmioToolbarDefaults.Height)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .padding(horizontal = IosPageHorizontalPadding)) {
-            HeaderSide(source.leading, target.leading, owner.leading, retainedLeading, progress, tracking,
-                Modifier.align(Alignment.CenterStart)) { old, new ->
-                titles.publish(frame.fromEntryKey, true, source.leading, old, density)
-                titles.publish(frame.toEntryKey, true, target.leading, new, density)
+            HeaderSide(displaySourceLeading, displayTargetLeading,
+                if (owner === source) displaySourceLeading else displayTargetLeading,
+                retainedLeading, progress, tracking,
+                Modifier.align(Alignment.CenterStart), leading = true) { old, new ->
+                titles.publish(frame.fromEntryKey, true, source.leading, overflowEnabled, old, density)
+                titles.publish(frame.toEntryKey, true, target.leading, overflowEnabled, new, density)
             }
-            HeaderSide(source.trailing, target.trailing, owner.trailing, retainedTrailing, progress, tracking,
-                Modifier.align(Alignment.CenterEnd)) { old, new ->
-                titles.publish(frame.fromEntryKey, false, source.trailing, old, density)
-                titles.publish(frame.toEntryKey, false, target.trailing, new, density)
+            HeaderSide(displaySourceTrailing, displayTargetTrailing,
+                if (owner === source) displaySourceTrailing else displayTargetTrailing,
+                retainedTrailing, progress, tracking,
+                Modifier.align(Alignment.CenterEnd), leading = false) { old, new ->
+                titles.publish(frame.fromEntryKey, false, source.trailing, overflowEnabled, old, density)
+                titles.publish(frame.toEntryKey, false, target.trailing, overflowEnabled, new, density)
+            }
+            if (leadingOverflow.expanded) {
+                GlasmioCascadingMenu(
+                    anchorBounds = leadingOverflow.anchor.bounds,
+                    menuAnchorState = leadingOverflow.anchor,
+                    items = overflowItems(if (owner === source) source.leading else target.leading) {
+                        leadingOverflow.expanded = false
+                    },
+                    title = "More Actions",
+                    expandedDescription = "Expanded",
+                    collapsedDescription = "Collapsed",
+                    onDismiss = { leadingOverflow.expanded = false },
+                )
+            }
+            if (trailingOverflow.expanded) {
+                GlasmioCascadingMenu(
+                    anchorBounds = trailingOverflow.anchor.bounds,
+                    menuAnchorState = trailingOverflow.anchor,
+                    items = overflowItems(if (owner === source) source.trailing else target.trailing) {
+                        trailingOverflow.expanded = false
+                    },
+                    title = "More Actions",
+                    expandedDescription = "Expanded",
+                    collapsedDescription = "Collapsed",
+                    onDismiss = { trailingOverflow.expanded = false },
+                )
             }
         }
     }
@@ -413,11 +636,12 @@ private fun GlasmioNavigationHeader(
 private fun HeaderSide(
     from: List<GlasmioHeaderGroup>, to: List<GlasmioHeaderGroup>, owner: List<GlasmioHeaderGroup>,
     retained: MutableMap<Any, GlasmioHeaderGroup>, progress: Float, tracking: Boolean,
-    modifier: Modifier, onEndpointWidths: (Int?, Int?) -> Unit,
+    modifier: Modifier, leading: Boolean, onEndpointWidths: (Int?, Int?) -> Unit,
 ) {
     require(from.map { it.key }.distinct().size == from.size && to.map { it.key }.distinct().size == to.size) { "Duplicate header group keys" }
     var retainedRevision by remember { mutableIntStateOf(0) }
     val measured = remember { mutableMapOf<Any, GroupEndpointWidths>() }
+    val origins = remember { mutableMapOf<Any, Int>() }
     val density = LocalDensity.current
     fun total(groups: List<GlasmioHeaderGroup>, old: Boolean): Int? {
         val active = groups.filter { it.actions.isNotEmpty() }
@@ -436,26 +660,67 @@ private fun HeaderSide(
     SideEffect { publish() }
     retainedRevision
     (from + to).forEach { retained[it.key] = it }
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        retained.toMap().forEach { (groupKey, fallback) -> key(groupKey) {
-            val old = from.firstOrNull { it.key == groupKey }
-            val new = to.firstOrNull { it.key == groupKey }
-            HeaderGroup(old, new, owner.firstOrNull { it.key == groupKey }, fallback, progress, tracking,
-                onEndpoints = { oldWidth, newWidth ->
-                    measured[groupKey] = GroupEndpointWidths(
-                        old?.actions.orEmpty().map { LayerKey(it.key, it.visualKey) },
-                        new?.actions.orEmpty().map { LayerKey(it.key, it.visualKey) },
-                        oldWidth, newWidth, density.density, density.fontScale,
-                    )
-                    publish()
-                },
-                onGone = {
-                    retained.remove(groupKey)
-                    measured.remove(groupKey)
-                    retainedRevision++
-                },
-            )
-        } }
+    val orderedKeys = buildList {
+        (owner + to + from).map { it.key }.distinct().forEach(::add)
+        retained.keys.filterNot { it in this }.forEach(::add)
+    }
+    Layout(modifier = modifier.fillMaxWidth(), content = {
+        orderedKeys.forEach { groupKey ->
+            val fallback = retained.getValue(groupKey)
+            key(groupKey) {
+                val old = from.firstOrNull { it.key == groupKey }
+                val new = to.firstOrNull { it.key == groupKey }
+                HeaderGroup(old, new, owner.firstOrNull { it.key == groupKey }, fallback, progress, tracking,
+                    onEndpoints = { oldWidth, newWidth ->
+                        measured[groupKey] = GroupEndpointWidths(
+                            old?.actions.orEmpty().map { LayerKey(it.key, it.visualKey) },
+                            new?.actions.orEmpty().map { LayerKey(it.key, it.visualKey) },
+                            oldWidth, newWidth, density.density, density.fontScale,
+                        )
+                        publish()
+                    },
+                    onGone = {
+                        retained.remove(groupKey)
+                        measured.remove(groupKey)
+                        origins.remove(groupKey)
+                        retainedRevision++
+                    },
+                )
+            }
+        }
+    }) { measurables, constraints ->
+        val children = measurables.map { it.measure(constraints.copy(minWidth = 0, minHeight = 0)) }
+        val childrenByKey = orderedKeys.zip(children).toMap()
+        val gap = 8.dp.roundToPx()
+        val width = constraints.maxWidth
+        fun positions(groups: List<GlasmioHeaderGroup>): Map<Any, Int> {
+            val active = groups.filter { it.actions.isNotEmpty() }
+            fun groupWidth(key: Any): Int = childrenByKey[key]?.width ?: 0
+            val total = active.sumOf { groupWidth(it.key) } + gap * (active.size - 1).coerceAtLeast(0)
+            var x = if (leading) 0 else width - total
+            return active.associate { group ->
+                (group.key to x).also { x += groupWidth(group.key) + gap }
+            }
+        }
+        val activePositions = positions(owner)
+        val oldPositions = positions(from)
+        val newPositions = positions(to)
+        val height = children.maxOfOrNull { it.height } ?: constraints.minHeight
+        layout(width, height.coerceIn(constraints.minHeight, constraints.maxHeight)) {
+            orderedKeys.forEachIndexed { index, groupKey ->
+                val x = if (tracking) {
+                    val oldX = oldPositions[groupKey] ?: newPositions[groupKey] ?: origins[groupKey] ?: 0
+                    val newX = newPositions[groupKey] ?: oldX
+                    (oldX + (newX - oldX) * progress).roundToInt()
+                } else {
+                    // An outgoing group stays in its last screen position while fading.
+                    // It neither joins the target row nor consumes the target's space.
+                    activePositions[groupKey] ?: origins[groupKey] ?: oldPositions[groupKey] ?: 0
+                }
+                origins[groupKey] = x
+                children[index].placeRelative(x, 0)
+            }
+        }
     }
 }
 

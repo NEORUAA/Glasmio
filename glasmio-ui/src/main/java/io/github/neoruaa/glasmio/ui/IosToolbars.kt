@@ -5,10 +5,12 @@ import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.icons.*
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -37,18 +39,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.effects.blur
@@ -105,6 +115,67 @@ enum class GlasmioBottomToolbarStyle { Text, Symbols, Search }
 
 private val IosTopToolbarActionGap = 8.dp
 
+/**
+ * A page-owned toolbar title that keeps the full string available to the layout before falling
+ * back to marquee behavior. Edge fading is only enabled while the text overflows.
+ */
+@Composable
+fun GlasmioToolbarTitle(
+    text: String,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    color: Color = LocalGlassColors.current.content,
+    textAlign: TextAlign = TextAlign.Center,
+) {
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val textMeasurer = rememberTextMeasurer()
+        val naturalWidth = remember(text, style, textMeasurer) {
+            textMeasurer.measure(
+                AnnotatedString(text), style = style, maxLines = 1, softWrap = false,
+            ).size.width
+        }
+        val overflowing = naturalWidth > with(LocalDensity.current) { maxWidth.toPx() } + .5f
+        val fadeModifier = if (overflowing) {
+            Modifier
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithCache {
+                    val edge = minOf(14.dp.toPx(), size.width / 2f)
+                    val width = size.width.coerceAtLeast(1f)
+                    val start = (edge / width).coerceIn(0f, .5f)
+                    val end = (1f - edge / width).coerceIn(.5f, 1f)
+                    val mask = Brush.horizontalGradient(
+                        0f to Color.Transparent,
+                        start to Color.White,
+                        end to Color.White,
+                        1f to Color.Transparent,
+                    )
+                    onDrawWithContent {
+                        drawContent()
+                        drawRect(mask, blendMode = BlendMode.DstIn)
+                    }
+                }
+        } else Modifier
+        Box(Modifier.fillMaxWidth().then(fadeModifier)) {
+            Text(
+                text = text,
+                style = style,
+                color = color,
+                textAlign = textAlign,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (overflowing) Modifier.basicMarquee(
+                        iterations = Int.MAX_VALUE,
+                        repeatDelayMillis = 1_800,
+                        initialDelayMillis = 650,
+                    ) else Modifier),
+            )
+        }
+    }
+}
+
 /** The five top-toolbar variants from Figma node 5661:41970. */
 @Composable
 fun GlasmioTopBar(
@@ -146,11 +217,11 @@ fun GlasmioTopBar(
                 modifier.fillMaxWidth().height(54.dp).padding(horizontal = IosPageHorizontalPadding),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    title,
+                GlasmioToolbarTitle(
+                    text = title,
                     style = IosTypography.largeTitle,
-                    color = LocalGlassColors.current.content,
                     modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Start,
                 )
                 GlasmioToolbarActionGroup(
                     style = actionsStyle,
@@ -164,26 +235,47 @@ fun GlasmioTopBar(
                 val density = LocalDensity.current
                 val leadingPad = with(density) { leadingWidth.toDp() }
                 val trailingPad = with(density) { trailingWidth.toDp() }
-                val centeredTitleSidePadding = maxOf(leadingPad, trailingPad) +
-                    if (leadingWidth > 0 || trailingWidth > 0) IosTopToolbarActionGap else 0.dp
-                Box(modifier.fillMaxWidth().height(54.dp).padding(horizontal = IosPageHorizontalPadding)) {
+                val leadingTitlePadding = leadingPad +
+                    if (leadingWidth > 0) IosTopToolbarActionGap else 0.dp
+                val trailingTitlePadding = trailingPad +
+                    if (trailingWidth > 0) IosTopToolbarActionGap else 0.dp
+                val startsAtLeading = style == GlasmioTopBarStyle.TwoLineLeading
+                val titleStyle = if (subtitle == null) IosTypography.headline
+                    else IosTypography.subheadline.copy(fontWeight = FontWeight.SemiBold)
+                val subtitleStyle = IosTypography.caption
+                val textMeasurer = rememberTextMeasurer()
+                val titleWidth = remember(title, titleStyle, textMeasurer) {
+                    textMeasurer.measure(AnnotatedString(title), titleStyle, maxLines = 1, softWrap = false).size.width
+                }
+                val subtitleWidth = subtitle?.let {
+                    remember(it, subtitleStyle, textMeasurer) {
+                        textMeasurer.measure(AnnotatedString(it), subtitleStyle, maxLines = 1, softWrap = false).size.width
+                    }
+                }
+                BoxWithConstraints(modifier.fillMaxWidth().height(54.dp).padding(horizontal = IosPageHorizontalPadding)) {
+                    val availableWidth = with(density) { maxWidth.toPx() }
+                    val safeStart = with(density) { leadingTitlePadding.toPx() }
+                    val safeEnd = availableWidth - with(density) { trailingTitlePadding.toPx() }
+                    fun fitsCentered(width: Int?): Boolean {
+                        if (width == null) return true
+                        val left = (availableWidth - width) / 2f
+                        return left >= safeStart && left + width <= safeEnd
+                    }
+                    val titleSqueezed = !startsAtLeading && !fitsCentered(titleWidth)
+                    val subtitleSqueezed = !startsAtLeading && !fitsCentered(subtitleWidth)
+                    val safeModifier = Modifier.fillMaxWidth().padding(
+                        start = leadingTitlePadding,
+                        end = trailingTitlePadding,
+                    )
                     GlasmioToolbarActionGroup(
                         Modifier.align(Alignment.CenterStart).onSizeChanged { leadingWidth = it.width },
                         style = navigationStyle,
                     ) { navigation?.invoke() }
                     Column(
                         Modifier
-                            .align(if (style == GlasmioTopBarStyle.TwoLineLeading) Alignment.CenterStart else Alignment.Center)
+                            .align(if (startsAtLeading) Alignment.CenterStart else Alignment.Center)
                             .fillMaxWidth()
-                            .padding(
-                                // Centered styles stay optically centered: reserve the wider
-                                // side on both edges, plus the same gap used between actions.
-                                // The leading style just clears the sides.
-                                start = if (style == GlasmioTopBarStyle.TwoLineLeading) leadingPad
-                                else centeredTitleSidePadding,
-                                end = if (style == GlasmioTopBarStyle.TwoLineLeading) trailingPad
-                                else centeredTitleSidePadding,
-                            )
+                            .then(if (startsAtLeading) Modifier.padding(start = leadingPad, end = trailingPad) else Modifier)
                             .graphicsLayer {
                                 alpha = progress
                                 val scale = 0.92f + 0.08f * progress
@@ -191,23 +283,35 @@ fun GlasmioTopBar(
                                 scaleY = scale
                             }
                             .blur(8.dp * (1f - progress)),
-                        horizontalAlignment = if (style == GlasmioTopBarStyle.TwoLineLeading) Alignment.Start else Alignment.CenterHorizontally,
+                        horizontalAlignment = if (startsAtLeading) Alignment.Start else Alignment.CenterHorizontally,
                     ) {
-                        Text(
-                            title,
-                            style = if (subtitle == null) IosTypography.headline
-                            else IosTypography.subheadline.copy(fontWeight = FontWeight.SemiBold),
-                            color = LocalGlassColors.current.content,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                        GlasmioToolbarTitle(
+                            text = title,
+                            style = titleStyle,
+                            modifier = if (titleSqueezed) safeModifier else Modifier.fillMaxWidth(),
+                            textAlign = when {
+                                startsAtLeading -> TextAlign.Start
+                                titleSqueezed -> TextAlign.End
+                                else -> TextAlign.Center
+                            },
                         )
                         subtitle?.let {
                             Text(
                                 it,
-                                style = IosTypography.caption,
+                                style = subtitleStyle,
                                 color = LocalGlassColors.current.secondaryContent,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                                modifier = when {
+                                    startsAtLeading -> Modifier
+                                    subtitleSqueezed -> safeModifier
+                                    else -> Modifier.fillMaxWidth()
+                                },
+                                textAlign = when {
+                                    startsAtLeading -> TextAlign.Start
+                                    subtitleSqueezed -> TextAlign.End
+                                    else -> TextAlign.Center
+                                },
                             )
                         }
                     }

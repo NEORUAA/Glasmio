@@ -50,6 +50,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -69,6 +70,7 @@ data class GlasmioCascadingMenuItem(
     val enabled: Boolean = true,
     val onClick: () -> Unit = {},
     val subtitle: String? = null,
+    val icon: (@Composable () -> Unit)? = null,
 )
 
 /**
@@ -232,6 +234,7 @@ fun GlasmioCascadingMenu(
                         subtitle = selected.subtitle,
                         rowHeight = selectedRowHeight,
                         systemName = selected.systemName,
+                        icon = selected.icon,
                         iconTint = if (selected.destructive) colors.destructive else if (useAccentIcons) colors.accent else colors.content,
                         destructive = selected.destructive,
                         fontWeight = FontWeight((400 + 200 * p).roundToInt()),
@@ -253,6 +256,9 @@ fun GlasmioCascadingMenu(
                                 title = item.title,
                                 subtitle = item.subtitle,
                                 rowHeight = menuItemHeight(itemHeight, item.title, item.subtitle),
+                                systemName = item.systemName,
+                                icon = item.icon,
+                                iconTint = if (item.destructive) colors.destructive else if (useAccentIcons) colors.accent else colors.content,
                                 backdrop = childBackdrop,
                                 enabled = item.enabled && open && childExpanded && p > 0.95f,
                                 onClick = { close(item.onClick) },
@@ -300,6 +306,7 @@ fun GlasmioCascadingMenu(
                     subtitle = item.subtitle,
                     rowHeight = itemHeights[index],
                     systemName = item.systemName,
+                    icon = item.icon,
                     destructive = item.destructive,
                     backdrop = childBackdrop,
                     iconTint = if (item.destructive) colors.destructive else if (useAccentIcons) colors.accent else colors.content,
@@ -388,7 +395,13 @@ private fun MenuHeaderAction(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
     ) {
-        action.systemName?.let { SfIcon(it, null, size = 24.dp, tint = iconTint) }
+        if (action.icon != null) {
+            Box(Modifier.size(24.dp).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
+                action.icon.invoke()
+            }
+        } else {
+            action.systemName?.let { SfIcon(it, null, size = 24.dp, tint = iconTint) }
+        }
         Spacer(Modifier.height(6.dp))
         Text(action.title, style = IosTypography.subheadline, color = colors.content,
             maxLines = 1, overflow = TextOverflow.Ellipsis)

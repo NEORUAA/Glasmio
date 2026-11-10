@@ -32,6 +32,7 @@ internal class TabSidebarMotion(initialExpanded: Boolean) {
     private var scaleY = 1f
     private var sourceWide = false
     private var twoStage = false
+    private var transitionSource = Rect.Zero
 
     private val centerX = HeaderTrack(0f)
     private val centerY = HeaderTrack(0f)
@@ -64,17 +65,34 @@ internal class TabSidebarMotion(initialExpanded: Boolean) {
     val tabsPreviewProgress: Float get() = tabPreview.value.coerceIn(0f, 1f)
     val sidebarPreviewProgress: Float get() = sidebarPreview.value.coerceIn(0f, 1f)
 
-    /** Viewport/configuration changes establish a new resting layout rather than a fake morph. */
-    fun updateGeometry(tabs: Rect, sidebar: Rect, density: Float, expanded: Boolean) {
+    /** Endpoint changes never consume a pending state change or discard an active spring. */
+    fun updateGeometry(tabs: Rect, sidebar: Rect, density: Float) {
         if (!valid(tabs) || !valid(sidebar)) return
         val newDensity = density.takeIf { it.isFinite() && it > 0f } ?: 1f
         if (initialized && this.tabs == tabs && this.sidebar == sidebar && pixelsPerPoint == newDensity) return
+        val oldScaleX = scaleX
+        val oldScaleY = scaleY
         this.tabs = tabs
         this.sidebar = sidebar
         pixelsPerPoint = newDensity
         scaleX = maxOf(abs(tabs.left), abs(tabs.right), abs(sidebar.left), abs(sidebar.right), tabs.width, sidebar.width, 1f)
         scaleY = maxOf(abs(tabs.top), abs(tabs.bottom), abs(sidebar.top), abs(sidebar.bottom), tabs.height, sidebar.height, 1f)
+        if (initialized && running) {
+            rebase(centerX, oldScaleX / scaleX)
+            rebase(width, oldScaleX / scaleX)
+            rebase(corner, oldScaleX / scaleX)
+            rebase(centerY, oldScaleY / scaleY)
+            rebase(height, oldScaleY / scaleY)
+            val endpoint = if (phase == 0) intermediateBounds(transitionSource, targetBounds()) else targetBounds()
+            targetGeometry(endpoint, if (phase == 0) InitialSpring else if (expanded) SidebarSpring else TabsSpring)
+            targetCorner(if (phase == 0) min(endpoint.height, endpoint.width) / 2f
+                else if (expanded) 0f else tabs.height / 2f,
+                if (phase == 0) InitialSpring else CornerSpring)
+            return
+        }
         initialized = true
+        // Use the current presentation state. Passing the newly requested state
+        // here used to snap to it before retarget(), which then became a no-op.
         snap(expanded)
     }
 
@@ -84,6 +102,7 @@ internal class TabSidebarMotion(initialExpanded: Boolean) {
         this.expanded = expanded
         if (!initialized) return
         val source = bounds
+        transitionSource = source
         val target = targetBounds()
         sourceWide = source.width / source.height > 2f
         val threshold = 100f * pixelsPerPoint
@@ -95,13 +114,7 @@ internal class TabSidebarMotion(initialExpanded: Boolean) {
         rope.target = if (twoStage) 2f else 1f
         if (twoStage) {
             phase = 0
-            val middle = if (sourceWide) {
-                Rect(target.center.x - target.width / 2f, source.top,
-                    target.center.x + target.width / 2f, source.bottom)
-            } else {
-                Rect(source.left, target.center.y - target.height / 2f,
-                    source.right, target.center.y + target.height / 2f)
-            }
+            val middle = intermediateBounds(source, target)
             targetGeometry(middle, InitialSpring)
             targetCorner(min(middle.height, middle.width) / 2f, InitialSpring)
             // The intermediate MorphableItem has no layer/coordinator: old content leaves,
@@ -138,6 +151,22 @@ internal class TabSidebarMotion(initialExpanded: Boolean) {
 
     /** Layout/visibility policy can suppress the presentation without changing saved preference. */
     fun snapTo(expanded: Boolean) = snap(expanded)
+
+    private fun intermediateBounds(source: Rect, target: Rect): Rect = if (sourceWide) {
+        Rect(target.center.x - target.width / 2f, source.top,
+            target.center.x + target.width / 2f, source.bottom)
+    } else {
+        Rect(source.left, target.center.y - target.height / 2f,
+            source.right, target.center.y + target.height / 2f)
+    }
+
+    private fun rebase(track: HeaderTrack, factor: Float) {
+        val target = track.target * factor
+        val delay = track.delay
+        track.snap(track.value * factor, track.velocity * factor)
+        track.target = target
+        track.delay = delay
+    }
 
     private fun beginTarget(targetPhase: Int) {
         phase = targetPhase

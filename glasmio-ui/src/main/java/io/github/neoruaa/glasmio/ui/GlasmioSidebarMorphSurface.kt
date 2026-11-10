@@ -85,7 +85,7 @@ fun GlasmioSidebarMorphSurface(
                 appearance = tabsAppearance,
                 materialContext = materialContext,
                 material = NavigationGlassMaterial.RegularLarge,
-                shadowAlpha = .5f,
+                shadowMaterial = NavigationGlassMaterial.RegularSmall,
             ))
             }
             Box(Modifier.matchParentSize().graphicsLayer {

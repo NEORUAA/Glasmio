@@ -213,6 +213,7 @@ fun GlasmioMessageContextMenu(
                                             title = action.title,
                                             subtitle = action.subtitle,
                                             systemName = action.systemName,
+                                            icon = action.icon,
                                             destructive = action.destructive,
                                             enabled = action.enabled,
                                             backdrop = childBackdrop,

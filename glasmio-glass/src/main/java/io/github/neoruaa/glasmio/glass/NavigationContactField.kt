@@ -59,10 +59,18 @@ internal class NavigationContactContour(approximation: FloatArray) {
             packed[start + 5] = edge.normal.y
         }
     }
-    val bounds = Rect(
-        contourEdges.minOf { minOf(it.start.x, it.end.x) }, contourEdges.minOf { minOf(it.start.y, it.end.y) },
-        contourEdges.maxOf { maxOf(it.start.x, it.end.x) }, contourEdges.maxOf { maxOf(it.start.y, it.end.y) },
-    )
+    // A toolbar action can be measured at zero size for one frame while a
+    // navigation destination is entering or leaving. Path.approximate then
+    // contains no usable edge. Keep that transient contour valid instead of
+    // throwing from minOf/maxOf during the backdrop draw pass.
+    val bounds = if (contourEdges.isEmpty()) {
+        Rect.Zero
+    } else {
+        Rect(
+            contourEdges.minOf { minOf(it.start.x, it.end.x) }, contourEdges.minOf { minOf(it.start.y, it.end.y) },
+            contourEdges.maxOf { maxOf(it.start.x, it.end.x) }, contourEdges.maxOf { maxOf(it.start.y, it.end.y) },
+        )
+    }
     val fingerprint = edges.contentHashCode()
 }
 

@@ -191,23 +191,28 @@ fun GlasmioAdaptiveNavigationScaffold(
     val panePixels = with(density) { sidebarWidth.roundToPx() }.coerceIn(0, viewport.width)
     val sideFrame = if (direction == LayoutDirection.Ltr) Rect(0f, 0f, panePixels.toFloat(), viewport.height.toFloat())
         else Rect((viewport.width - panePixels).toFloat(), 0f, viewport.width.toFloat(), viewport.height.toFloat())
-    val tabsFrame = coordinator.tabsBounds
-    LaunchedEffect(native.running, coordinator.measuredTabsBounds) {
-        if (!native.running) coordinator.tabsBounds = coordinator.measuredTabsBounds
-    }
+    // The tab surface publishes its own 44-point capsule, not the taller toolbar
+    // slot. Geometry updates preserve an active spring, so a late action layout
+    // can correct the endpoint without restarting or completing the morph.
+    val tabsFrame = coordinator.measuredTabsBounds
     LaunchedEffect(open, usesTabMorph, tabsFrame, sideFrame, layout, sidebarEnabled, density.density) {
         if (!usesTabMorph || layout == GlasmioNavigationLayout.BottomBar || !sidebarEnabled) {
             native.snapTo(false)
         } else if (tabsFrame != null && sideFrame.width > 0f && sideFrame.height > 0f) {
-            native.updateGeometry(tabsFrame, sideFrame, density.density, open)
+            native.updateGeometry(tabsFrame, sideFrame, density.density)
             native.retarget(open)
-            val scale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor ?: 1f
-            var previous = 0L
-            while (native.running) withFrameNanos { now ->
-                val dt = if (previous == 0L) 0f else (now - previous) / 1e9f / scale.coerceAtLeast(.01f)
-                previous = now
-                native.advance(dt, scale == 0f)
-            }
+        }
+    }
+    // Endpoint publication can occur on every layout pass. Keep clock ownership
+    // separate so changing a target cannot cancel/restart its frame integration.
+    LaunchedEffect(native.running) {
+        if (!native.running) return@LaunchedEffect
+        val scale = currentCoroutineContext()[MotionDurationScale]?.scaleFactor ?: 1f
+        var previous = 0L
+        while (native.running) withFrameNanos { now ->
+            val dt = if (previous == 0L) 0f else (now - previous) / 1e9f / scale.coerceAtLeast(.01f)
+            previous = now
+            native.advance(dt, scale == 0f)
         }
     }
     val backdrop = contentBackdrop ?: rememberLayerBackdrop()

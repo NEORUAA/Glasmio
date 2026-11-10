@@ -79,6 +79,8 @@ interface GlasmioTabBarPresentation {
     val interactive: Boolean
     val capturesPreview: Boolean get() = false
     val drawsContentInPlace: Boolean get() = true
+    /** Exact material silhouette, excluding the containing toolbar's vertical padding. */
+    fun onSurfaceBounds(windowBounds: Rect) {}
     fun onPreviewLayer(layer: GraphicsLayer, size: IntSize) {}
     fun onMaterialEndpoint(colors: io.github.neoruaa.glasmio.core.GlassColors, appearance: io.github.neoruaa.glasmio.core.GlassAppearance) {}
 }
@@ -197,12 +199,16 @@ fun <T> GlasmioTabBar(
             .layout { measurable, constraints ->
                 val child = measurable.measure(constraints)
                 layout(child.width, child.height) {
-                    if (presentation.capturesPreview || presentation.interactive || presentation.contentAlpha() > 0f) {
-                        child.placeWithLayer(0, 0, previewLayer)
-                    }
+                    // Keep the hidden endpoint placed so its exact capsule bounds remain
+                    // available after actions or insets change with the sidebar expanded.
+                    // The outer zero-alpha layer suppresses its rendering at rest.
+                    child.placeWithLayer(0, 0, previewLayer)
                 }
             }
-            .onGloballyPositioned { coordinates = it },
+            .onGloballyPositioned {
+                coordinates = it
+                presentation.onSurfaceBounds(it.boundsInWindow())
+            },
     ) {
         val surfaceWidthPx = constraints.maxWidth.toFloat()
         val paddingPx = with(density) { GlasmioTabBarDefaults.ContentPadding.toPx() }
@@ -325,7 +331,7 @@ fun <T> GlasmioTabBar(
                 navigationMaterial = appearance.usesBackdrop, innerShadows = innerShadows,
                 isDark = colors.isDark, appearance = appearance, materialContext = materialContext,
                 material = NavigationGlassMaterial.RegularLarge,
-                shadowAlpha = .5f,
+                shadowMaterial = NavigationGlassMaterial.RegularSmall,
                 pressProgressState = animation.pressProgressState,
                 layerBlock = { scaleX = panelScale(); scaleY = panelScale() },
             ).then(highlight.modifier))

@@ -16,7 +16,7 @@ class HeaderMotionTest {
         val tabs = Rect(400f, 40f, 900f, 84f)
         val sidebar = Rect(0f, 0f, 320f, 834f)
         val motion = TabSidebarMotion(false)
-        motion.updateGeometry(tabs, sidebar, 1f, false)
+        motion.updateGeometry(tabs, sidebar, 1f)
         motion.retarget(true)
         assertEquals(0, motion.phase)
         repeat(4) { motion.advance(1f / 60f) }
@@ -45,9 +45,37 @@ class HeaderMotionTest {
         repeat(2) { motion.advance(1f / 60f) }
         assertTrue(motion.contentInsetProgress < 1f)
         val direct = TabSidebarMotion(false)
-        direct.updateGeometry(Rect(10f, 20f, 210f, 64f), Rect(0f, 0f, 220f, 200f), 1f, false)
+        direct.updateGeometry(Rect(10f, 20f, 210f, 64f), Rect(0f, 0f, 220f, 200f), 1f)
         direct.retarget(true)
         assertEquals(2, direct.phase)
+    }
+
+    @Test fun tabSidebarEndpointUpdatesDoNotConsumeTheToggleOrSnapTheActiveSpring() {
+        val tabs = Rect(400f, 40f, 900f, 84f)
+        val movedTabs = Rect(300f, 40f, 800f, 84f)
+        val sidebar = Rect(0f, 0f, 320f, 834f)
+        val motion = TabSidebarMotion(true)
+        motion.updateGeometry(tabs, sidebar, 1f)
+        motion.updateGeometry(movedTabs, sidebar, 1f)
+        assertTrue("Measuring a moved tab endpoint must retain the sidebar state", motion.expanded)
+        assertEquals(sidebar, motion.bounds)
+        motion.retarget(false)
+        assertTrue("A changed endpoint must not turn the collapse into a no-op", motion.running)
+        assertEquals(sidebar, motion.bounds)
+        repeat(30) { motion.advance(1f / 120f) }
+        val beforeUpdate = motion.bounds
+        val finalTabs = movedTabs.translate(androidx.compose.ui.geometry.Offset(-20f, 0f))
+        motion.updateGeometry(finalTabs, sidebar, 1f)
+        assertTrue(motion.running)
+        assertEquals(beforeUpdate.left, motion.bounds.left, .0002f)
+        assertEquals(beforeUpdate.top, motion.bounds.top, .0002f)
+        assertEquals(beforeUpdate.width, motion.bounds.width, .0002f)
+        assertEquals(beforeUpdate.height, motion.bounds.height, .0002f)
+        repeat(240) { motion.advance(1f / 120f) }
+        assertFalse(motion.running)
+        assertEquals(finalTabs, motion.bounds)
+        assertEquals("The morph endpoint must match the 44-point tab surface", 44f, motion.bounds.height, 0f)
+        assertEquals(22f, motion.cornerRadius, 0f)
     }
 
     @Test fun splitSidebarUsesTheRecoveredCriticalSpringAndRetainsInterruptedVelocity() {

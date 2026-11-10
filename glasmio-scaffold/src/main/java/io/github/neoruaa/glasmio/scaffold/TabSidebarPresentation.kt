@@ -33,7 +33,6 @@ internal class AdaptiveSidebarCoordinator(initialExpanded: Boolean) {
     var tabHosts by mutableIntStateOf(0)
     var usesTabMorph by mutableStateOf(false)
     var hostOrigin by mutableStateOf(Offset.Zero)
-    var tabsBounds by mutableStateOf<Rect?>(null)
     var measuredTabsBounds by mutableStateOf<Rect?>(null)
     var tabsLayer by mutableStateOf<GraphicsLayer?>(null)
     var tabsLayerSize by mutableStateOf(IntSize.Zero)
@@ -45,6 +44,9 @@ internal class AdaptiveSidebarCoordinator(initialExpanded: Boolean) {
         override val interactive: Boolean get() = !usesTabMorph || !motion.running && !motion.expanded
         override val capturesPreview: Boolean get() = usesTabMorph && motion.running
         override val drawsContentInPlace: Boolean get() = !capturesPreview
+        override fun onSurfaceBounds(windowBounds: Rect) {
+            publishTabsBounds(windowBounds)
+        }
         override fun onPreviewLayer(layer: GraphicsLayer, size: IntSize) {
             tabsLayer = layer
             tabsLayerSize = size
@@ -58,7 +60,6 @@ internal class AdaptiveSidebarCoordinator(initialExpanded: Boolean) {
     fun publishTabsBounds(windowBounds: Rect) {
         if (windowBounds.width <= 0f || windowBounds.height <= 0f) return
         measuredTabsBounds = windowBounds.translate(-hostOrigin)
-        if (!motion.running) tabsBounds = measuredTabsBounds
     }
 }
 
