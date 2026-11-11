@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -66,6 +67,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.constrainWidth
@@ -132,6 +134,12 @@ private val NavigationItemIconClearance = 4.dp
 
 private data class NavigationTabGeometry(val widthPx: Float, val stepPx: Float) {
     fun center(index: Float): Float = widthPx / 2f + index * stepPx
+
+    fun labelMaxWidth(itemCount: Int, density: Density): Dp = with(density) {
+        // Glass slots may overlap; captions must fit between neighboring centers.
+        val available = if (itemCount > 1) minOf(widthPx, stepPx) else widthPx
+        (available.toDp() - 4.dp).coerceAtLeast(1.dp)
+    }
 }
 
 /** UIKit's vertical phone allocation when every intrinsic item width is at most 42 pt. */
@@ -381,6 +389,7 @@ fun <T> GlasmioNavigationBar(
             )
         }
         val expandedTabWidthPx = expandedTabs.widthPx
+        val labelMaxWidth = expandedTabs.labelMaxWidth(tabItems.size, density)
         val compactInnerWidthPx = (compactWidthPx - paddingPx * 2f).coerceAtLeast(1f)
         val tabStepPx = rememberUpdatedState(expandedTabs.stepPx.coerceAtLeast(1f))
         val innerGlassVisibilityState = remember(compactState) {
@@ -883,6 +892,7 @@ fun <T> GlasmioNavigationBar(
                             selectedColorFilter = selectedIconColorFilterState,
                             hideSelectedItem = true,
                             expandedTabWidthPx = expandedTabWidthPx,
+                            labelMaxWidth = labelMaxWidth,
                             compactTabWidthPx = compactInnerWidthPx / tabItems.size,
                             compactProgress = compactState,
                             onItemBoundsChanged = onItemBoundsChanged,
@@ -962,6 +972,7 @@ fun <T> GlasmioNavigationBar(
                             selectedColorFilter = selectedIconColorFilterState,
                             hideSelectedItem = true,
                             expandedTabWidthPx = expandedTabWidthPx,
+                            labelMaxWidth = labelMaxWidth,
                             compactTabWidthPx = compactInnerWidthPx / tabItems.size,
                             compactProgress = compactState,
                             selectedContentSource = true,
@@ -1050,6 +1061,7 @@ private fun <T> FullTabContent(
     alpha: () -> Float,
     selectedColorFilter: State<ColorFilter>,
     expandedTabWidthPx: Float,
+    labelMaxWidth: Dp,
     compactTabWidthPx: Float,
     compactProgress: State<Float>,
     hideSelectedItem: Boolean = false,
@@ -1100,6 +1112,7 @@ private fun <T> FullTabContent(
                             NavigationTabContent(
                                 item = item,
                                 selected = selected,
+                                labelMaxWidth = labelMaxWidth,
                                 // The selected placeholder stays transparent while the separate
                                 // morphing item owns its pixels. Keep its layout and semantics
                                 // without two unused tint layers observing every press frame.
@@ -1165,6 +1178,7 @@ private fun <T> FullTabContent(
 private fun <T> NavigationTabContent(
     item: GlasmioTabItem<T>,
     selected: Boolean,
+    labelMaxWidth: Dp,
     selectedColorFilter: State<ColorFilter>? = null,
     selectedIconTint: Color? = null,
     labelAlpha: (() -> Float)? = null,
@@ -1215,6 +1229,7 @@ private fun <T> NavigationTabContent(
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
+            .widthIn(max = labelMaxWidth)
             .then(
                 if (labelAlpha != null) {
                     Modifier.collapseVertically(labelAlpha)
@@ -1360,6 +1375,7 @@ internal fun <T> BoxScope.MorphingSelectedNavigationItem(
             NavigationTabContent(
                 item = item,
                 selected = true,
+                labelMaxWidth = expandedTabs.labelMaxWidth(itemCount, density),
                 selectedColorFilter = selectedIconColorFilter,
                 selectedIconTint = contentColor,
                 labelAlpha = labelAlpha,

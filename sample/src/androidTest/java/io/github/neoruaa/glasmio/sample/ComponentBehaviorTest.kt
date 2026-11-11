@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
@@ -280,6 +281,72 @@ class ComponentBehaviorTest {
             rule.onNode(tab and hasContentDescription("Library")).assertIsSelected()
             rule.onNode(homeTab).assertIsNotSelected()
             rule.runOnIdle { assertEquals(expectedSelections, selections) }
+        }
+    }
+
+    @Test fun largeTypeNavigationLabelsStaySeparateAndTabsRemainClickable() {
+        var selected by mutableStateOf("home")
+        var direction by mutableStateOf(LayoutDirection.Ltr)
+        val compact = mutableFloatStateOf(0f)
+        val items = listOf(
+            GlasmioTabItem("home", "Home", SfSymbol.House),
+            GlasmioTabItem("materials", "Materials", SfSymbol.Layers),
+            GlasmioTabItem("settings", "Settings", SfSymbol.Gearshape),
+            GlasmioTabItem("about", "About", SfSymbol.InfoCircle),
+        )
+        rule.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = 2f),
+                LocalLayoutDirection provides direction,
+            ) {
+                GlasmioTheme(isDark = false, appearance = GlassAppearance(reduceTransparency = true)) {
+                    GlasmioBackdropHost(
+                        modifier = Modifier.fillMaxSize(),
+                        sampledColor = Color.White,
+                        overlayContent = {
+                            Box(Modifier.width(360.dp).testTag("large-type-navigation-viewport").padding(horizontal = 20.dp)) {
+                                GlasmioNavigationBarWithTrailingItem(
+                                    items = items,
+                                    trailingItem = GlasmioTabItem("search", "Search", SfSymbol.Search),
+                                    selectedKey = selected,
+                                    onSelected = { selected = it },
+                                    onExpand = { compact.floatValue = 0f },
+                                    compactProgress = compact,
+                                    detachTrailingItem = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        for (layoutDirection in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+            rule.runOnIdle { direction = layoutDirection }
+            val viewport = rule.onNodeWithTag("large-type-navigation-viewport").fetchSemanticsNode().boundsInRoot
+            assertEquals("Exercise the 360 dp phone viewport", with(rule.density) { 360.dp.toPx() }, viewport.width, 1f)
+            val labelBounds = items.map { item ->
+                val label = rule.onNode(hasText(item.label) and hasAnyAncestor(tab), useUnmergedTree = true)
+                val layouts = mutableListOf<TextLayoutResult>()
+                label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val layout = layouts.single()
+                assertEquals("Retain the requested font scale", 2f, layout.layoutInput.density.fontScale, 0f)
+                assertEquals(10.sp, layout.layoutInput.style.fontSize)
+                assertEquals(1, layout.lineCount)
+                if (item.key == "materials") assertTrue("A long caption must ellipsize inside its slot", layout.isLineEllipsized(0))
+                label.fetchSemanticsNode().boundsInRoot
+            }.sortedBy { it.left }
+            labelBounds.zipWithNext().forEach { (left, right) ->
+                assertTrue("Large captions must not overlap in $layoutDirection: $left, $right", left.right <= right.left)
+            }
+            items.forEach { item ->
+                rule.onNode(tab and hasContentDescription(item.label)).performTouchInput { click() }.assertIsSelected()
+                rule.runOnIdle { assertEquals(item.key, selected) }
+            }
+            rule.onNode(tab and hasContentDescription("Search")).performTouchInput { click() }.assertIsSelected()
+            rule.runOnIdle { assertEquals("search", selected) }
         }
     }
 
