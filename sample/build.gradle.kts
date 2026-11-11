@@ -23,8 +23,8 @@ android {
         applicationId = "io.github.neoruaa.glasmio.sample"
         minSdk = 33
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true }

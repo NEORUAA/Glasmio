@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Reuse compiled glass programs across navigation, menu, and header transitions.
+- Reduce detached backdrop work and stabilize adaptive toolbar, sidebar, and floating-search transitions.
+
 ## 0.1.2
 
 - Add adaptive top tabs, native sidebar transitions, and fullscreen overlays above adaptive navigation.

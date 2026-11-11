@@ -34,7 +34,7 @@ Glasmio 为 Android 独立实现这些效果和交互，不执行 Apple 的 Meta
 | --- | --- | --- |
 | ![Sheet 展开、全屏和收起](docs/images/showcase/sheet-motion.gif) | ![文本选择和完整编辑工具栏](docs/images/showcase/text-toolbar.gif) | ![液态菜单展开与收起](docs/images/showcase/menu.gif) |
 
-六个库使用统一版本 `0.1.2`，Maven 组名为 `io.github.neoruaa.glasmio`。
+六个库使用统一版本 `0.1.3`，Maven 组名为 `io.github.neoruaa.glasmio`。
 
 ## Demo 应用
 
@@ -104,8 +104,8 @@ dependencyResolutionManagement {
 
 ```kotlin
 dependencies {
-    implementation("io.github.neoruaa.glasmio:glasmio-scaffold:0.1.2")
-    implementation("io.github.neoruaa.glasmio:glasmio-preference:0.1.2")
+    implementation("io.github.neoruaa.glasmio:glasmio-scaffold:0.1.3")
+    implementation("io.github.neoruaa.glasmio:glasmio-preference:0.1.3")
 }
 ```
 
