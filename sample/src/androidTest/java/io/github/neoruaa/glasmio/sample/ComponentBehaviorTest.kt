@@ -347,6 +347,8 @@ class ComponentBehaviorTest {
             }
             rule.onNode(tab and hasContentDescription("Search")).performTouchInput { click() }.assertIsSelected()
             rule.runOnIdle { assertEquals("search", selected) }
+            rule.onNode(tab and hasContentDescription("Home")).performTouchInput { click() }.assertIsSelected()
+            rule.runOnIdle { assertEquals("home", selected) }
         }
     }
 

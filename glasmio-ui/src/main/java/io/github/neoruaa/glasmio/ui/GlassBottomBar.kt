@@ -322,6 +322,7 @@ fun <T> GlasmioNavigationBar(
     val animationScope = rememberCoroutineScope()
     val onExpandState = rememberUpdatedState(onExpand)
     val selectedIndexState = rememberUpdatedState(selectedIndex)
+    val selectedItemIndexState = rememberUpdatedState(selectedItemIndex)
     val tabItemsState = rememberUpdatedState(tabItems)
 
     val dragCoordinateSpace = remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -439,7 +440,7 @@ fun <T> GlasmioNavigationBar(
                         return@DampedDragAnimation
                     }
                     val target = targetValue.fastRoundToInt().fastCoerceIn(0, tabItems.lastIndex)
-                    if (target != selectedIndexState.value) {
+                    if (target != selectedItemIndexState.value) {
                         stableOnSelected(tabItemsState.value[target].key)
                     }
                     animateToValue(target.toFloat())
