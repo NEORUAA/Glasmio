@@ -1,0 +1,109 @@
+# Glasmio 性能优化与验收（2026-11-11）
+
+## 结果与测量范围
+
+相对于 `032a88914a582bdcd270b13af7f8566ac9070b01`，x86_64 主机上的原生菜单场构建在四个使用生产参数公式的合成场景中提速 **2.68–3.44 倍**。测量包含完整的距离/法线采样、横向与纵向 Gaussian 卷积、最终法线归一化。
+
+这些数字来自 x86_64 主机上的 `liquid_menu_sdf_build`，不包含 Kotlin 参数准备、JNI 数组传递、FP16 打包、位图上传或 GPU 绘制。Android 整体 FPS 和 ARM 手机耗时需要在目标设备上另行测量。ARM64 的本次证据覆盖编译与数值正确性。因此，2× 目标在这一明确的原生 CPU 指标上达成；整体应用或 ARM 实机的 2× 目标尚未验证。
+
+### 原生菜单场 CPU 耗时（越低越好）
+
+同一机器、相同编译器和编译选项；表内为 15 轮的中位数。
+
+| 场景 | 初始网格 | 采样间距 | 原版耗时 | 优化后耗时 | 加速倍数 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 小菜单 | 68 × 44 | 3 | 0.352 ms | 0.102 ms | **3.44×** |
+| 大菜单 | 106 × 146 | 6 | 1.522 ms | 0.545 ms | **2.79×** |
+| 宽菜单 | 150 × 66 | 6 | 1.085 ms | 0.391 ms | **2.78×** |
+| 单玻璃表面 | 109 × 159 | 4 | 1.294 ms | 0.482 ms | **2.68×** |
+
+### 导航轮廓预处理 CPU 与分配
+
+实际 Kotlin 2.4.21、Compose geometry 1.12.1、OpenJDK 25.0.5；三个 JVM 进程共 33 轮，每轮 6,000 次，顺序交替，取中位数。
+
+| 轮廓 | 原版耗时 | 优化后耗时 | 加速倍数 | 每次分配下降 |
+| --- | ---: | ---: | ---: | ---: |
+| 4 边矩形 | 0.353 μs | 0.230 μs | 1.53× | 50.7% |
+| 64 边胶囊 | 3.567 μs | 2.352 μs | 1.52× | 74.0% |
+| 两个分离胶囊，128 边 | 7.780 μs | 4.241 μs | 1.83× | 73.8% |
+| 256 边复杂轮廓 | 14.448 μs | 8.924 μs | 1.62× | 76.8% |
+
+两个表测量不同阶段，倍数不能相乘。轮廓预处理的减少分配有助于降低拖动期间的垃圾回收压力；本次没有将这一点换算成未测量的整帧改善。
+
+## 修改原理
+
+菜单场为每个采样位置计算到形状边缘的距离和方向，再对整个场执行模糊。相邻采样位置使用相同公式，适合让一条 SIMD 指令同时处理四个位置。新代码为 ARM64 使用 NEON，为 x86 使用 SSE2；最后不足四个位置仍使用标量尾部。x86 同时获得四通道卷积，ARM64 延续原有 NEON 卷积。
+
+采样间距、核大小、材质公式、更新频率和输出格式保持一致。实现使用精确除法与平方根，保留 `-ffp-contract=off`；没有用降低分辨率或近似数学换取速度，并复用已有原生堆工作缓冲。
+
+导航轮廓现在直接索引 `Path.approximate` 的原始浮点数组，并一次写出连续的边数据。原来的顶点装箱、临时边对象和重复边列表被移除；写入时同时累计包围盒，消除了四次额外遍历。分离子路径、绕行方向、闭合和短边处理仍保持原语义。
+
+实现提交：
+
+- [`08e5012`](https://github.com/LIghtJUNction/Glasmio/commit/08e501223395dd6077eed3cb287be57b1c6119de)：轮廓预处理与六项回归测试。
+- [`40845b5`](https://github.com/LIghtJUNction/Glasmio/commit/40845b5cd0283392363cd7d0f2f41c5c69614276)：原生菜单场 SIMD。
+- [`45a4909`](https://github.com/LIghtJUNction/Glasmio/commit/45a49091b97d195591859e13c02b5690ec147697)：示例应用的目录层次、真实材质预览、大字体布局与搜索。
+- [`3209bf9`](https://github.com/LIghtJUNction/Glasmio/commit/3209bf9956c0557c650323189eaa2f51ae73156f)：修复实际视觉检查发现的大字体导航标签重叠，并加入 LTR / RTL 点击与布局回归测试。
+- [`c949d9f`](https://github.com/LIghtJUNction/Glasmio/commit/c949d9f891603dfa2ff6728f3234812112ddf647)：修复从独立 Search 操作返回首个 Home 标签时未触发选择回调的问题。
+
+## 界面修改
+
+首页使用独立记录的真实壁纸作为玻璃预览背景，直接展示 `RegularMedium` 材质，并保留进入 Materials 页的点击入口。目录卡增加简短用途说明，图标、标题、说明使用统一间距；标题从长路由名称中分离，`Typography` 仍指向原来的 Dynamic Type 页面。搜索同时匹配标题、原始路由和用途说明，并忽略查询首尾空格。
+
+目录按可用宽度显示一、二或三列；字体比例大于 1.3 时切为单列。卡片允许随内容增高，材质卡使用最小高度代替固定高度。材料名称和用途说明统一左对齐，保留原有四种材质的渲染配置。首页预览使用现有静态壁纸，没有新增持续运行的动画。
+
+字体比例 2.0 的检查暴露了底部导航标签重叠：玻璃选中区允许视觉槽重叠，而原先文字沿用较宽的槽宽。现在文字按相邻中心间距单独限制宽度，并统一约束可见层和镜片采样层；长标签在自己的区域内省略，字体倍率与完整无障碍名称保持原有行为，点击区域几何不变。
+
+目标设备测试还发现从独立 Search 项返回 Home 时选择没有更新。Search 不在主标签列表中，真实选中索引为 `-1`，用于绘制的索引却被钳制为 `0`，与 Home 相同。原先回调依据绘制索引判断是否切换了标签，因而跳过 Home 的选择回调。`c949d9f` 改为比较真实选中索引，同时保留绘制索引用于视觉定位；设备复验状态见下文。
+
+## 公平对照协议
+
+原生测试使用 AMD EPYC 9V74 主机、NDK Clang 18.0.2，前后共同使用 `-std=c++17 -O3 -fno-math-errno -ffp-contract=off`。CPU 亲和性固定为 8；正式测量时构建和模拟器已经停止。
+
+每个场景包含 32 个变化几何帧，共测量 15 轮，轮次间交替执行原版和新版。每帧在计时前按 Kotlin 生产实现推导 `exteriorBounds`、原点、`step = max(2, smoothing / 4)`、网格和 Gaussian 权重。权重完成第一次归一化后裁掉 `<0.002` 的尾部，再次归一化；这四组场景的最终半径均为 11。输出缓冲也在计时前准备。全部原始样本保留，没有删掉较慢轮次。
+
+这些几何是确定性合成输入，覆盖小、大、宽和单表面；它们不是从手机录制得到的帧轨迹。初始网格见上表，变化帧会按自己的包围盒重新推导网格。正确性检查使用相同的 128 个基准动态帧。
+
+## 正确性与构建
+
+- x86_64：**1,536 个完整场、11,941,640 个 Float32 通道逐位一致**，包含全部 128 个基准动态帧。
+- ARM64：NDK 生成的实际 ARM64 代码在 QEMU 中运行，独立的 **1,412 场 / 6,812,212 通道**语料逐位一致；模拟器时间不作为 ARM 硬件性能指标。
+- 同一旧语料通过 ASan 与 UBSan。执行环境不支持 LSan 的 ptrace 检查，该次 sanitizer 运行使用 `detect_leaks=0`。
+- 轮廓预处理：每个 JVM 对 **5,514 组输入**检查边数据原始浮点位、bounds 和 fingerprint，全部一致；覆盖随机子路径、相反绕行、重复点、正负零和极短边。
+- 初次完整 `testDebugUnitTest`：**140 项通过，3 项已有跳过，0 失败**。随后导航修复完成后复跑 `:glasmio-ui:testDebugUnitTest`，**52 项全部通过，0 跳过、0 失败**。
+- `lintDebug`：七个模块均无错误；原有警告未扩展为本次无关改动。
+- 原版和新版 `:sample:assembleDebug` 均成功；新版 `:sample:assembleDebugAndroidTest` 成功。`c949d9f` 修复后的应用 APK 和测试 APK 也已重新构建成功。构建环境使用 JDK 25.0.5、Gradle 9.8.2、Android SDK 37 与 NDK 27.1.12297006，源码的 Java 目标仍为 21。
+- 首轮目标设备回归通过 instrumentation 执行 **1 项，1 项失败**：`largeTypeNavigationLabelsStaySeparateAndTabsRemainClickable` 发现 Search → Home 未更新选中状态，并推动上述 `c949d9f` 修复。完整 `connectedDebugAndroidTest` 套件未运行。
+
+修复后的 `c949d9f` 已在 API 33 模拟器上通过同一目标回归：**1 项通过，0 失败**。测试覆盖 360 dp 视口、字体倍率 2.0、LTR / RTL 两种方向，检查标签不重叠、长标签正确省略、字体倍率保留，并用真实触摸事件验证各标签及 Search → Home 的选择结果。该夹具使用 `reduceTransparency=true`；它验证布局和输入行为，真实玻璃外观由下面的应用截图单独检查。
+
+## 已观察的视觉结果
+
+实际截图来自 Android 13 / API 33 x86_64 模拟器，使用 ANGLE + SwiftShader 软件渲染。基线截图为 720 × 1600 / density 320，常规字号新版截图为 540 × 1200 / density 240，最终大字体静态复验为 360 × 800 / density 160；逻辑宽度均为 360 dp。大字体截图关闭了模拟器的系统动画。图片由实际运行的应用通过 adb 直接截取，未修图。
+
+- 浅色与深色首页：真实壁纸采样、玻璃圆角、标题说明、箭头与组件卡片均已目视确认。
+- 浅色与深色 Materials：Regular Small、Regular Medium 的文字与层次已确认；浅色模式滚动后确认 Regular Large 和 Clear 的内容布局。
+- Clear 的高对比折射细线在当前软件渲染截图里仍有采样台阶。此项保留为画质限制，现有证据不能作全面硬件 GPU / HDR 画质通过结论，也没有同视图基线证据可直接判定回归。
+- 外观切换、进入 Materials 和滚动到 Clear 已通过实际操作及截图确认。
+
+`c949d9f` 的真实应用已经完成字体倍率 **2.0、浅色、LTR** 静态复验：导语和材质说明自然换行，标题、箭头与玻璃预览完整；导航标签在各自区域内省略，没有水平重叠或可见字形裁切；最终截图的系统状态栏对比正常。浮动底栏覆盖视口底部的部分可滚动内容；随后实际向上滚动，另帧确认了 Controls 和 Navigation 的单列卡片、标题和说明完整可读。这些截图不代表整个目录一次性全部显示。RTL 的本次证据来自上面的设备布局与点击回归。
+
+无 KVM 的软件模拟环境曾出现系统进程和 SystemUI 的 ANR 弹窗、过渡黑帧与状态栏恢复问题；这些帧不作为通过证据。最终大字体截图在恢复系统界面服务后采集。本次视觉结论限于已列出的静态场景，不扩展为实机动画、整机稳定性或 HDR 验收。
+
+## 可复现证据
+
+按仓库约定，原始研究记录和探针保存在工作区的 `.local-research/`，不提交生成文件与截图。
+
+- [原生协议与复现命令](../.local-research/native-field/README.md)
+- [原生最终 JSON](../.local-research/native-field/final-host/results.json) 与 [逐轮 CSV](../.local-research/native-field/final-host/samples.csv)
+- [轮廓协议与复现命令](../.local-research/contour-benchmark/README.md)
+- [轮廓最终 JSON](../.local-research/contour-benchmark/summary.json)
+- [完整构建日志](../.local-research/optimized-build.log)
+- [导航回调修复后的构建日志](../.local-research/navigation-callback-build.log)
+- [首轮目标设备回归失败日志](../.local-research/navigation-instrumentation-before-callback-fix.txt)
+- [修复后的目标设备回归通过日志](../.local-research/navigation-instrumentation.txt)
+- [视觉记录与截图元数据](../.local-research/visual/review.json)
+
+[完整性能证据包](https://drive.google.com/file/d/1VcrP2t2EMsUGCHZeZ4ukAKeeUaCUepkC/view?usp=drivesdk)包含复现脚本、原始样本与对应原版、新版源码。正式结果取生产参数协议；探索阶段的固定网格数据不用于上面的结论。
+
+[完整视觉与交互证据包](https://drive.google.com/file/d/1-26gUj2jv-neGaH8bMIv51TuIY_caIcb/view?usp=drivesdk)包含原始应用截图、逐图元数据、APK 摘要、修复前失败日志及修复后通过日志。全部交付文件位于 [Google 云盘 Glasmio 文件夹](https://drive.google.com/drive/folders/1HRaJ2EPZ7r2u6ptjO2iLr6GL5oyKqD7m)。
