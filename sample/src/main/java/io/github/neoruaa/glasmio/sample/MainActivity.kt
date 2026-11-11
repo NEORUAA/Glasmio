@@ -816,35 +816,94 @@ private fun AboutDemo(layout: SamplePageLayout) {
     }
 }
 
-private val catalog = listOf(
-    "Materials" to "square.stack.3d.up",
-    "Controls" to "slider.horizontal.3",
-    "Navigation" to "rectangle.3.group",
-    "Lists" to "list.bullet",
-    "Search" to "magnifyingglass",
-    "Menus" to "ellipsis",
-    "Sheets" to "inset.filled.bottomthird.rectangle",
-    "Text Styles and Dynamic Type" to "textformat.size",
-    "Text Editing" to "character.cursor.ibeam",
-    "Messages" to "message",
+@Immutable
+private data class CatalogEntry(
+    val route: String,
+    val icon: String,
+    val subtitle: String,
+    val title: String = route,
 )
+
+private val catalog = listOf(
+    CatalogEntry("Materials", "square.stack.3d.up", "Light, depth, and refraction"),
+    CatalogEntry("Controls", "slider.horizontal.3", "Switches and sliders"),
+    CatalogEntry("Navigation", "rectangle.3.group", "Tabs and toolbars"),
+    CatalogEntry("Lists", "list.bullet", "Rows and swipe actions"),
+    CatalogEntry("Search", "magnifyingglass", "Find a component"),
+    CatalogEntry("Menus", "ellipsis", "Actions and context"),
+    CatalogEntry("Sheets", "inset.filled.bottomthird.rectangle", "Layers and gestures"),
+    CatalogEntry("Text Styles and Dynamic Type", "textformat.size", "Type and hierarchy", "Typography"),
+    CatalogEntry("Text Editing", "character.cursor.ibeam", "Selection and input"),
+    CatalogEntry("Messages", "message", "Bubbles and reactions"),
+)
+private val catalogComponents = catalog.drop(1)
 
 @Composable
 private fun Catalog(layout: SamplePageLayout, onOpen: (String) -> Unit) {
-    DemoList(layout) {
-        items(catalog.chunked(2)) { pair ->
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                pair.forEach { (title, icon) ->
-                    GlasmioCard(Modifier.weight(1f).height(132.dp), onClick = { onOpen(title) }) {
-                        Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                            SfIcon(icon, null, size = 30.dp, tint = LocalGlassColors.current.accent)
-                            Text(title, style = IosTypography.headline, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    val colors = LocalGlassColors.current
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(Modifier.fillMaxSize().testTag("component-catalog")) {
+        val columns = when {
+            maxWidth < 360.dp || fontScale > 1.3f -> 1
+            maxWidth >= 720.dp -> 3
+            else -> 2
+        }
+        val rows = remember(columns) { catalogComponents.chunked(columns) }
+        DemoList(layout) {
+            item(key = "catalog-intro") {
+                Text("A little depth. A lighter touch.", style = IosTypography.subheadline,
+                    color = colors.secondaryContent, modifier = Modifier.padding(horizontal = 4.dp))
+            }
+            item(key = "catalog-materials") { CatalogMaterialPreview { onOpen("Materials") } }
+            item(key = "catalog-heading") {
+                Text("Explore components", style = IosTypography.headline,
+                    modifier = Modifier.padding(start = 4.dp, top = 8.dp))
+            }
+            items(rows, key = { it.first().route }, contentType = { "catalog-row" }) { row ->
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { entry ->
+                        GlasmioCard(Modifier.weight(1f).fillMaxHeight().heightIn(min = 124.dp)
+                            .testTag("catalog-${entry.route}"), onClick = { onOpen(entry.route) }) {
+                            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                SfIcon(entry.icon, null, size = 25.dp, tint = colors.accent)
+                                Spacer(Modifier.height(7.dp))
+                                Text(entry.title, style = IosTypography.headline)
+                                Text(entry.subtitle, style = IosTypography.caption1, color = colors.secondaryContent)
+                            }
                         }
                     }
+                    repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CatalogMaterialPreview(onOpen: () -> Unit) {
+    val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
+    GlasmioBackdropHost(
+        modifier = Modifier.fillMaxWidth().height(172.dp * fontScale)
+            .clip(ContinuousRoundedRectangle(28.dp)).testTag("catalog-materials-preview"),
+        sampledContent = { SampleBackdrop(true) },
+        overlayContent = {
+            GlassSurface(
+                modifier = Modifier.align(Alignment.Center).padding(18.dp).fillMaxWidth(),
+                material = NavigationGlassMaterial.RegularMedium,
+                shape = ContinuousRoundedRectangle(24.dp),
+                onClick = onOpen,
+            ) {
+                Row(Modifier.fillMaxWidth().padding(22.dp), horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Materials", style = IosTypography.title2)
+                        Text("Light, depth, and refraction", style = IosTypography.subheadline)
+                    }
+                    SfIcon("chevron.right", null, size = 20.dp, mirrored = true)
+                }
+            }
+        },
+    )
 }
 
 @Composable
@@ -865,6 +924,7 @@ private fun MaterialsDemo(layout: SamplePageLayout, onOpen: (String) -> Unit) {
             GlasmioGroupedList {
                 GlasmioListRow(
                     "Adaptive Glass",
+                    subtitle = "Drag a surface through light and shade",
                     onClick = { onOpen("Adaptive Glass") },
                     showTopSeparator = false,
                 )
@@ -872,21 +932,32 @@ private fun MaterialsDemo(layout: SamplePageLayout, onOpen: (String) -> Unit) {
         }
         items(NavigationGlassMaterial.entries, key = { it.name }) { material ->
             GlassSurface(
-                modifier = Modifier.fillMaxWidth().height(148.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 148.dp),
                 shape = ContinuousRoundedRectangle(32.dp),
                 material = material,
                 onClick = {},
             ) {
-                Text(
-                    text = when (material) {
-                        NavigationGlassMaterial.RegularSmall -> "Regular Small"
-                        NavigationGlassMaterial.RegularMedium -> "Regular Medium"
-                        NavigationGlassMaterial.RegularLarge -> "Regular Large"
-                        NavigationGlassMaterial.Clear -> "Clear"
-                    },
-                    style = IosTypography.title2,
-                    modifier = Modifier.align(Alignment.Center),
-                )
+                Column(Modifier.align(Alignment.CenterStart).padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = when (material) {
+                            NavigationGlassMaterial.RegularSmall -> "Regular Small"
+                            NavigationGlassMaterial.RegularMedium -> "Regular Medium"
+                            NavigationGlassMaterial.RegularLarge -> "Regular Large"
+                            NavigationGlassMaterial.Clear -> "Clear"
+                        },
+                        style = IosTypography.title2,
+                    )
+                    Text(
+                        text = when (material) {
+                            NavigationGlassMaterial.RegularSmall -> "Compact surfaces"
+                            NavigationGlassMaterial.RegularMedium -> "Floating controls"
+                            NavigationGlassMaterial.RegularLarge -> "Large surfaces"
+                            NavigationGlassMaterial.Clear -> "Minimal diffusion"
+                        },
+                        style = IosTypography.subheadline,
+                        color = LocalGlassColors.current.secondaryContent,
+                    )
+                }
             }
         }
         item {
@@ -1485,8 +1556,9 @@ private fun SearchLanding(layout: SamplePageLayout, onOpen: (String) -> Unit) {
         item {
             Column(Modifier.fillParentMaxHeight()) {
                 GlasmioGroupedList {
-                    catalog.filter { it.first != "Search" }.forEachIndexed { index, (title, symbol) ->
-                        GlasmioListRow(title, systemName = symbol, showTopSeparator = index > 0, onClick = { onOpen(title) })
+                    catalog.filter { it.route != "Search" }.forEachIndexed { index, entry ->
+                        GlasmioListRow(entry.title, subtitle = entry.subtitle, systemName = entry.icon,
+                            showTopSeparator = index > 0, onClick = { onOpen(entry.route) })
                     }
                 }
             }
@@ -1496,7 +1568,13 @@ private fun SearchLanding(layout: SamplePageLayout, onOpen: (String) -> Unit) {
 
 @Composable
 private fun SearchResults(query: String, padding: PaddingValues, onOpen: (String) -> Unit) {
-    val matches = catalog.filter { it.first != "Search" && it.first.contains(query, ignoreCase = true) }
+    val matches = remember(query) {
+        val term = query.trim()
+        catalog.filter { entry ->
+            entry.route != "Search" && (entry.route.contains(term, ignoreCase = true) ||
+                entry.title.contains(term, ignoreCase = true) || entry.subtitle.contains(term, ignoreCase = true))
+        }
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
         contentPadding = padding,
@@ -1504,15 +1582,20 @@ private fun SearchResults(query: String, padding: PaddingValues, onOpen: (String
     ) {
         if (matches.isEmpty()) {
             item {
-                Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
-                    Text("No Results", style = IosTypography.title2, color = LocalGlassColors.current.secondaryContent)
+                Column(Modifier.fillMaxWidth().padding(vertical = 56.dp, horizontal = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SfIcon(SfSymbol.Search, null, size = 30.dp, tint = LocalGlassColors.current.tertiaryContent)
+                    Text("No Results", style = IosTypography.title2)
+                    Text("Try sliders, menus, or type.", style = IosTypography.subheadline,
+                        color = LocalGlassColors.current.secondaryContent, textAlign = TextAlign.Center)
                 }
             }
         } else {
             item {
                 GlasmioGroupedList {
-                    matches.forEachIndexed { index, (title, symbol) ->
-                        GlasmioListRow(title, systemName = symbol, showTopSeparator = index > 0, onClick = { onOpen(title) })
+                    matches.forEachIndexed { index, entry ->
+                        GlasmioListRow(entry.title, subtitle = entry.subtitle, systemName = entry.icon,
+                            showTopSeparator = index > 0, onClick = { onOpen(entry.route) })
                     }
                 }
             }

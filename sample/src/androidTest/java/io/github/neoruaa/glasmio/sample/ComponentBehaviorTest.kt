@@ -1644,7 +1644,7 @@ class SampleNavigationBehaviorTest {
             rule.waitUntil(30_000) {
                 rule.onAllNodes(tab and hasContentDescription("Home") and isSelected())
                     .fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1 &&
-                    rule.onAllNodes(hasText("Controls") and hasClickAction())
+                    rule.onAllNodesWithTag("catalog-materials-preview")
                         .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
             }
         } catch (error: ComposeTimeoutException) {
@@ -1659,6 +1659,13 @@ class SampleNavigationBehaviorTest {
                 rule.onNode(matcher).isDisplayed()
         }
         return rule.onNode(matcher).assertIsDisplayed()
+    }
+
+    private fun openCatalogEntry(route: String) {
+        val entry = hasTestTag("catalog-$route")
+        rule.onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex) and
+            hasAnyAncestor(hasTestTag("component-catalog"))).performScrollToNode(entry)
+        rule.onNode(entry).assertIsDisplayed().performClick()
     }
 
     @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
@@ -1751,9 +1758,23 @@ class SampleNavigationBehaviorTest {
         rule.onNodeWithContentDescription("Cancel").performClick()
     }
 
+    @Test fun floatingSearchFindsDescriptionsAndKeepsOriginalRoutes() {
+        awaitSampleHome()
+        rule.onNodeWithContentDescription("Search").performClick()
+        val editor = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
+        val input = awaitDisplayed(editor)
+        input.performTextInput("  SLIDERS  ")
+        awaitDisplayed(hasText("Controls") and hasClickAction() and !editor)
+        rule.onNode(hasText("Navigation") and hasClickAction() and !editor).assertDoesNotExist()
+        input.performTextReplacement("type")
+        awaitDisplayed(hasText("Typography") and hasClickAction() and !editor).performClick()
+        awaitDisplayed(hasContentDescription("Dynamic Type size"))
+        rule.onNode(editor).assertDoesNotExist()
+    }
+
     @Test fun dynamicTypePickerChangesTheRenderedSemanticStyle() {
         awaitSampleHome()
-        rule.onNodeWithText("Text Styles and Dynamic Type").performScrollTo().performClick()
+        openCatalogEntry("Text Styles and Dynamic Type")
         val initialHeight = rule.onAllNodesWithText("Large Title")[0]
             .fetchSemanticsNode().boundsInRoot.height
         rule.onNode(hasText("Large") and hasClickAction()).performClick()
@@ -1794,7 +1815,7 @@ class SampleNavigationBehaviorTest {
 
     @Test fun toolbarMenuOpensAndClosesFromItsRealAnchor() {
         awaitSampleHome()
-        rule.onNodeWithText("Menus").performScrollTo().performClick()
+        openCatalogEntry("Menus")
         awaitDisplayed(hasContentDescription("Menu")).performClick()
         rule.onNodeWithText("Favorite").assertIsDisplayed()
         rule.onNodeWithText("Unavailable").assertIsNotEnabled()
@@ -1908,7 +1929,7 @@ class SampleNavigationBehaviorTest {
             }
             rule.onNode(tab and hasContentDescription("Home")).performClick().assertIsSelected()
             rule.onNodeWithText("Preferences").assertDoesNotExist()
-            rule.onNodeWithText("Controls").performScrollTo().performClick()
+            openCatalogEntry("Controls")
             awaitDisplayed(hasText("Enabled"))
             val scrollable = hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
             rule.onNode(scrollable).performScrollToNode(hasText("Preference Rows"))
