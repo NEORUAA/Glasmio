@@ -123,7 +123,7 @@ Kotlin 历史环境为 OpenJDK 25.0.5、Kotlin 2.4.21、Compose 1.12.1，三个 
 
 工作流配置了 API 33 模拟器上的七项定向设备回归，并配置为上传测试报告、APK 和失败截图／logcat。所选用例包含既有测试、扩展测试和新增测试；配置本身不代表已运行。覆盖首页玻璃预览进入 Materials 并返回、200% 字体 LTR／RTL 标签与真实触摸、Search→Home、紧凑栏展开不改变选择、搜索标题／路由／描述匹配、空白查询恢复、取消重入和 Dynamic Type 路由。
 
-原始归档只记录 **1 项设备测试通过**：`largeTypeNavigationLabelsStaySeparateAndTabsRemainClickable`，使用 `reduceTransparency=true` 验证布局和输入。本轮扩展后的七项均未执行：本地没有 KVM，先前模拟器进程曾以 SIGKILL／137 结束；在所有构建结束后，用新 AVD 独立启动，430.8 秒内 `sys.boot_completed` 仍为空。后续诊断可访问 Package Manager、zygote 和 SurfaceFlinger，诊断时日志显示仍在首次启动的 `UpdatePackagesIfNeeded`／dexopt 阶段。收尾前再次检查仍未启动完成，随后正常关闭模拟器。未将该环境结果记为应用测试失败，也没有新的可验收应用截图。见 [启动记录](../.local-research/pr7-review/android/final-boot-status.json)、[系统诊断](../.local-research/pr7-review/android/final-device-diagnostics.json)；新增测试代码和工作流不计作执行成功。
+原始归档只记录 **1 项设备测试通过**：`largeTypeNavigationLabelsStaySeparateAndTabsRemainClickable`，使用 `reduceTransparency=true` 验证布局和输入。本轮扩展后的七项均未执行：本地没有 KVM，先前模拟器进程曾以 SIGKILL／137 结束；在所有构建结束后，用新 AVD 独立启动，430.8 秒内 `sys.boot_completed` 仍为空。后续诊断可访问 Package Manager、zygote 和 SurfaceFlinger，诊断时日志显示仍在首次启动的 `UpdatePackagesIfNeeded`／dexopt 阶段。收尾前再次检查仍未启动完成；`emu kill` 返回 OK，但等待模拟器进程得到退出码 139，根因未确认，见 [退出记录](../.local-research/pr7-review/android/final-emulator-shutdown.json)。未将该环境结果记为应用测试失败，也没有新的可验收应用截图。见 [启动记录](../.local-research/pr7-review/android/final-boot-status.json)、[系统诊断](../.local-research/pr7-review/android/final-device-diagnostics.json)；新增测试代码和工作流不计作执行成功。
 
 ## 逐图视觉复核
 
