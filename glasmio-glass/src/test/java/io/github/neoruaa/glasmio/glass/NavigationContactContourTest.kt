@@ -72,6 +72,38 @@ class NavigationContactContourTest {
         assertEquals(Rect(0f, 0f, 80f, 32f), contour.bounds)
     }
 
+    @Test
+    fun subThresholdContoursHaveNoEdgesOrInfiniteBounds() {
+        val tiny = listOf(Offset.Zero, Offset(.00001f, 0f), Offset(0f, .00001f))
+        val contour = NavigationContactContour(approximate(tiny))
+        assertTrue(contour.edges.isEmpty())
+        assertEquals(Rect.Zero, contour.bounds)
+    }
+
+    @Test
+    fun shortEdgesAreDiscardedWithoutDroppingTheRemainingContour() {
+        val points = listOf(Offset.Zero, Offset(.00001f, 0f)) + rectangle.drop(1)
+        val contour = NavigationContactContour(approximate(points))
+        assertEquals(4 * 6, contour.edges.size)
+        assertEquals(Rect(0f, 0f, 80f, 32f), contour.bounds)
+        assertTrue(contour.edges.all { it.isFinite() })
+        assertEquals(.00001f, contour.edges[0], 0f)
+        assertEquals(80f, contour.edges[2], 0f)
+        assertEquals(0f, contour.edges[4], 0f)
+        assertEquals(-1f, contour.edges[5], .000001f)
+    }
+
+    @Test
+    fun consecutiveDetachedMovesDoNotConsumeTheNextValidContour() {
+        val actual = NavigationContactContour(approximate(
+            listOf(Offset(-50f, -50f)), listOf(Offset(-40f, -40f)),
+            rectangle, listOf(Offset(1000f, 1000f)),
+        ))
+        val expected = NavigationContactContour(approximate(rectangle))
+        assertTrue(expected.edges.contentEquals(actual.edges))
+        assertEquals(expected.bounds, actual.bounds)
+    }
+
     private fun approximate(vararg contours: List<Offset>): FloatArray {
         val result = ArrayList<Float>()
         var fraction = 0f

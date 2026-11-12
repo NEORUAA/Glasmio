@@ -24,15 +24,32 @@ internal class NavigationContactContour(approximation: FloatArray) {
         // adds allocations without contributing to the field or its cache key.
         val points = IntArray(approximation.size / 3)
         val packed = FloatArray(points.size * 6)
-        var pointCount = 0
         var written = 0
         var left = Float.POSITIVE_INFINITY
         var top = Float.POSITIVE_INFINITY
         var right = Float.NEGATIVE_INFINITY
         var bottom = Float.NEGATIVE_INFINITY
         fun point(index: Int): Offset = Offset(approximation[index + 1], approximation[index + 2])
-        fun closeContour() {
-            if (pointCount < 3) { pointCount = 0; return }
+        var cursor = 0
+        while (cursor < approximation.size) {
+            var pointCount = 0
+            var previousFraction = -1f
+            while (cursor < approximation.size) {
+                val fraction = approximation[cursor]
+                val current = point(cursor)
+                if (pointCount > 0) {
+                    val previous = point(points[pointCount - 1])
+                    // A repeated length fraction marks a move to a detached contour.
+                    // Leave its first point for the next outer iteration.
+                    if (fraction == previousFraction && previous != current) break
+                    if (previous != current) points[pointCount++] = cursor
+                } else {
+                    points[pointCount++] = cursor
+                }
+                previousFraction = fraction
+                cursor += 3
+            }
+            if (pointCount < 3) continue
             var area = 0f
             for (i in 0 until pointCount) {
                 val a = point(points[i])
@@ -59,19 +76,7 @@ internal class NavigationContactContour(approximation: FloatArray) {
                 right = maxOf(right, maxOf(a.x, b.x))
                 bottom = maxOf(bottom, maxOf(a.y, b.y))
             }
-            pointCount = 0
         }
-        var previousFraction = -1f
-        for (i in approximation.indices step 3) {
-            val fraction = approximation[i]
-            val current = point(i)
-            // Android Path.approximate repeats the length fraction across a move.
-            // End the old contour here; never invent an edge across a detached gap.
-            if (fraction == previousFraction && (pointCount == 0 || point(points[pointCount - 1]) != current)) closeContour()
-            if (pointCount == 0 || point(points[pointCount - 1]) != current) points[pointCount++] = i
-            previousFraction = fraction
-        }
-        closeContour()
         edges = if (written == packed.size) packed else packed.copyOf(written)
         // Zero-sized entering/leaving controls have no usable edge for this frame.
         bounds = if (written == 0) Rect.Zero else Rect(left, top, right, bottom)
