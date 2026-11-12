@@ -1759,6 +1759,17 @@ class SampleNavigationBehaviorTest {
         rule.onNode(entry).assertIsDisplayed().performClick()
     }
 
+    @Test fun catalogGlassPreviewOpensMaterialsAndReturnsHome() {
+        awaitSampleHome()
+        val previewButton = hasClickAction() and hasAnyAncestor(hasTestTag("catalog-materials-preview"))
+        awaitDisplayed(previewButton).performTouchInput { click() }
+        awaitDisplayed(hasText("Regular Small"))
+        awaitDisplayed(hasContentDescription("Back") and hasClickAction()).performTouchInput { click() }
+        awaitSampleHome()
+        awaitDisplayed(previewButton)
+        rule.onNode(tab and hasContentDescription("Home")).assertIsSelected()
+    }
+
     @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
         awaitSampleHome()
         rule.onNode(tab and hasContentDescription("Materials")).performClick()
