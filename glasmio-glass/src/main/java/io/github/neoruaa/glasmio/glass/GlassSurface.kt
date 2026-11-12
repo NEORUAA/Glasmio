@@ -932,6 +932,7 @@ fun GlassSurface(
     onVisualBoundsChanged: ((Rect, GlassPressHighlight) -> Unit)? = null,
     pressHighlight: (() -> GlassPressHighlight?)? = null,
     cancelPressFeedback: Boolean = false,
+    pressResetKey: Any? = null,
     groupSurfaceSeparation: (() -> Float)? = LocalToolbarActionSeparation.current,
     morphProgress: androidx.compose.runtime.State<Float>? = null,
     morphCaptureWidth: Dp? = null,
@@ -1024,8 +1025,8 @@ fun GlassSurface(
     val materialDark = materialContext.isDark
     val materialDarkFraction = materialContext.darkFraction
     val isLight = !materialDark
-    LaunchedEffect(interactiveHighlight, cancelPressFeedback) {
-        if (cancelPressFeedback) interactiveHighlight.cancelPress()
+    LaunchedEffect(interactiveHighlight, cancelPressFeedback, pressResetKey) {
+        if (cancelPressFeedback || pressResetKey != null) interactiveHighlight.cancelPress()
     }
     val surfaceColor = when (emphasis) {
         GlassEmphasis.Regular -> colors.container

@@ -14,6 +14,13 @@ import io.github.neoruaa.glasmio.scaffold.navigation.iosNavigationFraction
 import io.github.neoruaa.glasmio.scaffold.navigation.iosNavigationParallaxOffset
 
 class HeaderMotionTest {
+    @Test fun adaptiveSidebarWidthFollowsNativeNarrowAndWideBounds() {
+        assertEquals(280f, adaptiveSidebarWidth(600f, 1000f).value, 0f)
+        assertEquals(320f, adaptiveSidebarWidth(1024f, 768f).value, 0f)
+        assertEquals(400f, adaptiveSidebarWidth(1280f, 800f).value, 0f)
+        assertEquals(320f, adaptiveSidebarWidth(1024f, 1200f).value, 0f)
+    }
+
     @Test fun headerSearchAcknowledgesTypingBeforeThePagePublishesItsNextFrame() {
         val edits = mutableListOf<String>()
         val configuration = mutableStateOf(HeaderSearchConfiguration(

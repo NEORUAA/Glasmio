@@ -164,6 +164,7 @@ fun GlasmioButton(
             emphasis = if (enabled) emphasis else GlassEmphasis.Regular,
             enabled = enabled,
             sampleBackdrop = sampleBackdrop,
+            pressResetKey = LocalGlasmioSidebarPressReset.current,
             onClick = onClick,
             detailAction = enabled && detailAction,
         ) {
@@ -212,6 +213,7 @@ fun GlasmioIconButton(
             emphasis = if (enabled) emphasis else GlassEmphasis.Regular,
             enabled = enabled,
             sampleBackdrop = sampleBackdrop,
+            pressResetKey = LocalGlasmioSidebarPressReset.current,
             morphProgress = morphProgress,
             morphCaptureWidth = morphCaptureWidth,
             nativeNavigationFlex = nativeNavigationFlex,

@@ -98,7 +98,10 @@ and AnimationKit analysis are recorded in
 
 Glasmio uses the recovered critical spring for sidebar-only primary-column travel
 and foreground safe-area changes, retains velocity on reversal, and keeps sidebar
-opacity at one. The 320 dp column overlaps a full-screen page background.
+opacity at one. The default column width is resolved from the current window,
+following the recovered 280/320/400 pt narrow, preferred, and wide bounds. It
+grows with a wide window instead of staying fixed at 320 dp. Callers can pass
+an explicit `sidebarWidth` when a fixed column is required.
 Windows that cannot retain 320 dp of
 content use an overlay with Android Back/outside dismissal. That fallback threshold
 and scrim are Glasmio window policy, not recovered UIKit constants.

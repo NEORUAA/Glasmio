@@ -43,6 +43,9 @@ import io.github.neoruaa.glasmio.icons.SfIcon
 import io.github.neoruaa.glasmio.icons.SfSymbol
 import com.kyant.shapes.Capsule
 
+/** Changes when a sidebar transition invalidates transient toolbar press feedback. */
+val LocalGlasmioSidebarPressReset = staticCompositionLocalOf<Any?> { null }
+
 /** UIKit's planar sidebar endpoint; content extension remains a separate backdrop source. */
 @Composable
 internal fun Modifier.sidebarMaterialBackground(
@@ -70,6 +73,7 @@ fun GlasmioSidebar(
     backdrop: Backdrop = LocalGlassBackdrop.current,
     backgroundAlpha: () -> Float = { 1f },
     contentAlpha: () -> Float = { 1f },
+    pressResetKey: Any? = null,
     onContentPreview: ((GraphicsLayer, IntSize) -> Unit)? = null,
     drawContentInPlace: Boolean = true,
     content: @Composable () -> Unit,
@@ -82,22 +86,24 @@ fun GlasmioSidebar(
         Box(Modifier.matchParentSize().graphicsLayer { alpha = backgroundAlpha().coerceIn(0f, 1f) }
             .layerBackdrop(materialBackdrop, reuseContent = true).then(surface))
         GlasmioBackdropProvider(controlsBackdrop) {
-            Box(Modifier.fillMaxSize()
-                .graphicsLayer { alpha = contentAlpha().coerceIn(0f, 1f) }
-                .drawWithContent {
-                    if (onContentPreview != null) {
-                        val endpointSize = IntSize(size.width.roundToInt(), size.height.roundToInt())
-                        clipRect(0f, 0f, 0f, 0f) { this@drawWithContent.drawContent() }
-                        onContentPreview(preview, endpointSize)
-                        if (drawContentInPlace) drawLayer(preview)
-                    } else drawContent()
-                }
-                .layout { measurable, constraints ->
-                    val child = measurable.measure(constraints)
-                    layout(child.width, child.height) { child.placeWithLayer(0, 0, preview) }
-                }
-                .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.End))
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))) { content() }
+            CompositionLocalProvider(LocalGlasmioSidebarPressReset provides pressResetKey) {
+                Box(Modifier.fillMaxSize()
+                    .graphicsLayer { alpha = contentAlpha().coerceIn(0f, 1f) }
+                    .drawWithContent {
+                        if (onContentPreview != null) {
+                            val endpointSize = IntSize(size.width.roundToInt(), size.height.roundToInt())
+                            clipRect(0f, 0f, 0f, 0f) { this@drawWithContent.drawContent() }
+                            onContentPreview(preview, endpointSize)
+                            if (drawContentInPlace) drawLayer(preview)
+                        } else drawContent()
+                    }
+                    .layout { measurable, constraints ->
+                        val child = measurable.measure(constraints)
+                        layout(child.width, child.height) { child.placeWithLayer(0, 0, preview) }
+                    }
+                    .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.End))
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))) { content() }
+            }
         }
     }
 }

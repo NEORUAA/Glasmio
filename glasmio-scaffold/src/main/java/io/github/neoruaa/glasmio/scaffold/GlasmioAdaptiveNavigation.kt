@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.LocalGlassAppearance
 import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
@@ -53,6 +54,7 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.rememberSidebarBackgroun
 import io.github.neoruaa.glasmio.ui.GlasmioSidebar
 import io.github.neoruaa.glasmio.ui.GlasmioSidebarMorphSurface
 import io.github.neoruaa.glasmio.ui.GlasmioToolbarDefaults
+import io.github.neoruaa.glasmio.ui.LocalGlasmioSidebarPressReset
 import kotlin.math.roundToInt
 import kotlin.math.exp
 import kotlin.math.abs
@@ -149,9 +151,31 @@ val LocalGlasmioSidebarExpanded = compositionLocalOf { false }
 fun Modifier.glasmioAdaptiveContent(): Modifier = windowInsetsPadding(LocalGlasmioSidebarInsets.current)
 
 object GlasmioAdaptiveNavigationDefaults {
+    /** UIKit's preferred wide-column width. The default scaffold resolves its actual width per window. */
     val SidebarWidth = 320.dp
+    val SidebarMinWidth = 280.dp
+    val SidebarMaxWidth = 400.dp
+    val NarrowSidebarMaxWidth = 320.dp
     val SearchTopPadding = 65.dp
     val TopBarHeight = GlasmioToolbarDefaults.Height
+}
+
+internal fun adaptiveSidebarWidth(
+    widthDp: Float,
+    heightDp: Float,
+): Dp {
+    val isNarrowWindow = widthDp < heightDp
+    val maximum = if (isNarrowWindow) {
+        GlasmioAdaptiveNavigationDefaults.NarrowSidebarMaxWidth.value
+    } else {
+        GlasmioAdaptiveNavigationDefaults.SidebarMaxWidth.value
+    }
+    // UIKit keeps a 280 pt floor and grows the preferred 320 pt column toward
+    // its 400 pt wide-window maximum as the available window grows.
+    return (widthDp * .3125f).coerceIn(
+        GlasmioAdaptiveNavigationDefaults.SidebarMinWidth.value,
+        maximum,
+    ).dp
 }
 
 /**
@@ -167,7 +191,7 @@ fun GlasmioAdaptiveNavigationScaffold(
     modifier: Modifier = Modifier,
     layout: GlasmioNavigationLayout = glasmioNavigationLayout(),
     sidebarEnabled: Boolean = true,
-    sidebarWidth: Dp = GlasmioAdaptiveNavigationDefaults.SidebarWidth,
+    sidebarWidth: Dp = Dp.Unspecified,
     sidebarTransition: GlasmioSidebarTransition = GlasmioSidebarTransition.Automatic,
     extendContentUnderSidebar: Boolean = false,
     contentBackdrop: LayerBackdrop? = null,
@@ -186,9 +210,22 @@ fun GlasmioAdaptiveNavigationScaffold(
         else progress.animateTo(if (open) 1f else 0f, IosSidebarSpring)
     }
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
     val direction = LocalLayoutDirection.current
     var viewport by remember { mutableStateOf(IntSize.Zero) }
-    val panePixels = with(density) { sidebarWidth.roundToPx() }.coerceIn(0, viewport.width)
+    val availableWidthDp = if (viewport.width > 0) {
+        with(density) { viewport.width.toDp().value }
+    } else {
+        configuration.screenWidthDp.toFloat()
+    }
+    val availableHeightDp = if (viewport.height > 0) {
+        with(density) { viewport.height.toDp().value }
+    } else {
+        configuration.screenHeightDp.toFloat()
+    }
+    val resolvedSidebarWidth = if (sidebarWidth.isSpecified) sidebarWidth
+    else adaptiveSidebarWidth(availableWidthDp, availableHeightDp)
+    val panePixels = with(density) { resolvedSidebarWidth.roundToPx() }.coerceIn(0, viewport.width)
     val sideFrame = if (direction == LayoutDirection.Ltr) Rect(0f, 0f, panePixels.toFloat(), viewport.height.toFloat())
         else Rect((viewport.width - panePixels).toFloat(), 0f, viewport.width.toFloat(), viewport.height.toFloat())
     // The tab surface publishes its own 44-point capsule, not the taller toolbar
@@ -287,6 +324,7 @@ fun GlasmioAdaptiveNavigationScaffold(
                 GlasmioSidebar(
                     backdrop = sidebarBackdrop,
                     backgroundAlpha = { if (usesTabMorph && native.running) 0f else 1f },
+                    pressResetKey = if (usesTabMorph) native.running to native.expanded else open,
                     onContentPreview = if (usesTabMorph && native.running) ({ layer, size ->
                         sidebarLayer = layer
                         sidebarLayerSize = size
@@ -314,7 +352,12 @@ fun GlasmioAdaptiveNavigationScaffold(
         }) { measurables, constraints ->
             val width = constraints.maxWidth
             val height = constraints.maxHeight
-            val paneWidth = sidebarWidth.roundToPx().coerceIn(0, width)
+            val windowWidthDp = with(density) { width.toDp().value }
+            val windowHeightDp = with(density) { height.toDp().value }
+            val paneWidth = with(density) {
+                (if (sidebarWidth.isSpecified) sidebarWidth
+                else adaptiveSidebarWidth(windowWidthDp, windowHeightDp)).roundToPx()
+            }.coerceIn(0, width)
             val overlay = width - paneWidth < 320.dp.roundToPx()
             placement.width = paneWidth
             placement.overlays = overlay
