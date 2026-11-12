@@ -288,6 +288,7 @@ class ComponentBehaviorTest {
         var selected by mutableStateOf("home")
         var direction by mutableStateOf(LayoutDirection.Ltr)
         val compact = mutableFloatStateOf(0f)
+        var selections = 0
         val items = listOf(
             GlasmioTabItem("home", "Home", SfSymbol.House),
             GlasmioTabItem("materials", "Materials", SfSymbol.Layers),
@@ -310,7 +311,7 @@ class ComponentBehaviorTest {
                                     items = items,
                                     trailingItem = GlasmioTabItem("search", "Search", SfSymbol.Search),
                                     selectedKey = selected,
-                                    onSelected = { selected = it },
+                                    onSelected = { selected = it; selections++ },
                                     onExpand = { compact.floatValue = 0f },
                                     compactProgress = compact,
                                     detachTrailingItem = true,
@@ -349,6 +350,27 @@ class ComponentBehaviorTest {
             rule.runOnIdle { assertEquals("search", selected) }
             rule.onNode(tab and hasContentDescription("Home")).performTouchInput { click() }.assertIsSelected()
             rule.runOnIdle { assertEquals("home", selected) }
+
+            // The compact Home-shaped target expands the bar while Search keeps its route.
+            rule.onNode(tab and hasContentDescription("Search")).performTouchInput { click() }.assertIsSelected()
+            var beforeExpansion = 0
+            rule.runOnIdle {
+                beforeExpansion = selections
+                compact.floatValue = 1f
+            }
+            rule.onAllNodes(tab).assertCountEquals(2)
+            rule.onNode(tab and hasContentDescription("Home")).assertIsNotSelected().performTouchInput { click() }
+            rule.runOnIdle {
+                assertEquals("Expansion must keep the detached route", "search", selected)
+                assertEquals("Expansion must not emit a selection", beforeExpansion, selections)
+                assertEquals(0f, compact.floatValue, 0f)
+            }
+            rule.onAllNodes(tab).assertCountEquals(5)
+            rule.onNode(tab and hasContentDescription("Home")).performTouchInput { click() }.assertIsSelected()
+            rule.runOnIdle {
+                assertEquals("home", selected)
+                assertEquals("Select Home exactly once after expansion", beforeExpansion + 1, selections)
+            }
         }
     }
 
@@ -1832,12 +1854,33 @@ class SampleNavigationBehaviorTest {
         rule.onNodeWithContentDescription("Search").performClick()
         val editor = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
         val input = awaitDisplayed(editor)
-        input.performTextInput("  SLIDERS  ")
+        input.performTextInput("  sLiDeRs  ")
         awaitDisplayed(hasText("Controls") and hasClickAction() and !editor)
         rule.onNode(hasText("Navigation") and hasClickAction() and !editor).assertDoesNotExist()
-        input.performTextReplacement("type")
-        awaitDisplayed(hasText("Typography") and hasClickAction() and !editor).performClick()
+        // These independently exercise the display title and the retained route name.
+        for (query in listOf("  TYPOGRAPHY  ", "Dynamic Type")) {
+            input.performTextReplacement(query)
+            awaitDisplayed(hasText("Typography") and hasClickAction() and !editor)
+            rule.onNode(hasText("Controls") and hasClickAction() and !editor).assertDoesNotExist()
+        }
+        rule.onNode(hasText("Typography") and hasClickAction() and !editor).performTouchInput { click() }
         awaitDisplayed(hasContentDescription("Dynamic Type size"))
+        rule.onNode(editor).assertDoesNotExist()
+    }
+
+    @Test fun floatingSearchRecoversFromNoResultsWithWhitespaceQuery() {
+        awaitSampleHome()
+        rule.onNodeWithContentDescription("Search").performTouchInput { click() }
+        val editor = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
+        val input = awaitDisplayed(editor)
+        input.performTextInput("__no_such_component__")
+        awaitDisplayed(hasText("No Results"))
+        rule.onNode(hasText("Controls") and hasClickAction() and !editor).assertDoesNotExist()
+        input.performTextReplacement("   ")
+        val controls = awaitDisplayed(hasText("Controls") and hasClickAction() and !editor)
+        rule.onNodeWithText("No Results").assertDoesNotExist()
+        controls.performTouchInput { click() }
+        awaitDisplayed(hasText("Enabled"))
         rule.onNode(editor).assertDoesNotExist()
     }
 
