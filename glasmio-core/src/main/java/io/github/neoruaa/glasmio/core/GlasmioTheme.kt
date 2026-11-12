@@ -106,6 +106,7 @@ fun GlasmioTheme(
     letterSpacing: TextUnit = TextUnit.Unspecified,
     content: @Composable () -> Unit,
 ) {
+    ProvideGlasmioDisplayCutoutFix()
     val textStyles = rememberGlasmioTextStyles(dynamicTypeSize, typography, letterSpacing)
     val sizedTypography = if (dynamicTypeSize == null) typography
         else textStyles.resizeMaterialTypography(typography)

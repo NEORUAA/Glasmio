@@ -10,7 +10,7 @@ Glasmio was extracted from the reusable UI implementation in [MeiloX](https://gi
 | [Shapes](https://github.com/Kyant0/Shapes), Kyant and contributors | Capsule outlines and shape utilities | Apache-2.0 |
 | [AndroidX](https://android.googlesource.com/platform/frameworks/support), Google and contributors | Compose, Material, lifecycle, activity, vector fallback icons | Apache-2.0 |
 | [Reorderable](https://github.com/Calvin-LL/Reorderable), Calvin Liang and contributors | Drag reordering | Apache-2.0 |
-| [Miuix](https://github.com/compose-miuix-ui/miuix), Miuix contributors | Overscroll and the Sample's Navigation3 transitions | Apache-2.0 |
+| [Miuix](https://github.com/compose-miuix-ui/miuix), Miuix contributors | Display-cutout safe-area repair, overscroll, and the Sample's Navigation3 transitions | Apache-2.0 |
 
 The Apache-2.0 license text is included in [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt). Dependencies also retain the notices in their own distributions.
 
