@@ -419,6 +419,28 @@ class NavigationIndicatorLensTest {
         }
     }
 
+    @Test
+    fun nativeReleaseRestoresEveryLensStateAfterAnInterruptedSecondPress() {
+        withQueuedDrag(lensStyle = NativeControlLensStyle.TabBarIndicator) { drag, dispatcher, clock ->
+            drag.press()
+            dispatcher.drain()
+            clock.advance(dispatcher, 4)
+            drag.release()
+            dispatcher.drain()
+            clock.advance(dispatcher, 3)
+            drag.press()
+            dispatcher.drain()
+            clock.advance(dispatcher, 4)
+            drag.release()
+            dispatcher.drain()
+            clock.settle(dispatcher)
+            assertEquals(0f, drag.pressProgress, .001f)
+            assertEquals(1f, drag.scaleX, .001f)
+            assertEquals(1f, drag.scaleY, .001f)
+            assertEquals(0f, drag.velocity, .001f)
+        }
+    }
+
     private class QueuedDragDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
         private val pending = ArrayDeque<Runnable>()
         override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { pending.addLast(block) }
