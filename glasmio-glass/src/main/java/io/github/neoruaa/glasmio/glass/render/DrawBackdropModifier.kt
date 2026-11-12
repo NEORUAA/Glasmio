@@ -378,6 +378,11 @@ private class DrawBackdropNode(
     private var luminanceSampleSourceColorFilter: Any? = null
     private var luminanceSampleSourceBlendMode: Any? = null
     private val onBackdropSourceChanged: () -> Unit = {
+        if (isAttached) {
+            // A source signature describes geometry. Its pixels may change while its bounds stay fixed.
+            recordedSourceSignature = null
+            invalidateDraw()
+        }
         if (isAttached && luminanceState != null) {
             luminanceRevision++
             luminanceSourceDirty = true
@@ -738,7 +743,7 @@ private class DrawBackdropNode(
 
     private fun observeBackdropSource() {
         sourceObservation?.invoke()
-        sourceObservation = if (isAttached && luminanceState != null)
+        sourceObservation = if (isAttached)
             backdrop.observeSourceChanges(onBackdropSourceChanged) else null
     }
 
