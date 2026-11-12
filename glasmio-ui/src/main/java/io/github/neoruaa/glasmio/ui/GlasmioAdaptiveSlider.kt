@@ -324,7 +324,13 @@ private fun <T> AdaptiveSegmentedRenderer(
                             val g = currentGeometry
                             val cell = g.cells[currentAdaptiveIndex]
                             draft = adaptiveInteractionValue((logical(x) - cell.left) / cell.width.coerceAtLeast(1f), currentDiscrete)
-                            child.target(draft, if (currentDiscrete) AdaptiveSnapSpring else AdaptiveReleaseSpring)
+                            if (dragKind == 1 && emit) {
+                                // The thumb follows the pointer during an active drag. The
+                                // release spring is applied after the gesture completes.
+                                child.snap(draft)
+                            } else {
+                                child.target(draft, if (currentDiscrete) AdaptiveSnapSpring else AdaptiveReleaseSpring)
+                            }
                             val bounded = draft.coerceIn(0f, 1f)
                             if (emit) {
                                 val previous = if (currentDiscrete) lastPreview ?: currentValue else lastPreview
