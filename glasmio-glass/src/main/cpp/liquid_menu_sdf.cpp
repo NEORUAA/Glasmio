@@ -8,6 +8,8 @@
 #include <vector>
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#elif defined(__SSE2__)
+#include <emmintrin.h>
 #endif
 #if !defined(LIQUID_MENU_STANDALONE)
 #include <jni.h>
@@ -124,10 +126,12 @@ struct RoundedField {
     }
 };
 
-#if defined(__aarch64__)
-// Lane-wise float operations for 2- and 4-lane NEON vectors. Comparisons and selection reproduce
+#if defined(__aarch64__) || defined(__SSE2__)
+// Lane-wise float operations for NEON and SSE2 vectors. Comparisons and selection reproduce
 // the scalar std::min/max/clamp tie and NaN rules, so each lane is bit-identical to the scalar code.
 template <typename V> struct Lanes;
+#if defined(__aarch64__)
+using Float4 = float32x4_t;
 template <> struct Lanes<float32x2_t> {
     using V = float32x2_t;
     using M = uint32x2_t;
@@ -160,6 +164,64 @@ template <> struct Lanes<float32x4_t> {
     static M le(V a, V b) { return vcleq_f32(a, b); }
     static V select(M m, V a, V b) { return vbslq_f32(m, a, b); }
 };
+
+#else
+using Float4 = __m128;
+template <> struct Lanes<Float4> {
+    using V = Float4;
+    using M = __m128;
+    static V dup(float v) { return _mm_set1_ps(v); }
+    static V add(V a, V b) { return _mm_add_ps(a, b); }
+    static V sub(V a, V b) { return _mm_sub_ps(a, b); }
+    static V mul(V a, V b) { return _mm_mul_ps(a, b); }
+    static V div(V a, V b) { return _mm_div_ps(a, b); }
+    static V sqrt(V a) { return _mm_sqrt_ps(a); }
+    static V abs(V a) { return _mm_andnot_ps(_mm_set1_ps(-0.0f), a); }
+    static V neg(V a) { return _mm_xor_ps(_mm_set1_ps(-0.0f), a); }
+    static M lt(V a, V b) { return _mm_cmplt_ps(a, b); }
+    static M gt(V a, V b) { return _mm_cmpgt_ps(a, b); }
+    static M le(V a, V b) { return _mm_cmple_ps(a, b); }
+    static V select(M m, V a, V b) {
+        return _mm_or_ps(_mm_and_ps(m, a), _mm_andnot_ps(m, b));
+    }
+};
+#endif
+
+inline Float4 load4(const float *source) {
+#if defined(__aarch64__)
+    return vld1q_f32(source);
+#else
+    return _mm_loadu_ps(source);
+#endif
+}
+inline void store4(float *target, Float4 value) {
+#if defined(__aarch64__)
+    vst1q_f32(target, value);
+#else
+    _mm_storeu_ps(target, value);
+#endif
+}
+inline bool all4(typename Lanes<Float4>::M mask) {
+#if defined(__aarch64__)
+    return vminvq_u32(mask) != 0u;
+#else
+    return _mm_movemask_ps(mask) == 15;
+#endif
+}
+inline void store3(float *target, Float4 d, Float4 nx, Float4 ny) {
+#if defined(__aarch64__)
+    const float32x4x3_t samples = {{d, nx, ny}};
+    vst3q_f32(target, samples);
+#else
+    float distances[4], normalsX[4], normalsY[4];
+    store4(distances, d); store4(normalsX, nx); store4(normalsY, ny);
+    for (int i = 0; i < 4; ++i) {
+        target[i * 3] = distances[i];
+        target[i * 3 + 1] = normalsX[i];
+        target[i * 3 + 2] = normalsY[i];
+    }
+#endif
+}
 
 // RoundedField::distance and normal(x, y, 0) over SIMD lanes. Lanes hold either different fields
 // at one point (FieldLanes<float32x2_t>::pair) or one field at different points
@@ -217,7 +279,7 @@ template <typename V> struct FieldLanes {
         return anyCircular ? L::select(circular, round, result) : result;
     }
 
-    void normal(V x, V y, V &outX, V &outY) const {
+    void normal(V x, V y, V &outX, V &outY, bool oval = false) const {
         const V zero = L::dup(0.0f), one = L::dup(1.0f), epsilon = L::dup(0.000001f);
         const V lx = L::mul(L::sub(x, cx), inverseX);
         const V ly = L::mul(L::sub(y, cy), inverseY);
@@ -231,6 +293,15 @@ template <typename V> struct FieldLanes {
         ny = L::select(corner, L::div(ny, cornerLength), L::select(horizontal, zero, one));
         nx = L::select(L::lt(lx, zero), L::neg(nx), nx);
         ny = L::select(L::lt(ly, zero), L::neg(ny), ny);
+        if (oval) {
+            V ox = lx, oy = L::div(L::mul(ly, halfWidth), maxOf(halfHeight, epsilon));
+            const V ovalLength = L::sqrt(L::add(L::mul(ox, ox), L::mul(oy, oy)));
+            const M valid = L::gt(ovalLength, epsilon);
+            ox = L::select(valid, L::div(ox, ovalLength), nx);
+            oy = L::select(valid, L::div(oy, ovalLength), ny);
+            nx = L::add(nx, ox);
+            ny = L::add(ny, oy);
+        }
         const V length = L::sqrt(L::add(L::mul(nx, nx), L::mul(ny, ny)));
         const M degenerate = L::le(length, epsilon);
         outX = L::select(degenerate, zero, L::mul(L::div(nx, length), inverseX));
@@ -238,6 +309,7 @@ template <typename V> struct FieldLanes {
     }
 };
 
+#if defined(__aarch64__)
 // Lane 0 holds [a], lane 1 holds [b].
 inline FieldLanes<float32x2_t> fieldPair(const RoundedField &a, const RoundedField &b) {
     auto pair = [](float u, float v) {
@@ -263,23 +335,77 @@ inline FieldLanes<float32x2_t> fieldPair(const RoundedField &a, const RoundedFie
     return f;
 }
 
+#endif
+
 // All four lanes hold [a].
-inline FieldLanes<float32x4_t> fieldBroadcast(const RoundedField &a) {
-    FieldLanes<float32x4_t> f;
-    f.cx = vdupq_n_f32(a.cx);
-    f.cy = vdupq_n_f32(a.cy);
-    f.radius = vdupq_n_f32(a.radius);
-    f.inverseX = vdupq_n_f32(a.inverseX);
-    f.inverseY = vdupq_n_f32(a.inverseY);
-    f.halfWidth = vdupq_n_f32(a.halfWidth);
-    f.halfHeight = vdupq_n_f32(a.halfHeight);
-    f.expanded = vdupq_n_f32(a.expanded);
-    f.curvatureX = vdupq_n_f32(a.curvatureX);
-    f.curvatureY = vdupq_n_f32(a.curvatureY);
-    f.baseRadius = vdupq_n_f32(a.baseRadius);
-    f.circular = vdupq_n_u32(a.circular ? ~0u : 0u);
+inline FieldLanes<Float4> fieldBroadcast(const RoundedField &a) {
+    using L = Lanes<Float4>;
+    FieldLanes<Float4> f;
+    f.cx = L::dup(a.cx);
+    f.cy = L::dup(a.cy);
+    f.radius = L::dup(a.radius);
+    f.inverseX = L::dup(a.inverseX);
+    f.inverseY = L::dup(a.inverseY);
+    f.halfWidth = L::dup(a.halfWidth);
+    f.halfHeight = L::dup(a.halfHeight);
+    f.expanded = L::dup(a.expanded);
+    f.curvatureX = L::dup(a.curvatureX);
+    f.curvatureY = L::dup(a.curvatureY);
+    f.baseRadius = L::dup(a.baseRadius);
+    f.circular = L::gt(L::dup(a.circular ? 1.0f : 0.0f), L::dup(0.0f));
     f.anyCircular = f.allCircular = a.circular;
     return f;
+}
+
+// Four adjacent texels repeat sample()'s arithmetic. Whole-group decisions avoid computing
+// an unused shape's normal without changing the branch selected by any individual texel.
+inline void sample4(const FieldLanes<Float4> &incoming, const FieldLanes<Float4> &outgoing,
+                    bool hasOutgoing, float smoothing, Float4 x, Float4 y, float *output) {
+    using L = Lanes<Float4>;
+    using F = FieldLanes<Float4>;
+    const Float4 zero = L::dup(0.0f), one = L::dup(1.0f), half = L::dup(0.5f);
+    const Float4 a = incoming.distance(x, y);
+    Float4 anx, any;
+    if (!hasOutgoing) {
+        incoming.normal(x, y, anx, any, true);
+        store3(output, a, anx, any);
+        return;
+    }
+    const Float4 b = outgoing.distance(x, y);
+    const auto separated = L::le(L::dup(smoothing), L::abs(L::sub(a, b)));
+    const auto nearestA = L::le(a, b);
+    if (all4(separated)) {
+        Float4 nx, ny;
+        if (all4(nearestA)) {
+            incoming.normal(x, y, nx, ny, true);
+        } else if (all4(L::lt(b, a))) {
+            outgoing.normal(x, y, nx, ny, true);
+        } else {
+            Float4 bnx, bny;
+            incoming.normal(x, y, anx, any, true);
+            outgoing.normal(x, y, bnx, bny, true);
+            nx = L::select(nearestA, anx, bnx);
+            ny = L::select(nearestA, any, bny);
+        }
+        store3(output, F::minOf(a, b), nx, ny);
+        return;
+    }
+    Float4 bnx, bny;
+    incoming.normal(x, y, anx, any, true);
+    outgoing.normal(x, y, bnx, bny, true);
+    const Float4 alignment = L::add(L::mul(anx, bnx), L::mul(any, bny));
+    const Float4 radius = L::mul(L::dup(smoothing), F::saturateLanes(
+        L::sub(half, L::mul(half, alignment))));
+    const Float4 weight = L::select(L::le(radius, L::dup(0.000001f)),
+        L::select(nearestA, zero, one),
+        F::saturateLanes(L::add(half, L::div(L::mul(half, L::sub(a, b)), radius))));
+    const Float4 d = L::sub(L::add(a, L::mul(L::sub(b, a), weight)),
+        L::mul(L::mul(radius, weight), L::sub(one, weight)));
+    const Float4 nx = L::add(anx, L::mul(L::sub(bnx, anx), weight));
+    const Float4 ny = L::add(any, L::mul(L::sub(bny, any), weight));
+    store3(output, L::select(separated, F::minOf(a, b), d),
+        L::select(separated, L::select(nearestA, anx, bnx), nx),
+        L::select(separated, L::select(nearestA, any, bny), ny));
 }
 #endif
 
@@ -340,9 +466,23 @@ extern "C" void liquid_menu_sdf_build(const float *geometry, float originX, floa
         scratch.horizontal.resize(horizontalSize);
     float *raw = scratch.raw.data();
     float *horizontal = scratch.horizontal.data();
+#if defined(__aarch64__) || defined(__SSE2__)
+    const auto incoming4 = fieldBroadcast(incoming), outgoing4 = fieldBroadcast(outgoing);
+#endif
     for (int row = 0; row < paddedHeight; row++) {
         const float y = originY + (row - radius) * step;
-        for (int column = 0; column < paddedWidth; column++) {
+        int column = 0;
+#if defined(__aarch64__) || defined(__SSE2__)
+        for (; column + 4 <= paddedWidth; column += 4) {
+            const float xs[4] = {originX + (column - radius) * step,
+                originX + (column + 1 - radius) * step,
+                originX + (column + 2 - radius) * step,
+                originX + (column + 3 - radius) * step};
+            sample4(incoming4, outgoing4, hasOutgoing, smoothing, load4(xs), Lanes<Float4>::dup(y),
+                    raw + (static_cast<size_t>(row) * paddedWidth + column) * 3);
+        }
+#endif
+        for (; column < paddedWidth; column++) {
             const Sample s =
                 sample(incoming, outgoing, hasOutgoing, smoothing, originX + (column - radius) * step, y);
             const size_t output = (static_cast<size_t>(row) * paddedWidth + column) * 3;
@@ -355,17 +495,18 @@ extern "C" void liquid_menu_sdf_build(const float *geometry, float originX, floa
         const float *source = raw + (static_cast<size_t>(row) * paddedWidth + radius) * 3;
         float *output = horizontal + static_cast<size_t>(row) * width * 3;
         int channel = 0;
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(__SSE2__)
         // Four independent channel sums preserve every tap's Float32 operation order.
         // Keep field channels interleaved, including partial four-pixel groups.
         for (; channel + 4 <= width * 3; channel += 4) {
-            float32x4_t value = vmulq_n_f32(vld1q_f32(source + channel), weights[0]);
+            using L = Lanes<Float4>;
+            Float4 value = L::mul(load4(source + channel), L::dup(weights[0]));
             for (int offset = 1; offset <= radius; offset++) {
-                const float32x4_t left = vld1q_f32(source + channel - offset * 3);
-                const float32x4_t right = vld1q_f32(source + channel + offset * 3);
-                value = vaddq_f32(value, vmulq_n_f32(vaddq_f32(left, right), weights[offset]));
+                const Float4 left = load4(source + channel - offset * 3);
+                const Float4 right = load4(source + channel + offset * 3);
+                value = L::add(value, L::mul(L::add(left, right), L::dup(weights[offset])));
             }
-            vst1q_f32(output + channel, value);
+            store4(output + channel, value);
         }
 #endif
         for (; channel < width * 3; channel++) {
@@ -377,6 +518,37 @@ extern "C" void liquid_menu_sdf_build(const float *geometry, float originX, floa
     }
     for (int row = 0; row < height; row++) {
         int column = 0;
+#if defined(__SSE2__)
+        // After the horizontal pass the raw halo is dead. Reuse its first row for
+        // interleaved vertical sums, keeping SSE loads contiguous and taps in order.
+        const float *source = horizontal + static_cast<size_t>(row + radius) * width * 3;
+        int channel = 0;
+        for (; channel + 4 <= width * 3; channel += 4) {
+            using L = Lanes<Float4>;
+            Float4 value = L::mul(load4(source + channel), L::dup(weights[0]));
+            for (int offset = 1; offset <= radius; ++offset) {
+                const Float4 above = load4(source + channel - offset * width * 3);
+                const Float4 below = load4(source + channel + offset * width * 3);
+                value = L::add(value, L::mul(L::add(above, below), L::dup(weights[offset])));
+            }
+            store4(raw + channel, value);
+        }
+        for (; channel < width * 3; ++channel) {
+            float value = source[channel] * weights[0];
+            for (int offset = 1; offset <= radius; ++offset)
+                value += (source[channel - offset * width * 3] + source[channel + offset * width * 3]) * weights[offset];
+            raw[channel] = value;
+        }
+        for (; column < width; ++column) {
+            const float nx = raw[column * 3 + 1], ny = raw[column * 3 + 2];
+            const float length = std::sqrt(nx * nx + ny * ny);
+            const size_t output = (static_cast<size_t>(row) * width + column) * 4;
+            rgba[output] = raw[column * 3];
+            rgba[output + 1] = length > 0.000001f ? nx / length : 0.0f;
+            rgba[output + 2] = length > 0.000001f ? ny / length : 0.0f;
+            rgba[output + 3] = 1.0f;
+        }
+#endif
 #if defined(__aarch64__)
         // Resolve four pixels together with exact square roots and division, not
         // reciprocal estimates. This matches the portable normal at every lane.

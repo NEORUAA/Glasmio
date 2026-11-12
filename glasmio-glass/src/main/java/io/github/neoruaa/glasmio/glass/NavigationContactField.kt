@@ -15,61 +15,71 @@ import kotlin.math.sqrt
 
 /** Immutable boundary snapshot shared by visible and affine-transformed material passes. */
 internal class NavigationContactContour(approximation: FloatArray) {
-    private data class Edge(val start: Offset, val end: Offset, val normal: Offset)
-    private val contourEdges = buildList {
-        val contour = ArrayList<Offset>()
-        fun closeContour() {
-            if (contour.size < 3) { contour.clear(); return }
+    val edges: FloatArray
+    val bounds: Rect
+
+    init {
+        // Keep points in the original packed approximation. Dragging rebuilds these
+        // snapshots every frame; boxing each point and retaining a second edge graph
+        // adds allocations without contributing to the field or its cache key.
+        val points = IntArray(approximation.size / 3)
+        val packed = FloatArray(points.size * 6)
+        var written = 0
+        var left = Float.POSITIVE_INFINITY
+        var top = Float.POSITIVE_INFINITY
+        var right = Float.NEGATIVE_INFINITY
+        var bottom = Float.NEGATIVE_INFINITY
+        fun point(index: Int): Offset = Offset(approximation[index + 1], approximation[index + 2])
+        var cursor = 0
+        while (cursor < approximation.size) {
+            var pointCount = 0
+            var previousFraction = -1f
+            while (cursor < approximation.size) {
+                val fraction = approximation[cursor]
+                val current = point(cursor)
+                if (pointCount > 0) {
+                    val previous = point(points[pointCount - 1])
+                    // A repeated length fraction marks a move to a detached contour.
+                    // Leave its first point for the next outer iteration.
+                    if (fraction == previousFraction && previous != current) break
+                    if (previous != current) points[pointCount++] = cursor
+                } else {
+                    points[pointCount++] = cursor
+                }
+                previousFraction = fraction
+                cursor += 3
+            }
+            if (pointCount < 3) continue
             var area = 0f
-            contour.indices.forEach { i ->
-                val a = contour[i]
-                val b = contour[(i + 1) % contour.size]
+            for (i in 0 until pointCount) {
+                val a = point(points[i])
+                val b = point(points[if (i + 1 < pointCount) i + 1 else 0])
                 area += a.x * b.y - b.x * a.y
             }
             val winding = if (area >= 0f) 1f else -1f
-            contour.indices.forEach { i ->
-                val a = contour[i]
-                val b = contour[(i + 1) % contour.size]
+            for (i in 0 until pointCount) {
+                val a = point(points[i])
+                val b = point(points[if (i + 1 < pointCount) i + 1 else 0])
                 val delta = b - a
                 val length = delta.getDistance()
-                if (length > 0.0001f) add(Edge(a, b, Offset(delta.y, -delta.x) * (winding / length)))
+                if (!(length > 0.0001f)) continue
+                val normal = Offset(delta.y, -delta.x) * (winding / length)
+                packed[written] = a.x
+                packed[written + 1] = a.y
+                packed[written + 2] = b.x
+                packed[written + 3] = b.y
+                packed[written + 4] = normal.x
+                packed[written + 5] = normal.y
+                written += 6
+                left = minOf(left, minOf(a.x, b.x))
+                top = minOf(top, minOf(a.y, b.y))
+                right = maxOf(right, maxOf(a.x, b.x))
+                bottom = maxOf(bottom, maxOf(a.y, b.y))
             }
-            contour.clear()
         }
-        var previousFraction = -1f
-        for (i in approximation.indices step 3) {
-            val fraction = approximation[i]
-            val point = Offset(approximation[i + 1], approximation[i + 2])
-            // Android Path.approximate repeats the length fraction across a move.
-            // End the old contour here; never invent an edge across a detached gap.
-            if (fraction == previousFraction && contour.lastOrNull() != point) closeContour()
-            if (contour.lastOrNull() != point) contour.add(point)
-            previousFraction = fraction
-        }
-        closeContour()
-    }
-    val edges = FloatArray(contourEdges.size * 6).also { packed ->
-        contourEdges.forEachIndexed { i, edge ->
-            val start = i * 6
-            packed[start] = edge.start.x
-            packed[start + 1] = edge.start.y
-            packed[start + 2] = edge.end.x
-            packed[start + 3] = edge.end.y
-            packed[start + 4] = edge.normal.x
-            packed[start + 5] = edge.normal.y
-        }
-    }
-    // A toolbar action can be measured at zero size for one frame while a
-    // navigation destination is entering or leaving. Path.approximate then
-    // contains no usable edge. Keep that transient contour valid instead of
-    // throwing from minOf/maxOf during the backdrop draw pass.
-    val bounds = if (contourEdges.isEmpty()) {
-        Rect.Zero
-    } else {
-        Rect(
-            contourEdges.minOf { minOf(it.start.x, it.end.x) }, contourEdges.minOf { minOf(it.start.y, it.end.y) },
-            contourEdges.maxOf { maxOf(it.start.x, it.end.x) }, contourEdges.maxOf { maxOf(it.start.y, it.end.y) },
-        )
+        edges = if (written == packed.size) packed else packed.copyOf(written)
+        // Zero-sized entering/leaving controls have no usable edge for this frame.
+        bounds = if (written == 0) Rect.Zero else Rect(left, top, right, bottom)
     }
     val fingerprint = edges.contentHashCode()
 }

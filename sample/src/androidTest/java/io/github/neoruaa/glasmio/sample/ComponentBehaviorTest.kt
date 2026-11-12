@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
@@ -280,6 +281,96 @@ class ComponentBehaviorTest {
             rule.onNode(tab and hasContentDescription("Library")).assertIsSelected()
             rule.onNode(homeTab).assertIsNotSelected()
             rule.runOnIdle { assertEquals(expectedSelections, selections) }
+        }
+    }
+
+    @Test fun largeTypeNavigationLabelsStaySeparateAndTabsRemainClickable() {
+        var selected by mutableStateOf("home")
+        var direction by mutableStateOf(LayoutDirection.Ltr)
+        val compact = mutableFloatStateOf(0f)
+        var selections = 0
+        val items = listOf(
+            GlasmioTabItem("home", "Home", SfSymbol.House),
+            GlasmioTabItem("materials", "Materials", SfSymbol.Layers),
+            GlasmioTabItem("settings", "Settings", SfSymbol.Gearshape),
+            GlasmioTabItem("about", "About", SfSymbol.InfoCircle),
+        )
+        rule.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = 2f),
+                LocalLayoutDirection provides direction,
+            ) {
+                GlasmioTheme(isDark = false, appearance = GlassAppearance(reduceTransparency = true)) {
+                    GlasmioBackdropHost(
+                        modifier = Modifier.fillMaxSize(),
+                        sampledColor = Color.White,
+                        overlayContent = {
+                            Box(Modifier.width(360.dp).testTag("large-type-navigation-viewport").padding(horizontal = 20.dp)) {
+                                GlasmioNavigationBarWithTrailingItem(
+                                    items = items,
+                                    trailingItem = GlasmioTabItem("search", "Search", SfSymbol.Search),
+                                    selectedKey = selected,
+                                    onSelected = { selected = it; selections++ },
+                                    onExpand = { compact.floatValue = 0f },
+                                    compactProgress = compact,
+                                    detachTrailingItem = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        val tab = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)
+        for (layoutDirection in listOf(LayoutDirection.Ltr, LayoutDirection.Rtl)) {
+            rule.runOnIdle { direction = layoutDirection }
+            val viewport = rule.onNodeWithTag("large-type-navigation-viewport").fetchSemanticsNode().boundsInRoot
+            assertEquals("Exercise the 360 dp phone viewport", with(rule.density) { 360.dp.toPx() }, viewport.width, 1f)
+            val labelBounds = items.map { item ->
+                val label = rule.onNode(hasText(item.label) and hasAnyAncestor(tab), useUnmergedTree = true)
+                val layouts = mutableListOf<TextLayoutResult>()
+                label.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val layout = layouts.single()
+                assertEquals("Retain the requested font scale", 2f, layout.layoutInput.density.fontScale, 0f)
+                assertEquals(10.sp, layout.layoutInput.style.fontSize)
+                assertEquals(1, layout.lineCount)
+                if (item.key == "materials") assertTrue("A long caption must ellipsize inside its slot", layout.isLineEllipsized(0))
+                label.fetchSemanticsNode().boundsInRoot
+            }.sortedBy { it.left }
+            labelBounds.zipWithNext().forEach { (left, right) ->
+                assertTrue("Large captions must not overlap in $layoutDirection: $left, $right", left.right <= right.left)
+            }
+            items.forEach { item ->
+                rule.onNode(tab and hasContentDescription(item.label)).performTouchInput { click() }.assertIsSelected()
+                rule.runOnIdle { assertEquals(item.key, selected) }
+            }
+            rule.onNode(tab and hasContentDescription("Search")).performTouchInput { click() }.assertIsSelected()
+            rule.runOnIdle { assertEquals("search", selected) }
+            rule.onNode(tab and hasContentDescription("Home")).performTouchInput { click() }.assertIsSelected()
+            rule.runOnIdle { assertEquals("home", selected) }
+
+            // The compact Home-shaped target expands the bar while Search keeps its route.
+            rule.onNode(tab and hasContentDescription("Search")).performTouchInput { click() }.assertIsSelected()
+            var beforeExpansion = 0
+            rule.runOnIdle {
+                beforeExpansion = selections
+                compact.floatValue = 1f
+            }
+            rule.onAllNodes(tab).assertCountEquals(2)
+            rule.onNode(tab and hasContentDescription("Home")).assertIsNotSelected().performTouchInput { click() }
+            rule.runOnIdle {
+                assertEquals("Expansion must keep the detached route", "search", selected)
+                assertEquals("Expansion must not emit a selection", beforeExpansion, selections)
+                assertEquals(0f, compact.floatValue, 0f)
+            }
+            rule.onAllNodes(tab).assertCountEquals(5)
+            rule.onNode(tab and hasContentDescription("Home")).performTouchInput { click() }.assertIsSelected()
+            rule.runOnIdle {
+                assertEquals("home", selected)
+                assertEquals("Select Home exactly once after expansion", beforeExpansion + 1, selections)
+            }
         }
     }
 
@@ -1644,7 +1735,7 @@ class SampleNavigationBehaviorTest {
             rule.waitUntil(30_000) {
                 rule.onAllNodes(tab and hasContentDescription("Home") and isSelected())
                     .fetchSemanticsNodes(atLeastOneRootRequired = false).size == 1 &&
-                    rule.onAllNodes(hasText("Controls") and hasClickAction())
+                    rule.onAllNodesWithTag("catalog-materials-preview")
                         .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
             }
         } catch (error: ComposeTimeoutException) {
@@ -1659,6 +1750,24 @@ class SampleNavigationBehaviorTest {
                 rule.onNode(matcher).isDisplayed()
         }
         return rule.onNode(matcher).assertIsDisplayed()
+    }
+
+    private fun openCatalogEntry(route: String) {
+        val entry = hasTestTag("catalog-$route")
+        rule.onNode(hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex) and
+            hasAnyAncestor(hasTestTag("component-catalog"))).performScrollToNode(entry)
+        rule.onNode(entry).assertIsDisplayed().performClick()
+    }
+
+    @Test fun catalogGlassPreviewOpensMaterialsAndReturnsHome() {
+        awaitSampleHome()
+        val previewButton = hasClickAction() and hasAnyAncestor(hasTestTag("catalog-materials-preview"))
+        awaitDisplayed(previewButton).performTouchInput { click() }
+        awaitDisplayed(hasText("Regular Small"))
+        awaitDisplayed(hasContentDescription("Back") and hasClickAction()).performTouchInput { click() }
+        awaitSampleHome()
+        awaitDisplayed(previewButton)
+        rule.onNode(tab and hasContentDescription("Home")).assertIsSelected()
     }
 
     @Test fun sampleLaunchesAndNavigatesWithItsRealAssets() {
@@ -1751,9 +1860,44 @@ class SampleNavigationBehaviorTest {
         rule.onNodeWithContentDescription("Cancel").performClick()
     }
 
+    @Test fun floatingSearchFindsDescriptionsAndKeepsOriginalRoutes() {
+        awaitSampleHome()
+        rule.onNodeWithContentDescription("Search").performClick()
+        val editor = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
+        val input = awaitDisplayed(editor)
+        input.performTextInput("  sLiDeRs  ")
+        awaitDisplayed(hasText("Controls") and hasClickAction() and !editor)
+        rule.onNode(hasText("Navigation") and hasClickAction() and !editor).assertDoesNotExist()
+        // These independently exercise the display title and the retained route name.
+        for (query in listOf("  TYPOGRAPHY  ", "Dynamic Type")) {
+            input.performTextReplacement(query)
+            awaitDisplayed(hasText("Typography") and hasClickAction() and !editor)
+            rule.onNode(hasText("Controls") and hasClickAction() and !editor).assertDoesNotExist()
+        }
+        rule.onNode(hasText("Typography") and hasClickAction() and !editor).performTouchInput { click() }
+        awaitDisplayed(hasContentDescription("Dynamic Type size"))
+        rule.onNode(editor).assertDoesNotExist()
+    }
+
+    @Test fun floatingSearchRecoversFromNoResultsWithWhitespaceQuery() {
+        awaitSampleHome()
+        rule.onNodeWithContentDescription("Search").performTouchInput { click() }
+        val editor = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
+        val input = awaitDisplayed(editor)
+        input.performTextInput("__no_such_component__")
+        awaitDisplayed(hasText("No Results"))
+        rule.onNode(hasText("Controls") and hasClickAction() and !editor).assertDoesNotExist()
+        input.performTextReplacement("   ")
+        val controls = awaitDisplayed(hasText("Controls") and hasClickAction() and !editor)
+        rule.onNodeWithText("No Results").assertDoesNotExist()
+        controls.performTouchInput { click() }
+        awaitDisplayed(hasText("Enabled"))
+        rule.onNode(editor).assertDoesNotExist()
+    }
+
     @Test fun dynamicTypePickerChangesTheRenderedSemanticStyle() {
         awaitSampleHome()
-        rule.onNodeWithText("Text Styles and Dynamic Type").performScrollTo().performClick()
+        openCatalogEntry("Text Styles and Dynamic Type")
         val initialHeight = rule.onAllNodesWithText("Large Title")[0]
             .fetchSemanticsNode().boundsInRoot.height
         rule.onNode(hasText("Large") and hasClickAction()).performClick()
@@ -1794,7 +1938,7 @@ class SampleNavigationBehaviorTest {
 
     @Test fun toolbarMenuOpensAndClosesFromItsRealAnchor() {
         awaitSampleHome()
-        rule.onNodeWithText("Menus").performScrollTo().performClick()
+        openCatalogEntry("Menus")
         awaitDisplayed(hasContentDescription("Menu")).performClick()
         rule.onNodeWithText("Favorite").assertIsDisplayed()
         rule.onNodeWithText("Unavailable").assertIsNotEnabled()
@@ -1908,7 +2052,7 @@ class SampleNavigationBehaviorTest {
             }
             rule.onNode(tab and hasContentDescription("Home")).performClick().assertIsSelected()
             rule.onNodeWithText("Preferences").assertDoesNotExist()
-            rule.onNodeWithText("Controls").performScrollTo().performClick()
+            openCatalogEntry("Controls")
             awaitDisplayed(hasText("Enabled"))
             val scrollable = hasScrollAction() and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)
             rule.onNode(scrollable).performScrollToNode(hasText("Preference Rows"))
