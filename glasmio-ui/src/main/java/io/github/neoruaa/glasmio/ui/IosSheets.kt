@@ -1,6 +1,7 @@
 package io.github.neoruaa.glasmio.ui
 
 import android.graphics.Color as AndroidColor
+import android.os.Build
 import android.view.RoundedCorner
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -94,6 +96,48 @@ import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+
+@Composable
+private fun resolveSheetHorizontalInsets(
+    density: androidx.compose.ui.unit.Density,
+    layoutDirection: LayoutDirection,
+    view: android.view.View,
+): WindowInsets {
+    // Bottom sheets live in a separate edge-to-edge Dialog window. On some Android builds that
+    // window reports zero Compose safeDrawing values, so retain the display-wide metrics fallback.
+    val composeLeft = WindowInsets.safeDrawing.getLeft(density, layoutDirection)
+    val composeRight = WindowInsets.safeDrawing.getRight(density, layoutDirection)
+    val rootInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) view.rootWindowInsets else null
+    val platformInsets = rootInsets?.getInsetsIgnoringVisibility(
+        android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
+    )
+    val cutout = rootInsets?.displayCutout
+    val metricsInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        view.context.getSystemService(android.view.WindowManager::class.java)
+            ?.currentWindowMetrics?.windowInsets
+    } else {
+        null
+    }
+    val metricsPlatformInsets = metricsInsets?.getInsetsIgnoringVisibility(
+        android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
+    )
+    val metricsCutout = metricsInsets?.displayCutout
+    val left = maxOf(
+        composeLeft,
+        platformInsets?.left ?: 0,
+        cutout?.safeInsetLeft ?: 0,
+        metricsPlatformInsets?.left ?: 0,
+        metricsCutout?.safeInsetLeft ?: 0,
+    )
+    val right = maxOf(
+        composeRight,
+        platformInsets?.right ?: 0,
+        cutout?.safeInsetRight ?: 0,
+        metricsPlatformInsets?.right ?: 0,
+        metricsCutout?.safeInsetRight ?: 0,
+    )
+    return WindowInsets(left = left, top = 0, right = right, bottom = 0)
+}
 
 /** Safe content spacing for a sheet with a pinned [GlasmioBottomSheet] top bar.
  * Apply the top inset to scroll-content padding, rather than the scroll viewport, so rows
@@ -378,6 +422,11 @@ fun GlasmioBottomSheet(
                         top = headerHeight,
                         bottom = with(density) { safeBottom.toDp() },
                     ) else PaddingValues()
+                    val sheetHorizontalInsets = resolveSheetHorizontalInsets(
+                        density = density,
+                        layoutDirection = LocalLayoutDirection.current,
+                        view = LocalView.current,
+                    )
                     Layout(
                         modifier = Modifier.clip(shape),
                         content = {
@@ -389,7 +438,9 @@ fun GlasmioBottomSheet(
                                                 .background(colors.tertiaryContent.copy(alpha = 0.55f), Capsule()),
                                         )
                                     }
-                                    CompositionLocalProvider(LocalGlasmioSheetContentPadding provides chromePadding) { content() }
+                                    Column(Modifier.fillMaxWidth().windowInsetsPadding(sheetHorizontalInsets)) {
+                                        CompositionLocalProvider(LocalGlasmioSheetContentPadding provides chromePadding) { content() }
+                                    }
                                 }
                             } else {
                                 Box(Modifier.fillMaxWidth()) {
@@ -407,6 +458,7 @@ fun GlasmioBottomSheet(
                                         ) { contentBackground?.invoke(this) }
                                         Column(
                                             (if (contentSized) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
+                                                .windowInsetsPadding(sheetHorizontalInsets)
                                                 .scrollEdgeContentFade(topBarBlurProgress, headerHeight, headerTop = handleHeight),
                                         ) {
                                             CompositionLocalProvider(LocalGlasmioSheetContentPadding provides chromePadding) { content() }
@@ -424,8 +476,10 @@ fun GlasmioBottomSheet(
                                             }.background(chromeColors.groupedBackground.copy(alpha = 1f))),
                                     )
                                     Box(Modifier.fillMaxWidth().padding(top = handleHeight).onSizeChanged { toolbarHeight = it.height }) {
-                                        CompositionLocalProvider(LocalGlassBackdrop provides chromeBackdrop) {
-                                            topBar()
+                                        Box(Modifier.fillMaxWidth().windowInsetsPadding(sheetHorizontalInsets)) {
+                                            CompositionLocalProvider(LocalGlassBackdrop provides chromeBackdrop) {
+                                                topBar()
+                                            }
                                         }
                                     }
                                     Box(Modifier.fillMaxWidth().height(handleHeight), contentAlignment = Alignment.TopCenter) {
