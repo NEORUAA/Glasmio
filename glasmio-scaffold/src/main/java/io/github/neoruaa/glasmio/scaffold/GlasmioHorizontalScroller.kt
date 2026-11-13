@@ -16,7 +16,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.LayoutDirection
 
 /**
- * Expands a viewport through the window's physical horizontal safe area.
+ * Expands a viewport through the window's physical horizontal safe area and adaptive sidebar.
  *
  * For a vertical lazy parent, keep the regular item content inside the safe area by adding the
  * same insets to its [androidx.compose.foundation.layout.PaddingValues].
@@ -24,10 +24,11 @@ import androidx.compose.ui.unit.LayoutDirection
 @Composable
 fun Modifier.glasmioHorizontalEdgeToEdge(
     insets: WindowInsets = WindowInsets.safeDrawing,
+    includeSidebar: Boolean = true,
 ): Modifier {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
-    val (left, right) = resolveHorizontalInsets(insets, density, layoutDirection)
+    val (left, right) = resolveHorizontalInsets(insets, density, layoutDirection, includeSidebar)
     if (left == 0 && right == 0) return this
 
     val extraWidth = (left.toLong() + right.toLong()).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
@@ -46,18 +47,25 @@ fun Modifier.glasmioHorizontalEdgeToEdge(
     }
 }
 
-/** Adds horizontal safe-area insets to existing scrolling content padding. */
+/** Adds horizontal safe-area and adaptive-sidebar insets to scrolling content padding. */
 @Composable
 fun glasmioHorizontalContentPadding(
     contentPadding: PaddingValues = PaddingValues(),
     insets: WindowInsets = WindowInsets.safeDrawing,
+    includeSidebar: Boolean = true,
 ): PaddingValues {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
-    val (left, right) = resolveHorizontalInsets(insets, density, layoutDirection)
+    val (left, right) = resolveHorizontalInsets(insets, density, layoutDirection, includeSidebar = false)
+    val sidebar = if (includeSidebar) LocalGlasmioSidebarInsets.current else null
+    val sidebarStart = if (layoutDirection == LayoutDirection.Ltr) {
+        sidebar?.getLeft(density, layoutDirection) ?: 0
+    } else {
+        sidebar?.getRight(density, layoutDirection) ?: 0
+    }
     val startInset = with(density) {
         if (layoutDirection == LayoutDirection.Ltr) left.toDp() else right.toDp()
-    }
+    } + with(density) { sidebarStart.toDp() }
     val endInset = with(density) {
         if (layoutDirection == LayoutDirection.Ltr) right.toDp() else left.toDp()
     }
@@ -78,10 +86,16 @@ private fun resolveHorizontalInsets(
     insets: WindowInsets,
     density: androidx.compose.ui.unit.Density,
     layoutDirection: LayoutDirection,
+    includeSidebar: Boolean,
 ): HorizontalInsets {
-    val left = insets.getLeft(density, layoutDirection)
-    val right = insets.getRight(density, layoutDirection)
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return HorizontalInsets(left, right)
+    val insetLeft = insets.getLeft(density, layoutDirection)
+    val insetRight = insets.getRight(density, layoutDirection)
+    val sidebar = if (includeSidebar) LocalGlasmioSidebarInsets.current else null
+    val sidebarLeft = sidebar?.getLeft(density, layoutDirection) ?: 0
+    val sidebarRight = sidebar?.getRight(density, layoutDirection) ?: 0
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+        return HorizontalInsets(insetLeft + sidebarLeft, insetRight + sidebarRight)
+    }
 
     // windowInsetsPadding consumes Compose's WindowInsets for descendants. Read the platform
     // root as a fallback so a horizontal scroller can still expand through that consumed area.
@@ -91,7 +105,7 @@ private fun resolveHorizontalInsets(
     )
     val cutout = rootInsets?.displayCutout
     return HorizontalInsets(
-        left = maxOf(left, systemInsets?.left ?: 0, cutout?.safeInsetLeft ?: 0),
-        right = maxOf(right, systemInsets?.right ?: 0, cutout?.safeInsetRight ?: 0),
+        left = maxOf(insetLeft, systemInsets?.left ?: 0, cutout?.safeInsetLeft ?: 0) + sidebarLeft,
+        right = maxOf(insetRight, systemInsets?.right ?: 0, cutout?.safeInsetRight ?: 0) + sidebarRight,
     )
 }
