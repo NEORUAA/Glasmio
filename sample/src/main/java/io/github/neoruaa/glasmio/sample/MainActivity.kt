@@ -756,8 +756,9 @@ private fun SampleLargeTitle(title: String, collapseProgress: Float) {
 private fun DemoList(layout: SamplePageLayout, content: LazyListScope.() -> Unit) {
     LazyColumn(
         state = layout.listState,
-        modifier = Modifier.fillMaxSize().consumeWindowInsets(layout.padding),
-        contentPadding = layout.padding,
+        modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+            .consumeWindowInsets(layout.padding),
+        contentPadding = glasmioHorizontalContentPadding(layout.padding),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         item(key = "sample-large-title") { SampleLargeTitle(layout.title, layout.collapseProgress) }
@@ -1363,8 +1364,9 @@ private fun ListDemo() {
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(150.dp),
                         state = gridState,
-                        modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
-                        contentPadding = padding,
+                        modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+                            .consumeWindowInsets(padding),
+                        contentPadding = glasmioHorizontalContentPadding(padding),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -1378,8 +1380,9 @@ private fun ListDemo() {
                 } else {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
-                        contentPadding = padding,
+                        modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+                            .consumeWindowInsets(padding),
+                        contentPadding = glasmioHorizontalContentPadding(padding),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         item(key = "large-title") { SampleLargeTitle("Lists", collapseProgress) }
@@ -1576,8 +1579,9 @@ private fun SearchResults(query: String, padding: PaddingValues, onOpen: (String
         }
     }
     LazyColumn(
-        modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
-        contentPadding = padding,
+        modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+            .consumeWindowInsets(padding),
+        contentPadding = glasmioHorizontalContentPadding(padding),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         if (matches.isEmpty()) {

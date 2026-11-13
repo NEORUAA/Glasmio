@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -81,10 +82,12 @@ fun <T> GlasmioScrollableTabRow(
     selected: T,
     onSelected: (T) -> Unit,
     modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(),
 ) {
     val colors = LocalGlassColors.current
     LazyRow(
-        modifier = modifier,
+        modifier = modifier.glasmioHorizontalEdgeToEdgeImpl(),
+        contentPadding = glasmioHorizontalContentPaddingImpl(contentPadding),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(items, key = { it.first.toString() }) { (value, label) ->

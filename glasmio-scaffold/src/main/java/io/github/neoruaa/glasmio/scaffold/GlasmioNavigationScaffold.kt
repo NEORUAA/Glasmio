@@ -505,9 +505,13 @@ fun GlasmioPageBody(
                     .then(if (backgroundBrush != null) Modifier.background(backgroundBrush) else Modifier.background(backgroundColor)),
             ) { background?.invoke(this) }
             Box(Modifier.fillMaxSize().glasmioAdaptiveContent()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                 .scrollEdgeContentFade(progress, headerHeight, headerTop = statusBarHeight)) {
-                GlasmioOverscrollHost { content(contentPadding) }
+                GlasmioOverscrollHost {
+                    Box(Modifier.fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
+                        content(contentPadding)
+                    }
+                }
             }
         }
         Box(
