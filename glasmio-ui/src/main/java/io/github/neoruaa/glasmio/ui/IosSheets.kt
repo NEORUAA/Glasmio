@@ -141,7 +141,8 @@ private fun resolveSheetHorizontalInsets(
         metricsPlatformInsets?.right ?: 0,
         metricsCutout?.safeInsetRight ?: 0,
     )
-    return WindowInsets(left = left, top = 0, right = right, bottom = 0)
+    val horizontalSafeZone = maxOf(left, right)
+    return WindowInsets(left = horizontalSafeZone, top = 0, right = horizontalSafeZone, bottom = 0)
 }
 
 /** Safe content spacing for a sheet with a pinned [GlasmioBottomSheet] top bar.
@@ -439,7 +440,7 @@ fun GlasmioBottomSheet(
                         modifier = Modifier.clip(shape),
                         content = {
                             if (topBar == null) {
-                                Column(Modifier.fillMaxWidth().windowInsetsPadding(navigationInsets)) {
+                                Column(Modifier.fillMaxWidth().windowInsetsPadding(navigationInsets.only(WindowInsetsSides.Vertical))) {
                                     Box(Modifier.fillMaxWidth().height(handleHeight), contentAlignment = Alignment.TopCenter) {
                                         Box(
                                             Modifier.padding(top = 6.dp).size(60.dp, 4.dp)
@@ -484,10 +485,8 @@ fun GlasmioBottomSheet(
                                             }.background(chromeColors.groupedBackground.copy(alpha = 1f))),
                                     )
                                     Box(Modifier.fillMaxWidth().padding(top = handleHeight).onSizeChanged { toolbarHeight = it.height }) {
-                                        Box(Modifier.fillMaxWidth().windowInsetsPadding(sheetHorizontalInsets)) {
-                                            CompositionLocalProvider(LocalGlassBackdrop provides chromeBackdrop) {
-                                                topBar()
-                                            }
+                                        CompositionLocalProvider(LocalGlassBackdrop provides chromeBackdrop) {
+                                            topBar()
                                         }
                                     }
                                     Box(Modifier.fillMaxWidth().height(handleHeight), contentAlignment = Alignment.TopCenter) {
