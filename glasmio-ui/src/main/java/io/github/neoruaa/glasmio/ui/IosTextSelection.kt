@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuItem
 import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
@@ -78,6 +77,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
+import io.github.neoruaa.glasmio.core.glasmioSafeDrawing
 import io.github.neoruaa.glasmio.core.IosTypography
 import io.github.neoruaa.glasmio.core.GlasmioTheme
 import io.github.neoruaa.glasmio.core.LocalGlassColors
@@ -150,7 +150,7 @@ fun GlasmioTextSelectionMenu(
     var rootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null, neverEqualPolicy()) }
     var toolbarBounds by remember { mutableStateOf<Rect?>(null) }
     val editingHost = LocalGlasmioTextEditingHost.current
-    val safeInsets = WindowInsets.safeDrawing.union(WindowInsets.ime)
+    val safeInsets = WindowInsets.glasmioSafeDrawing.union(WindowInsets.ime)
     val layoutDirection = LocalLayoutDirection.current
     val windowSize = LocalWindowInfo.current.containerSize
     DisposableEffect(expanded, moreExpanded) {

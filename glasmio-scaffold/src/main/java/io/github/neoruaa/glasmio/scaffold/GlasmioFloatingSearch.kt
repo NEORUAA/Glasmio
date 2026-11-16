@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -180,9 +179,9 @@ fun GlasmioFloatingSearch(
             imeInsets.add(WindowInsets(bottom = 8.dp + extraBottomSpacing)),
         ).only(WindowInsetsSides.Bottom)
     }
-    val horizontalInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
-    val toolbarPadding = remember(searchBottomInsets, topInsets, horizontalInsets, density, topTabs) {
-        if (topTabs) topInsets.add(horizontalInsets)
+    val horizontalInsets = glasmioPageHorizontalInsets()
+    val toolbarPadding = remember(searchBottomInsets, topInsets, density, topTabs) {
+        if (topTabs) topInsets
             .add(WindowInsets(top = GlasmioAdaptiveNavigationDefaults.SearchTopPadding))
             .asPaddingValues(density)
         else searchBottomInsets.asPaddingValues(density)
@@ -193,7 +192,7 @@ fun GlasmioFloatingSearch(
         if (topTabs) horizontalInsets.add(navigationInsets.union(imeInsets).only(WindowInsetsSides.Bottom))
             .add(WindowInsets(top = GlasmioAdaptiveNavigationDefaults.SearchTopPadding + 56.dp - GlasmioAdaptiveNavigationDefaults.TopBarHeight))
             .asPaddingValues(density)
-        else topInsets.add(searchBottomInsets)
+        else topInsets.add(searchBottomInsets).add(horizontalInsets)
             .add(WindowInsets(bottom = resultsBottomSpacing))
             .asPaddingValues(density)
     }

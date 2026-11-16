@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.LayoutDirection
+import io.github.neoruaa.glasmio.core.LocalGlasmioHorizontalSafeAreaEnabled
 
 /**
  * Expands a viewport through the window's physical horizontal safe area.
@@ -83,6 +84,7 @@ private fun resolveHorizontalInsets(
     density: androidx.compose.ui.unit.Density,
     layoutDirection: LayoutDirection,
 ): HorizontalInsets {
+    if (!LocalGlasmioHorizontalSafeAreaEnabled.current) return HorizontalInsets(0, 0)
     val left = insets.getLeft(density, layoutDirection)
     val right = insets.getRight(density, layoutDirection)
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return HorizontalInsets(left, right)

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import io.github.neoruaa.glasmio.core.glasmioSafeDrawing
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.glass.render.Backdrop
@@ -68,10 +69,10 @@ fun GlasmioMessageContextMenu(
     var alive by remember { mutableStateOf(false) }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val progress = remember { Animatable(0f) }
-    val topInset = WindowInsets.safeDrawing.getTop(density)
-    val bottomInset = maxOf(WindowInsets.safeDrawing.getBottom(density), WindowInsets.ime.getBottom(density))
-    val leftInset = WindowInsets.safeDrawing.getLeft(density, LocalLayoutDirection.current)
-    val rightInset = WindowInsets.safeDrawing.getRight(density, LocalLayoutDirection.current)
+    val topInset = WindowInsets.glasmioSafeDrawing.getTop(density)
+    val bottomInset = maxOf(WindowInsets.glasmioSafeDrawing.getBottom(density), WindowInsets.ime.getBottom(density))
+    val leftInset = WindowInsets.glasmioSafeDrawing.getLeft(density, LocalLayoutDirection.current)
+    val rightInset = WindowInsets.glasmioSafeDrawing.getRight(density, LocalLayoutDirection.current)
     val close: (() -> Unit) -> Unit = { action -> pendingAction = action; currentExpandedChange(false) }
     LaunchedEffect(expanded, source != null) {
         if (expanded && source != null) {

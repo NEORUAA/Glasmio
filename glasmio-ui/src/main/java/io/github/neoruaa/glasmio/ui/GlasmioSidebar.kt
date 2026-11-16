@@ -101,8 +101,8 @@ fun GlasmioSidebar(
                         val child = measurable.measure(constraints)
                         layout(child.width, child.height) { child.placeWithLayer(0, 0, preview) }
                     }
-                    .consumeWindowInsets(WindowInsets.safeDrawing.only(WindowInsetsSides.End))
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start))) { content() }
+                    .consumeWindowInsets(WindowInsets.glasmioSafeDrawing.only(WindowInsetsSides.End))
+                    .windowInsetsPadding(WindowInsets.glasmioSafeDrawing.only(WindowInsetsSides.Start))) { content() }
             }
         }
     }

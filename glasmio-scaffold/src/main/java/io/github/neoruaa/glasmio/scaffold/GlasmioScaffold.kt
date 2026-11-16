@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -25,7 +24,7 @@ fun GlasmioScaffold(
     modifier: Modifier = Modifier,
     topBar: @Composable () -> Unit = {},
     bottomBar: @Composable () -> Unit = {},
-    contentWindowInsets: WindowInsets = WindowInsets.safeDrawing,
+    contentWindowInsets: WindowInsets = WindowInsets.glasmioPageSafeDrawing,
     containerColor: Color = LocalGlassColors.current.groupedBackground,
     content: @Composable (PaddingValues) -> Unit,
 ) {

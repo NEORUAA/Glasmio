@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,7 +30,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -82,8 +83,10 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
+import io.github.neoruaa.glasmio.core.glasmioSafeDrawing
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.LocalGlassAppearance
+import io.github.neoruaa.glasmio.core.LocalGlasmioHorizontalSafeAreaEnabled
 import io.github.neoruaa.glasmio.glass.LocalBlurBackdrop
 import io.github.neoruaa.glasmio.glass.LocalGlassBackdrop
 import io.github.neoruaa.glasmio.glass.glassBackdropSource
@@ -103,10 +106,12 @@ private fun resolveSheetHorizontalInsets(
     layoutDirection: LayoutDirection,
     view: android.view.View,
 ): WindowInsets {
+    if (!LocalGlasmioHorizontalSafeAreaEnabled.current) return WindowInsets(0, 0, 0, 0)
+
     // Bottom sheets live in a separate edge-to-edge Dialog window. On some Android builds that
     // window reports zero Compose safeDrawing values, so retain the display-wide metrics fallback.
-    val composeLeft = WindowInsets.safeDrawing.getLeft(density, layoutDirection)
-    val composeRight = WindowInsets.safeDrawing.getRight(density, layoutDirection)
+    val composeLeft = WindowInsets.glasmioSafeDrawing.getLeft(density, layoutDirection)
+    val composeRight = WindowInsets.glasmioSafeDrawing.getRight(density, layoutDirection)
     val rootInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) view.rootWindowInsets else null
     val platformInsets = rootInsets?.getInsetsIgnoringVisibility(
         android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
@@ -256,7 +261,10 @@ fun GlasmioBottomSheet(
                 val insets = contentWindowInsets()
                 val topInset = insets.getTop(density).toFloat()
                 val lowerInset = insets.getBottom(density).toFloat()
-                val navigationInsets = contentNavigationBarInsets()
+                val navigationInsets = contentNavigationBarInsets().let {
+                    if (LocalGlasmioHorizontalSafeAreaEnabled.current) it
+                    else it.only(WindowInsetsSides.Vertical)
+                }
                 val safeBottom = navigationInsets.getBottom(density).toFloat()
                 var measuredContentHeight by remember { mutableStateOf(0) }
                 val contentSized = fitContent && sheetState.skipPartiallyExpanded

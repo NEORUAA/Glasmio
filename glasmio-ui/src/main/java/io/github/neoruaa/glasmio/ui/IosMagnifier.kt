@@ -11,7 +11,6 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
@@ -51,6 +50,7 @@ import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
 import io.github.neoruaa.glasmio.glass.LocalIosToolbarActionGroup
 import io.github.neoruaa.glasmio.glass.LocalToolbarActionSeparation
 import io.github.neoruaa.glasmio.glass.NavigationGlassMaterial
+import io.github.neoruaa.glasmio.core.glasmioSafeDrawing
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -162,7 +162,7 @@ fun GlasmioMagnifier(
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
     val windowSize = LocalWindowInfo.current.containerSize
-    val safeInsets = WindowInsets.safeDrawing.union(WindowInsets.ime)
+    val safeInsets = WindowInsets.glasmioSafeDrawing.union(WindowInsets.ime)
     val bodyWidthPx = with(density) { body.width.toPx() }
     val bodyHeightPx = with(density) { body.height.toPx() }
     val openSpring = spring<Float>(

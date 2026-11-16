@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -173,7 +172,7 @@ fun GlasmioAlertDialog(
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime))
+                        .windowInsetsPadding(WindowInsets.glasmioSafeDrawing.union(WindowInsets.ime))
                         // Fade the viewport backing so the panel's exterior shadows stay inside
                         // the alpha layer. A panel-sized offscreen layer would crop those shadows.
                         .graphicsLayer {

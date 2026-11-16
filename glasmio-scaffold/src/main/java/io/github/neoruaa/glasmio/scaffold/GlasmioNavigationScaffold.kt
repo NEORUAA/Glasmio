@@ -249,7 +249,6 @@ fun GlasmioPageTitle(entryKey: Any, modifier: Modifier = Modifier) {
     val colors = spec.colors ?: LocalGlassColors.current
     CompositionLocalProvider(LocalGlassColors provides colors, LocalContentColor provides colors.content) {
         BoxWithConstraints(modifier.fillMaxWidth().glasmioAdaptiveContent()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .statusBarsPadding().height(GlasmioToolbarDefaults.Height).padding(horizontal = IosPageHorizontalPadding)) {
             val availableWidthPx = with(density) { maxWidth.toPx() }
             val safeStartPx = with(density) { (leading.toDp() + if (leading > 0) 8.dp else 0.dp).toPx() }
@@ -415,7 +414,6 @@ private fun GlasmioTopNavigationSlot(
         }
     }
     BoxWithConstraints(Modifier.fillMaxWidth().padding(top = status).height(GlasmioToolbarDefaults.Height)
-        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
         .graphicsLayer { alpha = if (ready || lastLeadingSide > 0.dp || lastTrailingSide > 0.dp) 1f else 0f },
         contentAlignment = Alignment.TopStart,
     ) {
@@ -476,7 +474,7 @@ private fun GlasmioTopNavigationSlot(
 }
 
 /**
- * Page-owned body and scroll-edge blur. Horizontal system insets apply only to the foreground.
+ * Page-owned body and scroll-edge blur. Horizontal page safe-area insets apply only to the foreground.
  * The untouched background and faded foreground feed [backdrop]; the complete blur profile is
  * overlaid afterward so it follows this page's transitions without restoring unfaded content.
  * Descendant glass controls keep their existing backdrop provider.
@@ -508,8 +506,7 @@ fun GlasmioPageBody(
                 .scrollEdgeContentFade(progress, headerHeight, headerTop = statusBarHeight)) {
                 GlasmioOverscrollHost {
                     Box(Modifier.fillMaxSize()
-                        .glasmioAdaptiveContent()
-                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
+                        .windowInsetsPadding(glasmioPageHorizontalInsets().add(LocalGlasmioSidebarInsets.current))) {
                         content(contentPadding)
                     }
                 }
@@ -601,7 +598,6 @@ private fun GlasmioNavigationHeader(
     // Retained groups are disposed only after their own tracks settle, not when the body ends.
     CompositionLocalProvider(LocalContentColor provides LocalGlassColors.current.content) {
         Box(modifier.height(if (searchVisible) GlasmioAdaptiveNavigationDefaults.SearchTopPadding + 48.dp else GlasmioToolbarDefaults.Height)
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
             .padding(horizontal = IosPageHorizontalPadding)
             .onGloballyPositioned { searchOrigin = it.positionInWindow() }) {
             Box(Modifier.fillMaxWidth().height(GlasmioToolbarDefaults.Height)) {

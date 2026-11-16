@@ -239,6 +239,24 @@ fun EditingScreen() = ExampleHost {
 
 ## Lists, insets, and preferences
 
+Glasmio scaffolds apply horizontal hardware-safe spacing only to page content. With the
+sidebar closed, both sides use `max(left, right)`, including floating search results and
+the content padding and edge-to-edge expansion of horizontal scrollers. An expanded
+sidebar replaces the hardware-safe margin on its facing side; the outer side keeps that
+margin. During sidebar animation, each side reserves the larger of the sidebar's occupied
+width and the hardware-safe margin. Page toolbars, navigation bars and floating search
+chrome do not add horizontal hardware-safe spacing. Sidebar content keeps its independent
+physical-side insets; its occupied width is never mirrored.
+
+`LocalGlasmioHorizontalSafeAreaEnabled` defaults to `true`. Provide `false` around an app
+or screen to omit horizontal hardware-safe spacing from page content, sidebars, sheets and
+editing overlays. Horizontal scrollers stop adding hardware-safe padding or expanding
+through it, while adaptive sidebar space remains reserved. Vertical system-bar and IME
+insets are unchanged. Sheet surfaces retain their full width; the setting only changes
+their foreground spacing. Outside scaffolds, `WindowInsets.glasmioSafeDrawing` follows
+the same switch while retaining independent left and right values. Override the local
+with `true` around any surface that must always retain its existing safe-area behavior.
+
 `GlasmioPinnedListPage` owns a collapsing large title and its fixed toolbar. Its content uses `LazyListScope`, so item keys and lazy content remain under application control. The page owns its top inset; `bottomPadding` can include the space occupied by an application bottom bar.
 
 The large title collapses on a breakpoint rather than tracking the finger: it expands below `collapseExitBreakpoint` (24 dp by default) and collapses once the list passes `collapseEnterBreakpoint` (56 dp by default), playing one spring between the two states. The gap between the thresholds is hysteresis, so a scroll resting near the boundary cannot retrigger the motion. The top bar material stays continuous and still fades with the scroll offset.
