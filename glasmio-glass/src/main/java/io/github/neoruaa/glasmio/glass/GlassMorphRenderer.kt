@@ -450,7 +450,8 @@ class GlassMorphRenderer(
                 record = { layer, extent, draw ->
                     layer.record(density = this@GlassMorphRenderer.density,
                         layoutDirection = recordedLayoutDirection, size = extent, block = draw)
-                }, sourceBlock = { drawLayer(source) }) else {
+                }, sourceBlock = { drawLayer(source) },
+                sourceLayer = source, recordingScope = this) else {
                 var previous = source
                 for (pass in passes.layers(atlasEffects)) {
                     val input = previous
@@ -596,10 +597,13 @@ class GlassMorphRenderer(
             // Preserve the optical texture barrier: fused menus store A, fallbacks store A+B.
             // Raw L0 remains in a separate region for the native exterior completion branch.
             val base = IntSize(ceil(viewport.width * renderScale).toInt(), ceil(viewport.height * renderScale).toInt())
-            material.clip = true
-            material.compositingStrategy = CompositingStrategy.Offscreen
-            material.renderEffect = null
-            material.record(this@GlassMorphRenderer.density, recordedLayoutDirection, base) { drawLayer(refracted) }
+            val packedOptical = if (fuseTransitionRefraction) refracted else {
+                material.clip = true
+                material.compositingStrategy = CompositingStrategy.Offscreen
+                material.renderEffect = null
+                material.record(this@GlassMorphRenderer.density, recordedLayoutDirection, base) { drawLayer(refracted) }
+                material
+            }
             val transitionRefraction = if (fuseTransitionRefraction) {
                 val opticalBounds = lensBounds ?: bounds
                 val sampleBounds = Rect(
@@ -653,6 +657,15 @@ class GlassMorphRenderer(
             val outputOrigin = nativeFilterScope.materialOutputOrigin
             val outputSize = requireNotNull(nativeFilterScope.materialOutputSize)
             val packedSize = IntSize(maxOf(base.width, outputSize.width), maxOf(base.height * 2, outputSize.height))
+            val opticalOutput = transitionRefraction?.let {
+                // B reads A only inside drawingBounds. Its unit normal and spectral
+                // offsets displace each axis by at most twice the lens amount. Keep
+                // one extra texel for interpolation, without trimming A's mip inputs.
+                val support = it.drawingBounds.inflate(2f * abs(it.amount) + 1f)
+                Rect(maxOf(0f, floor(support.left)), maxOf(0f, floor(support.top)),
+                    minOf(base.width.toFloat(), ceil(support.right)),
+                    minOf(base.height.toFloat(), ceil(support.bottom)))
+            } ?: Rect(0f, 0f, base.width.toFloat(), base.height.toFloat())
             val completed = requireNotNull(atlasBacking)
             completed.clip = true
             completed.compositingStrategy = CompositingStrategy.Offscreen
@@ -667,7 +680,11 @@ class GlassMorphRenderer(
             completed.record(this@GlassMorphRenderer.density, recordedLayoutDirection, packedSize) {
                 clipRect(0f, 0f, base.width.toFloat(), base.height.toFloat()) { drawLayer(source) }
                 withTransform({ translate(0f, base.height.toFloat()) }) {
-                    clipRect(0f, 0f, base.width.toFloat(), base.height.toFloat()) { drawLayer(material) }
+                    // The filtered layer already owns A's texture barrier. Pack it on the
+                    // same integer grid without another viewport-sized copy target.
+                    clipRect(opticalOutput.left, opticalOutput.top, opticalOutput.right, opticalOutput.bottom) {
+                        drawLayer(packedOptical)
+                    }
                 }
             }
             withTransform({

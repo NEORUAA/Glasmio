@@ -474,13 +474,7 @@ private class LiquidMenuDrawCache {
 
 /** Signed FP16 data avoids color conversion, premultiplication and RGBA8 distance quantization. */
 class LiquidMenuFieldTexture {
-    private class Buffer(val bitmap: Bitmap) {
-        val shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
-            setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
-        }
-    }
-    private val buffers = ArrayList<Buffer>(4)
-    private var current: Buffer? = null
+    private var current: BitmapShader? = null
     private var generation = Long.MIN_VALUE
     private var sampled: LiquidMenuGaussianField? = null
     private var upload: ByteBuffer? = null
@@ -489,7 +483,7 @@ class LiquidMenuFieldTexture {
     val step: Float get() = sampled?.step ?: 1f
     val width: Int get() = sampled?.width ?: 1
     val height: Int get() = sampled?.height ?: 1
-    val input: BitmapShader? get() = if (sampled != null) current?.shader else null
+    val input: BitmapShader? get() = if (sampled != null) current else null
 
     // RGBA_F16 storage requires the raw half-float bits, rather than numeric conversion.
     @android.annotation.SuppressLint("HalfFloat")
@@ -500,7 +494,6 @@ class LiquidMenuFieldTexture {
             // Runtime shaders bind the empty field below. Their older native display
             // lists keep their own bitmap references until rendering has finished.
             current = null
-            buffers.clear()
             upload = null
             generation = Long.MIN_VALUE
             return
@@ -508,33 +501,23 @@ class LiquidMenuFieldTexture {
         origin = value.origin + offset
         if (previous === value && generation == value.generation) return
         generation = value.generation
-        // Smooth-off needs a fine grid; the next coarse-grid phase must not keep
-        // copying and uploading that largest historical bitmap on every frame.
-        val requiredArea = value.width * value.height
-        var buffer = buffers.filter {
-            it.bitmap.width >= value.width && it.bitmap.height >= value.height &&
-                it.bitmap.width * it.bitmap.height <= maxOf(4096, requiredArea * 4)
-        }.minByOrNull { it.bitmap.byteCount }
-        if (buffer == null) {
-            val width = (value.width + 63) / 64 * 64
-            val height = (value.height + 63) / 64 * 64
-            buffer = Buffer(Bitmap.createBitmap(width, height, Bitmap.Config.RGBA_F16,
-                false, ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB)).apply { setPremultiplied(false) })
-            if (buffers.size == 4) buffers.removeAt(0)
-        } else {
-            buffers.remove(buffer)
-        }
-        buffers.add(buffer)
-        current = buffer
+        // RenderEffect snapshots retain their child shader's pixels by reference. A field
+        // nested in RuntimeShader is not covered by HWUI's direct BitmapShader pinning.
+        // Publish each generation once, then leave it untouched until its last native
+        // display-list reference is released. A frame-counted ring cannot bound RT latency.
+        val bitmap = Bitmap.createBitmap(value.width, value.height, Bitmap.Config.RGBA_F16,
+            false, ColorSpace.get(ColorSpace.Named.LINEAR_EXTENDED_SRGB)).apply { setPremultiplied(false) }
         // copyPixelsFromBuffer copies synchronously; upload storage is not GPU-owned.
-        // One staging buffer serves all bitmap buckets instead of duplicating each.
-        if ((upload?.capacity() ?: 0) < buffer.bitmap.byteCount) {
+        if ((upload?.capacity() ?: 0) < bitmap.byteCount) {
+            val capacity = maxOf(bitmap.byteCount.toLong(),
+                (upload?.capacity() ?: 0).toLong() * 3 / 2, 4096L)
+                .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
             upload = null
-            upload = ByteBuffer.allocateDirect(buffer.bitmap.byteCount).order(ByteOrder.nativeOrder())
+            upload = ByteBuffer.allocateDirect(capacity).order(ByteOrder.nativeOrder())
         }
         val bytes = requireNotNull(upload)
         bytes.clear()
-        val stride = buffer.bitmap.rowBytes
+        val stride = bitmap.rowBytes
         if (!LiquidMenuNativeField.pack(value.rgba, value.width, value.height, stride, bytes)) {
             repeat(value.height) { row ->
                 bytes.position(row * stride)
@@ -543,7 +526,10 @@ class LiquidMenuFieldTexture {
             }
         }
         bytes.rewind()
-        buffer.bitmap.copyPixelsFromBuffer(bytes)
+        bitmap.copyPixelsFromBuffer(bytes)
+        current = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+        }
     }
 }
 

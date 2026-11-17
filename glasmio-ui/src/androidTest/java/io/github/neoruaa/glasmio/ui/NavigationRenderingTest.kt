@@ -7,6 +7,7 @@ import io.github.neoruaa.glasmio.glass.BottomControlContactMember
 import io.github.neoruaa.glasmio.glass.GlassPressHighlight
 import io.github.neoruaa.glasmio.glass.LiquidContactCapsule
 import io.github.neoruaa.glasmio.glass.completeNativeFilteredGlass
+import io.github.neoruaa.glasmio.glass.completeNativeMenuFilteredGlass
 import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
@@ -155,6 +156,7 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCanvasBackdrop
 import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.navigationGlassBackgroundResolved
+import io.github.neoruaa.glasmio.glass.nativeNavigationGlassFilter
 import io.github.neoruaa.glasmio.glass.rememberNavigationInnerShadows
 import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
 import io.github.neoruaa.glasmio.glass.GlasmioToolbarActionGroup
@@ -1805,6 +1807,102 @@ half4 main(half4 src, half4 dst) {
             assertTrue("A recent distinct field must remain cached after overflow", sources[17].first() === sources[21].first())
             assertEquals("Eviction does not change the rebuilt source", sources[11].first(), sources[22].first())
             assertTrue("Overflow must release and rebuild the least recently used source", sources[11].first() !== sources[22].first())
+        }
+    }
+
+    @Test
+    fun ownedMipSourceRetainsItsGraphAndKeepsChildRecordingsLive() {
+        val phase = mutableStateOf(0)
+        val showReference = mutableStateOf(false)
+        val recordings = Array(11) { ArrayList<Pair<Int, Int>>() }
+        var retained: io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses? = null
+        compose.setContent {
+            val current = phase.value
+            CompositionLocalProvider(
+                LocalDensity provides Density(if (current >= 4) 1.25f else 1f,
+                    fontScale = if (current >= 5) 1.3f else 1f),
+                LocalLayoutDirection provides if (current >= 6) LayoutDirection.Rtl else LayoutDirection.Ltr,
+            ) {
+                val context = androidx.compose.ui.platform.LocalGraphicsContext.current
+                val cached = remember(context) { io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses(context) }
+                val reference = remember(context) { io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses(context) }
+                val firstSource = rememberGraphicsLayer()
+                val secondSource = rememberGraphicsLayer()
+                val sourceEffect = remember {
+                    android.graphics.RenderEffect.createColorFilterEffect(android.graphics.ColorMatrixColorFilter(
+                        android.graphics.ColorMatrix().apply { setSaturation(.3f) })).asComposeRenderEffect()
+                }
+                val pyramid = remember { io.github.neoruaa.glasmio.glass.NativeGlassMipPyramid(
+                    io.github.neoruaa.glasmio.glass.render.RuntimeShaderCacheImpl()) }
+                SideEffect { retained = cached }
+                DisposableEffect(cached, reference) { onDispose { cached.release(); reference.release() } }
+                Canvas(Modifier.requiredSize(160.dp, 96.dp).testTag("owned-mip-scene")) {
+                    assertTrue("Owned source retention requires the hardware renderer",
+                        drawContext.canvas.nativeCanvas.isHardwareAccelerated)
+                    val extent = if (current < 7) androidx.compose.ui.unit.IntSize(64, 48)
+                        else androidx.compose.ui.unit.IntSize(65, 49)
+                    val source = if (current < 2) firstSource else secondSource
+                    source.clip = true
+                    source.renderEffect = if (current >= 3) sourceEffect else null
+                    // Re-record only the child, leaving the cached pyramid's display lists intact.
+                    source.record(this, layoutDirection, extent) {
+                        drawRect(if (current % 2 == 0) Color(0xFF163D74) else Color(0xFFE09B28))
+                        for (x in 0 until extent.width step 7) {
+                            drawRect(Color(0xBBDD3964), Offset(x.toFloat(), 0f), Size(3f, extent.height.toFloat()))
+                        }
+                    }
+                    val atlas = pyramid.atlas(null, extent, 3f)
+                    val fresh = io.github.neoruaa.glasmio.glass.NativeGlassMipAtlas(
+                        atlas.baseSize, atlas.size, atlas.rects, null, atlas.colorManaged,
+                        emptyList(), atlas.textureStages, atlas.textureSource,
+                        nativeGammaStorage = atlas.nativeGammaStorage,
+                    )
+                    var count = 0
+                    var sourceCalls = 0
+                    val actual = cached.recordPyramid(atlas, record = { layer, size, block ->
+                        count++
+                        layer.record(this, layoutDirection, size, block)
+                    }, sourceBlock = { sourceCalls++; drawLayer(source) }, sourceLayer = source, recordingScope = this)
+                    val expected = reference.recordPyramid(fresh, record = { layer, size, block ->
+                        layer.record(this, layoutDirection, size, block)
+                    }, sourceBlock = { drawLayer(source) })
+                    drawRect(Color.White)
+                    drawLayer(if (showReference.value) expected else actual)
+                    recordings[current] += count to sourceCalls
+                }
+            }
+        }
+        var initialColor: Color? = null
+        for (current in recordings.indices) {
+            if (current > 0) compose.runOnIdle {
+                if (current == 8) requireNotNull(retained).release()
+                if (current == 9) requireNotNull(retained).layers(emptyList())
+                phase.value = current
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val (count, sourceCalls) = recordings[current].first()
+                if (current == 1 || current == 10) {
+                    assertEquals("Stable owned graphs must not record any pass at phase $current", 0, count)
+                    assertEquals("Stable owned graphs must not replay their source callback", 0, sourceCalls)
+                } else {
+                    assertTrue("Source, effect, environment or allocation changes must record at phase $current", count > 0)
+                    assertEquals("An invalidated graph records its source once", 1, sourceCalls)
+                }
+            }
+            compose.runOnIdle { showReference.value = true }
+            compose.waitForIdle()
+            val expected = compose.onNodeWithTag("owned-mip-scene").captureToImage().toPixelMap()
+            compose.runOnIdle { showReference.value = false }
+            compose.waitForIdle()
+            val actual = compose.onNodeWithTag("owned-mip-scene").captureToImage().toPixelMap()
+            if (current == 0) initialColor = actual[4, 4]
+            if (current == 1) assertTrue("A retained graph must show its child's new color", initialColor != actual[4, 4])
+            val width = if (current < 7) 64 else 65
+            val height = if (current < 7) 72 else 74
+            for (y in 0 until height) for (x in 0 until width) {
+                assertEquals("Owned source retention must match fresh mips at phase=$current $x,$y", expected[x, y], actual[x, y])
+            }
         }
     }
 
@@ -4791,6 +4889,256 @@ half4 main(half4 src, half4 dst) {
                 roundTripError / (initial.width * initial.height) < 2.0 / 255.0)
         } finally {
             compose.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test
+    fun liquidMenuFieldSnapshotsRetainDistanceAndNormalsAfterLaterUploads() {
+        data class Snapshot(val actual: android.graphics.RenderEffect,
+            val reference: android.graphics.RenderEffect)
+        val selected = mutableStateOf(0 to false)
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                val snapshots = remember {
+                    val program = """
+                        uniform shader content;
+                        uniform shader field;
+                        uniform float2 fieldOrigin;
+                        uniform float inverseStep;
+                        half4 main(float2 point) {
+                            float3 fieldValue = field.eval((point - fieldOrigin) * inverseStep + .5).rgb;
+                            // Preserve distance and both signed optical normals in separate channels.
+                            half4 encoded = half4(.5 + fieldValue.x / 128.0,
+                                .5 + fieldValue.y * .5, .5 + fieldValue.z * .5, 1.0);
+                            return encoded * content.eval(point).aaaa;
+                        }
+                    """.trimIndent()
+                    fun effect(texture: LiquidMenuFieldTexture): android.graphics.RenderEffect {
+                        val shader = android.graphics.RuntimeShader(program)
+                        shader.setInputBuffer("field", requireNotNull(texture.input))
+                        shader.setFloatUniform("fieldOrigin", texture.origin.x, texture.origin.y)
+                        shader.setFloatUniform("inverseStep", 1f / texture.step)
+                        return android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
+                    }
+                    val reused = LiquidMenuFieldTexture()
+                    val retained = listOf(Offset(36f, 36f), Offset(6f, 6f)).map { radii ->
+                        val field = requireNotNull(LiquidMenuContour(
+                            Rect(8f, 8f, 88f, 88f), radii, null, Offset.Zero, 4f,
+                        ).sampledField())
+                        reused.update(field, Offset.Zero)
+                        val actual = effect(reused)
+                        val independent = LiquidMenuFieldTexture().apply { update(field, Offset.Zero) }
+                        Snapshot(actual, effect(independent))
+                    }
+                    // Keep equal texture extents while replacing all distance/normal values before
+                    // any retained effect is submitted. A delayed RenderThread can do this naturally.
+                    reused.update(requireNotNull(LiquidMenuContour(
+                        Rect(8f, 8f, 88f, 88f), Offset(28f, 10f), null, Offset.Zero, 4f,
+                    ).sampledField()), Offset.Zero)
+                    retained
+                }
+                val output = rememberGraphicsLayer()
+                Box(Modifier.requiredSize(96.dp).background(Color.Black).testTag("menu-field-snapshot")
+                    .drawWithContent {
+                        assertTrue("The field snapshot regression requires the hardware renderer",
+                            drawContext.canvas.nativeCanvas.isHardwareAccelerated)
+                        val (index, reference) = selected.value
+                        output.clip = true
+                        output.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                        output.renderEffect = (if (reference) snapshots[index].reference else snapshots[index].actual)
+                            .asComposeRenderEffect()
+                        output.record(this, layoutDirection, androidx.compose.ui.unit.IntSize(96, 96)) {
+                            drawRect(Color.White)
+                        }
+                        drawLayer(output)
+                    })
+            }
+        }
+        repeat(2) { index ->
+            compose.runOnIdle { selected.value = index to true }
+            val reference = compose.onNodeWithTag("menu-field-snapshot").captureToImage()
+            compose.runOnIdle { selected.value = index to false }
+            val actual = compose.onNodeWithTag("menu-field-snapshot").captureToImage()
+            assertTrue("A retained field must preserve its distance and both normals after later uploads: $index",
+                lensPoolPixelDifference(reference, actual) <= 1f / 255f)
+        }
+    }
+
+    @Test
+    fun nativeMenuOpticalOutputSupportMatchesTheFullFilteredPlane() {
+        data class Case(val scale: Float, val closing: Boolean, val dark: Boolean,
+            val transparent: Boolean, val gaussian: Boolean)
+        val cases = listOf(.5f, 1f).flatMap { scale ->
+            listOf(false, true).flatMap { closing ->
+                listOf(false, true).flatMap { dark ->
+                    listOf(false, true).flatMap { transparent ->
+                        listOf(false, true).map { gaussian -> Case(scale, closing, dark, transparent, gaussian) }
+                    }
+                }
+            }
+        }
+        class FixtureScope : BackdropEffectScopeImpl() {
+            override val supportsNativeGlassHardwareLinearSampling = true
+            override val shape = RectangleShape
+        }
+        val selected = mutableStateOf(Triple(0, 0, false))
+        compose.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                val scope = remember { FixtureScope() }
+                val fieldTexture = remember { LiquidMenuFieldTexture() }
+                val source = rememberGraphicsLayer()
+                val filtered = rememberGraphicsLayer()
+                val referenceCopy = rememberGraphicsLayer()
+                val completed = rememberGraphicsLayer()
+                val context = androidx.compose.ui.platform.LocalGraphicsContext.current
+                val passes = remember(context) { io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses(context) }
+                DisposableEffect(passes, scope) { onDispose { passes.release(); scope.reset() } }
+                Box(Modifier.requiredSize(460.dp, 500.dp).testTag("menu-optical-output-support")
+                    .drawWithContent {
+                        assertTrue("The output support comparison requires hardware texture barriers",
+                            drawContext.canvas.nativeCanvas.isHardwareAccelerated)
+                        val (index, clipMode, whiteBackground) = selected.value
+                        val case = cases[index]
+                        val scale = case.scale
+                        val primary = Rect(330.25f, 300.75f, 530.5f, 560.125f)
+                        val secondary = Rect(305.25f, 500.5f, 349.75f, 545.25f).takeIf { case.closing }
+                        val bounds = Rect(secondary?.left ?: primary.left, primary.top, primary.right, primary.bottom)
+                        val radii = Offset(31.25f, 29.75f)
+                        val secondaryRadii = Offset(22.25f, 22.375f)
+                        val contour = LiquidMenuContour(primary, radii, secondary, secondaryRadii, 4.25f)
+                        fieldTexture.update(if (case.gaussian) requireNotNull(contour.sampledField()) else null, Offset.Zero)
+                        // Use the production field implementation with only its coordinate adapter
+                        // supplied here, as in GlassMorphRenderer's private morph scope.
+                        val functions = """
+                            uniform float2 nativeFieldOrigin;
+                            uniform float2 center;
+                            uniform float2 halfSize;
+                            uniform float2 cornerRadii;
+                            uniform float secondaryEnabled;
+                            uniform float2 secondaryCenter;
+                            uniform float2 secondaryHalfSize;
+                            uniform float2 secondaryRadii;
+                            uniform float smoothing;
+                            ${io.github.neoruaa.glasmio.glass.LiquidMorphFieldShader}
+                            float3 navigationGlassField(float2 p) { return liquidFieldGradient(p + nativeFieldOrigin); }
+                            float navigationGlassShadowDistance(float2 p) { return liquidAnalyticFieldGradient(p + nativeFieldOrigin).x; }
+                        """.trimIndent()
+                        val origin = bounds.topLeft * scale
+                        val field = io.github.neoruaa.glasmio.glass.NativeGlassFilterField(functions) { shader ->
+                            shader.setFloatUniform("nativeFieldOrigin", origin.x, origin.y)
+                            shader.setFloatUniform("center", primary.center.x * scale, primary.center.y * scale)
+                            shader.setFloatUniform("halfSize", primary.width * .5f * scale, primary.height * .5f * scale)
+                            shader.setFloatUniform("cornerRadii", radii.x * scale, radii.y * scale)
+                            shader.setFloatUniform("secondaryEnabled", if (secondary == null) 0f else 1f)
+                            val other = secondary ?: primary
+                            shader.setFloatUniform("secondaryCenter", other.center.x * scale, other.center.y * scale)
+                            shader.setFloatUniform("secondaryHalfSize", other.width * .5f * scale, other.height * .5f * scale)
+                            shader.setFloatUniform("secondaryRadii", secondaryRadii.x * scale, secondaryRadii.y * scale)
+                            shader.setFloatUniform("smoothing", 4.25f * scale)
+                            io.github.neoruaa.glasmio.glass.bindLiquidMenuField(shader,
+                                fieldTexture.takeIf { case.gaussian }, Offset(scale, scale))
+                        }
+                        val base = androidx.compose.ui.unit.IntSize((1024f * scale).toInt(), (1024f * scale).toInt())
+                        source.clip = true
+                        source.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                        source.record(this, layoutDirection, base) {
+                            withTransform({ scale(scale, scale, Offset.Zero) }) {
+                                drawRect(Color(.12f, .24f, .39f, if (case.transparent) .24f else 1f), size = Size(1024f, 1024f))
+                                for (x in 0 until 1024 step 17) drawRect(Color(.94f, .18f, .42f, .63f),
+                                    Offset(x.toFloat(), 0f), Size(5f, 1024f))
+                                for (y in 0 until 1024 step 23) drawRect(Color(.18f, .84f, .37f, .72f),
+                                    Offset(0f, y.toFloat()), Size(1024f, 7f))
+                            }
+                        }
+                        scope.size = Size(bounds.width * scale, bounds.height * scale)
+                        scope.density = scale
+                        scope.fontScale = fontScale
+                        scope.layoutDirection = layoutDirection
+                        scope.apply {
+                            nativeNavigationGlassFilter(
+                                profile = io.github.neoruaa.glasmio.glass.navigationGlassGeometryProfile(
+                                    bounds.size.minDimension, NavigationGlassMaterial.RegularMedium),
+                                isDark = case.dark,
+                                blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius.value * scale,
+                                refractionEnabled = false, clear = false, sourceOrigin = origin,
+                                field = field, sourceSize = Size(base.width.toFloat(), base.height.toFloat()))
+                        }
+                        val opticalEffect = requireNotNull(scope.renderEffect)
+                        val atlas = requireNotNull(scope.materializedMipAtlas)
+                        val producer = passes.recordPyramid(atlas,
+                            record = { layer, extent, draw -> layer.record(this, layoutDirection, extent, draw) },
+                            sourceBlock = { drawLayer(source) }, sourceLayer = source, recordingScope = this)
+                        filtered.clip = true
+                        filtered.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                        filtered.renderEffect = opticalEffect
+                        filtered.record(this, layoutDirection, atlas.size) { drawLayer(producer) }
+                        val opticalLayer = if (clipMode == 0) {
+                            // Reproduce the original material-sized offscreen copy in the reference.
+                            referenceCopy.clip = true
+                            referenceCopy.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                            referenceCopy.record(this, layoutDirection, base) { drawLayer(filtered) }
+                            referenceCopy
+                        } else filtered
+                        val lens = if (case.closing) 75f else 18f
+                        val transition = io.github.neoruaa.glasmio.glass.NativeMenuTransitionRefraction(
+                            sampleExtent = base,
+                            drawingBounds = Rect(bounds.left * scale - 1f, bounds.top * scale - 1f,
+                                bounds.right * scale + 1f, bounds.bottom * scale + 1f),
+                            center = primary.center * scale,
+                            halfSize = Size(primary.width * .5f * scale, primary.height * .5f * scale),
+                            height = lens * scale, amount = -lens * scale, hasSecondary = secondary != null)
+                        val completion = io.github.neoruaa.glasmio.glass.NativeGlassCompletion(
+                            recipe = io.github.neoruaa.glasmio.glass.NavigationMaterialRecipe.resolve(case.dark,
+                                NavigationGlassMaterial.RegularMedium), isDark = case.dark, clearFraction = 0f,
+                            shadow = io.github.neoruaa.glasmio.glass.navigationNativeShadowProfile(
+                                bounds.size.minDimension, NavigationGlassMaterial.RegularMedium),
+                            outputSize = bounds.size, outputDensity = 1f, textureScale = scale, highlightAlpha = 1f)
+                        val effect = scope.completeNativeMenuFilteredGlass(base, origin, field, completion, transition)
+                        val full = Rect(0f, 0f, base.width.toFloat(), base.height.toFloat())
+                        val support = transition.drawingBounds.inflate(2f * abs(transition.amount) + 1f)
+                        val opticalOutput = when (clipMode) {
+                            0 -> full
+                            1 -> Rect(maxOf(0f, kotlin.math.floor(support.left)), maxOf(0f, kotlin.math.floor(support.top)),
+                                minOf(full.right, kotlin.math.ceil(support.right)), minOf(full.bottom, kotlin.math.ceil(support.bottom)))
+                            // A deliberately missing half-plane proves that the comparison
+                            // observes A through the real B/completion shader, including alpha.
+                            else -> Rect(0f, 0f, primary.center.x * scale, full.bottom)
+                        }
+                        val outputSize = requireNotNull(scope.materialOutputSize)
+                        val packed = androidx.compose.ui.unit.IntSize(maxOf(base.width, outputSize.width),
+                            maxOf(base.height * 2, outputSize.height))
+                        completed.clip = true
+                        completed.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+                        completed.renderEffect = effect.asComposeRenderEffect()
+                        completed.record(this, layoutDirection, packed) {
+                            clipRect(full.left, full.top, full.right, full.bottom) { drawLayer(source) }
+                            withTransform({ translate(0f, base.height.toFloat()) }) {
+                                clipRect(opticalOutput.left, opticalOutput.top, opticalOutput.right, opticalOutput.bottom) {
+                                    drawLayer(opticalLayer)
+                                }
+                            }
+                        }
+                        drawRect(if (whiteBackground) Color.White else Color.Black)
+                        drawLayer(completed)
+                    })
+            }
+        }
+        val scene = compose.onNodeWithTag("menu-optical-output-support")
+        for ((index, case) in cases.withIndex()) {
+            // Two opaque backgrounds expose both premultiplied color and alpha changes.
+            for (whiteBackground in listOf(false, true)) {
+                compose.runOnIdle { selected.value = Triple(index, 0, whiteBackground) }
+                val reference = scene.captureToImage()
+                compose.runOnIdle { selected.value = Triple(index, 1, whiteBackground) }
+                val actual = scene.captureToImage()
+                assertTrue("Narrow A output must preserve the full native menu completion: $case white=$whiteBackground",
+                    lensPoolPixelDifference(reference, actual) <= 1f / 255f)
+                if (case.closing && case.scale == 1f && !case.transparent && !case.gaussian) {
+                    compose.runOnIdle { selected.value = Triple(index, 2, whiteBackground) }
+                    assertTrue("The fixture must detect missing filtered samples: $case white=$whiteBackground",
+                        lensPoolPixelDifference(reference, scene.captureToImage()) > .02f)
+                }
+            }
         }
     }
 

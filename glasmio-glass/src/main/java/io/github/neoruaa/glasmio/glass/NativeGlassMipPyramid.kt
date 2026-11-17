@@ -210,6 +210,9 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
     )
     private var recordedPyramid: NativeGlassMipAtlas? = null
     private var pyramidContext: RecordingContext? = null
+    private var pyramidSource: GraphicsLayer? = null
+    private var pyramidSourceSize = IntSize.Zero
+    private var pyramidSourceEffect: androidx.compose.ui.graphics.RenderEffect? = null
     private var recordedControl: NativeGlassMipAtlas? = null
     private var controlContext: RecordingContext? = null
     private var controlInput: GraphicsLayer? = null
@@ -427,8 +430,25 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
         inputEffects: List<androidx.compose.ui.graphics.RenderEffect> = emptyList(),
+        // Only private rectangular captures without elevation may retain the complete graph:
+        // drawLayer must not rebuild their outline or toggle the parent's Z recording.
+        // Arbitrary backdrop callbacks still run on every call.
+        sourceLayer: GraphicsLayer? = null,
+        recordingScope: DrawScope? = null,
     ): GraphicsLayer {
         recordedControl = null
+        val directSource = sourceLayer?.takeIf { inputEffects.isEmpty() }
+        val directContext = recordingScope?.recordingContext().takeIf { directSource != null }
+        if (directSource != null && directContext?.hardware == true &&
+            recordedPyramid === atlas && pyramidContext == directContext &&
+            pyramidSource === directSource && pyramidSourceSize == directSource.size &&
+            pyramidSourceEffect === directSource.renderEffect
+        ) {
+            // Retain live RenderNode references rather than freezing source pixels. Child
+            // recordings and filter updates invalidate the GPU graph without dirtying every
+            // unchanged mip/packing display list on each animation frame.
+            return requireNotNull(assembled)
+        }
         var prepared: GraphicsLayer? = null
         for (pass in configureLayers(inputEffects)) {
             val input = prepared
@@ -484,6 +504,9 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         }
         recordedPyramid = atlas
         pyramidContext = environment
+        pyramidSource = directSource.takeIf { directContext?.hardware == true && directContext == environment }
+        pyramidSourceSize = directSource?.size ?: IntSize.Zero
+        pyramidSourceEffect = directSource?.renderEffect
         return output
     }
 
@@ -507,6 +530,9 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         assembled = null
         recordedPyramid = null
         pyramidContext = null
+        pyramidSource = null
+        pyramidSourceSize = IntSize.Zero
+        pyramidSourceEffect = null
         recordedControl = null
         controlContext = null
         controlInput = null
