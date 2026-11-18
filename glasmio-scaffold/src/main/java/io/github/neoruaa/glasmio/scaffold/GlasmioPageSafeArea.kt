@@ -3,8 +3,10 @@ package io.github.neoruaa.glasmio.scaffold
 import android.os.Build
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.captionBar
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalDensity
@@ -13,6 +15,11 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import io.github.neoruaa.glasmio.core.LocalGlasmioHorizontalSafeAreaEnabled
+
+/** Inset shared by page headers and the scroll edge in fullscreen and freeform windows. */
+internal val WindowInsets.Companion.glasmioPageHeaderInsets: WindowInsets
+    @Composable
+    get() = statusBars.union(captionBar.only(WindowInsetsSides.Top))
 
 /** Total body insets; parents that reserve the sidebar have already consumed that space. */
 internal val WindowInsets.Companion.glasmioPageSafeDrawing: WindowInsets

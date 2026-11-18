@@ -21,9 +21,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyListScope
@@ -343,8 +342,8 @@ fun GlasmioPinnedPage(
     val pageBackdrop = rememberLayerBackdrop()
     val colors = LocalGlassColors.current
     val pageBackground = backgroundColor ?: colors.groupedBackground
-    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val toolbarHeight = statusBarHeight + 62.dp
+    val headerInsets = WindowInsets.glasmioPageHeaderInsets
+    val toolbarHeight = headerInsets.asPaddingValues().calculateTopPadding() + 62.dp
     val contentPadding = PaddingValues(
         start = IosPageHorizontalPadding,
         top = toolbarHeight + 10.dp,
@@ -369,7 +368,7 @@ fun GlasmioPinnedPage(
                     title = title,
                     subtitle = subtitle,
                     modifier = Modifier.fillMaxWidth()
-                        .statusBarsPadding().align(Alignment.TopCenter),
+                        .windowInsetsPadding(headerInsets).align(Alignment.TopCenter),
                     collapseProgress = collapseProgress,
                     navigation = onNavigateBack?.let { navigateBack ->
                         {

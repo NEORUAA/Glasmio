@@ -249,7 +249,8 @@ fun GlasmioPageTitle(entryKey: Any, modifier: Modifier = Modifier) {
     val colors = spec.colors ?: LocalGlassColors.current
     CompositionLocalProvider(LocalGlassColors provides colors, LocalContentColor provides colors.content) {
         BoxWithConstraints(modifier.fillMaxWidth().glasmioAdaptiveContent()
-            .statusBarsPadding().height(GlasmioToolbarDefaults.Height).padding(horizontal = IosPageHorizontalPadding)) {
+            .windowInsetsPadding(WindowInsets.glasmioPageHeaderInsets)
+            .height(GlasmioToolbarDefaults.Height).padding(horizontal = IosPageHorizontalPadding)) {
             val availableWidthPx = with(density) { maxWidth.toPx() }
             val safeStartPx = with(density) { (leading.toDp() + if (leading > 0) 8.dp else 0.dp).toPx() }
             val safeEndPx = with(density) { (trailing.toDp() + if (trailing > 0) 8.dp else 0.dp).toPx() }
@@ -339,8 +340,8 @@ fun GlasmioNavigationScaffold(
     }
     titles.hasTopTabs = topBar != null && !(adaptive?.usesTabMorph == true && adaptive.motion.expanded)
     SideEffect { titles.update(frame, source, target) }
-    val status = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val padding = PaddingValues(start = IosPageHorizontalPadding, top = status + 72.dp, end = IosPageHorizontalPadding)
+    val headerTop = WindowInsets.glasmioPageHeaderInsets.asPaddingValues().calculateTopPadding()
+    val padding = PaddingValues(start = IosPageHorizontalPadding, top = headerTop + 72.dp, end = IosPageHorizontalPadding)
     CompositionLocalProvider(LocalPageTitles provides titles) {
     Box(modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().layerBackdrop(backdrop, reuseContent = true).trackBackdropPosition(backdrop)
@@ -355,11 +356,11 @@ fun GlasmioNavigationScaffold(
                 titles,
                 topBar != null,
                 forceTopBarOverflow,
-                Modifier.fillMaxWidth().glasmioAdaptiveContent().padding(top = status),
+                Modifier.fillMaxWidth().glasmioAdaptiveContent().padding(top = headerTop),
             )
             if (topBar != null) {
                 GlasmioTopNavigationSlot(
-                    frame, source, target, titles, status, topBar, topBarPreferredWidth,
+                    frame, source, target, titles, headerTop, topBar, topBarPreferredWidth,
                     forceTopBarOverflow,
                     onOverflowNeeded = { if (!forceTopBarOverflow) forceTopBarOverflow = true },
                     onLayoutWidthChanged = { forceTopBarOverflow = false },
@@ -378,7 +379,7 @@ private fun GlasmioTopNavigationSlot(
     source: GlasmioHeaderSpec,
     target: GlasmioHeaderSpec,
     titles: PageTitleRegistry,
-    status: Dp,
+    headerTop: Dp,
     content: @Composable (Dp) -> Unit,
     preferredWidth: Dp?,
     forceOverflow: Boolean,
@@ -413,7 +414,7 @@ private fun GlasmioTopNavigationSlot(
             lastTrailingSide = trailingSide
         }
     }
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = status).height(GlasmioToolbarDefaults.Height)
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = headerTop).height(GlasmioToolbarDefaults.Height)
         .graphicsLayer { alpha = if (ready || lastLeadingSide > 0.dp || lastTrailingSide > 0.dp) 1f else 0f },
         contentAlignment = Alignment.TopStart,
     ) {
@@ -491,8 +492,8 @@ fun GlasmioPageBody(
     content: @Composable BoxScope.(PaddingValues) -> Unit,
 ) {
     val appearance = LocalGlassAppearance.current
-    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val headerHeight = statusBarHeight + 62.dp
+    val headerTop = WindowInsets.glasmioPageHeaderInsets.asPaddingValues().calculateTopPadding()
+    val headerHeight = headerTop + 62.dp
     val progress = topBarBlurProgress.coerceIn(0f, 1f)
     Box(modifier.fillMaxSize()) {
         Box(
@@ -503,7 +504,7 @@ fun GlasmioPageBody(
                     .then(if (backgroundBrush != null) Modifier.background(backgroundBrush) else Modifier.background(backgroundColor)),
             ) { background?.invoke(this) }
             Box(Modifier.fillMaxSize()
-                .scrollEdgeContentFade(progress, headerHeight, headerTop = statusBarHeight)) {
+                .scrollEdgeContentFade(progress, headerHeight, headerTop = headerTop)) {
                 GlasmioOverscrollHost {
                     Box(Modifier.fillMaxSize()
                         .windowInsetsPadding(glasmioPageHorizontalInsets().add(LocalGlasmioSidebarInsets.current))) {

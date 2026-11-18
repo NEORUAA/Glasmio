@@ -230,6 +230,7 @@ class MainActivity : ComponentActivity() {
                                 )
                                 if (preferences.fpsCounter) DemoFpsCounter(
                                     Modifier.align(Alignment.TopEnd).statusBarsPadding()
+                                        .windowInsetsPadding(WindowInsets.captionBar.only(WindowInsetsSides.Top))
                                         .padding(top = 70.dp, end = 12.dp).testTag("demo-fps-counter"),
                                 )
                             }
@@ -637,7 +638,11 @@ private fun SampleSidebar(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var componentsExpanded by rememberSaveable { mutableStateOf(true) }
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 0.dp)) {
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+            .windowInsetsPadding(WindowInsets.captionBar.only(WindowInsetsSides.Top))
+            .padding(horizontal = 10.dp),
+    ) {
         GlasmioSidebarToolbar(
             leading = { Text("Glasmio", style = IosTypography.headline, modifier = Modifier.padding(start = 12.dp)) },
             trailing = {
