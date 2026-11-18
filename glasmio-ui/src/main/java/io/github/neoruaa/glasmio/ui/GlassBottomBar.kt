@@ -425,7 +425,7 @@ fun <T> GlasmioNavigationBar(
                 pressedScale = 78f / 56f,
                 dragCoordinateSpace = { dragCoordinateSpace.value },
                 onDragStarted = { position ->
-                    selectionPressOrigin.value = compactState.value == 0f
+                    selectionPressOrigin.value = compactState.value < 0.05f
                     val logicalX = if (isLtr) position.x else currentFullWidthPx.value - position.x
                     val geometry = currentExpandedTabs.value
                     val index = ((logicalX - currentPaddingPx.value - geometry.widthPx / 2f) /
@@ -465,7 +465,7 @@ fun <T> GlasmioNavigationBar(
         }
         val onUserSelected: (T) -> Unit = remember(dragAnimation, compactState, stableOnSelected) {
             { key ->
-                selectionPressOrigin.value = compactState.value == 0f
+                selectionPressOrigin.value = compactState.value < 0.05f
                 dragAnimation.press()
                 stableOnSelected(key)
                 dragAnimation.release()
@@ -474,14 +474,14 @@ fun <T> GlasmioNavigationBar(
         LaunchedEffect(selectedIndex, dragAnimation) {
             // Route and preference updates only move the indicator. Navigation callbacks
             // belong to user input, including while the bar is fading out on a detail page.
-            if (dragAnimation.targetValue != selectedIndex.toFloat()) {
-                selectionPressOrigin.value = compactState.value == 0f
+            if (!dragAnimation.isDragging && dragAnimation.targetValue != selectedIndex.toFloat()) {
+                selectionPressOrigin.value = compactState.value < 0.05f
                 dragAnimation.animateToValue(selectedIndex.toFloat(), animatePress = false)
             }
         }
         // Compact input keeps panel feedback without pressing the emerging selection.
         val selectionFeedbackEnabled = remember(compactState, selectionPressOrigin) {
-            derivedStateOf { selectionPressOrigin.value && compactState.value == 0f }
+            derivedStateOf { selectionPressOrigin.value && compactState.value < 0.05f }
         }
         val selectionPressProgressState = remember(dragAnimation, selectionFeedbackEnabled) {
             derivedStateOf { if (selectionFeedbackEnabled.value) dragAnimation.pressProgress else 0f }
@@ -806,13 +806,13 @@ fun <T> GlasmioNavigationBar(
             ) {
                 Modifier
                     .drawPlainBackdrop(
-                        backdrop = if (appearance.usesBackdrop) sourceBackdrop else emptyBackdrop(),
+                        backdrop = if (appearance.usesRefraction) sourceBackdrop else emptyBackdrop(),
                         shape = { Capsule() },
                         effects = {
-                            if (appearance.usesBackdrop) {
+                            if (appearance.usesRefraction) {
                                 nativeControlLens(
                                     style = NativeControlLensStyle.TabBarIndicator,
-                                    liftProgress = if (appearance.usesRefraction) selectionPressProgressState.value else 0f,
+                                    liftProgress = selectionPressProgressState.value,
                                     isDark = !isLight,
                                     liftedContent = tabsBackdrop,
                                 )
@@ -820,7 +820,7 @@ fun <T> GlasmioNavigationBar(
                         },
                         layerBlock = indicatorBackdropLayerBlock,
                         onDrawSurface = {
-                            if (!appearance.usesBackdrop) {
+                            if (!appearance.usesRefraction) {
                                 val indicatorBaseColor = if (isLight) {
                                     Color.Black.copy(alpha = 0.10f)
                                 } else {
@@ -941,7 +941,7 @@ fun <T> GlasmioNavigationBar(
             }
         }
 
-        if (hasSelection && !indicatorSettled && appearance.usesBackdrop) {
+        if (hasSelection && !indicatorSettled && appearance.usesRefraction) {
             CompositionLocalProvider(
                 LocalLiquidTabScale provides lensSourceTabContentScale,
                 LocalViewConfiguration provides navigationViewConfiguration,

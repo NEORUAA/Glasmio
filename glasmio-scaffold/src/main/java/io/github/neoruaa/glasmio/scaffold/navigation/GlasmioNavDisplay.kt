@@ -536,7 +536,7 @@ fun <T : Any> GlasmioNavDisplay(
                     seek.cancel()
                 }
                 transitionState.snapTo(scene)
-            } else if (transitionState.currentState != scene) {
+            } else if (transitionState.currentState != scene || transitionState.targetState != scene) {
                 transitionState.animateTo(scene)
             }
             if (transitionState.currentState == scene && transitionState.targetState == scene) {

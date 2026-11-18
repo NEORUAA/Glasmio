@@ -385,7 +385,7 @@ fun <T> GlasmioTabBar(
             .padding(GlasmioTabBarDefaults.ContentPadding).clip(Capsule())
             .then(panelTransform)) { Labels(interactive = true) }
 
-        if (selectedIndex >= 0 && appearance.usesBackdrop) Row(
+        if (selectedIndex >= 0 && appearance.usesRefraction) Row(
             Modifier.fillMaxSize().clearAndSetSemantics { }.alpha(0f)
                 .layerBackdrop(labelsBackdrop).drawWithContent {
                     if (drawContext.graphicsLayer === labelsBackdrop.graphicsLayer) drawContent()
@@ -415,11 +415,11 @@ fun <T> GlasmioTabBar(
                 }
             }.testTag("LandscapeNavigationLiftedLens")
                 .drawPlainBackdrop(
-                    backdrop = if (appearance.usesBackdrop) indicatorBackdrop else emptyBackdrop(),
+                    backdrop = if (appearance.usesRefraction) indicatorBackdrop else emptyBackdrop(),
                     shape = { Capsule() }, effects = {
-                        if (appearance.usesBackdrop) nativeControlLens(
+                        if (appearance.usesRefraction) nativeControlLens(
                             style = NativeControlLensStyle.TabBarIndicator,
-                            liftProgress = if (appearance.usesRefraction) animation.pressProgress else 0f,
+                            liftProgress = animation.pressProgress,
                             isDark = colors.isDark, liftedContent = labelsBackdrop,
                         )
                     }, layerBlock = {
@@ -427,7 +427,7 @@ fun <T> GlasmioTabBar(
                         scaleX = panelScale() / (1f - (velocity * .75f).coerceIn(-.2f, .2f))
                         scaleY = panelScale() * (1f - (velocity * .25f).coerceIn(-.2f, .2f))
                     }, onDrawSurface = {
-                        if (!appearance.usesBackdrop) drawRect(colors.content.copy(alpha = .1f))
+                        if (!appearance.usesRefraction) drawRect(colors.content.copy(alpha = .1f))
                     },
                 ))
         }

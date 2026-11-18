@@ -97,6 +97,8 @@ class DampedDragAnimation(
     private var releaseGeneration = 0L
     private var nativeLiftStarted: TimeMark? = null
     private var nativeWantsLifted = false
+    var isDragging: Boolean = false
+        private set
 
     private val velocityTracker = VelocityTracker()
 
@@ -120,14 +122,17 @@ class DampedDragAnimation(
                 consumeGestures = consumeGestures,
                 horizontalDragOnly = horizontalDragOnly,
                 onDragStart = { down ->
+                    isDragging = true
                     onDragStarted(down.position)
                     press()
                 },
                 onDragEnd = {
+                    isDragging = false
                     onDragStopped()
                     release()
                 },
                 onDragCancel = {
+                    isDragging = false
                     onDragCancelled()
                     release()
                 }
@@ -223,7 +228,9 @@ class DampedDragAnimation(
                         if (request == targetRequest) velocityAnimation.animateTo(0f, velocityAnimationSpec)
                     }
                 }
-                release()
+                if (animatePress || (!isDragging && (nativeWantsLifted || pressProgressAnimation.targetValue > 0f))) {
+                    release()
+                }
             }
         }
     }

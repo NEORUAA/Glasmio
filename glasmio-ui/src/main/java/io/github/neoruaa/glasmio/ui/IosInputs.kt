@@ -39,6 +39,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kyant.shapes.Capsule
 import kotlinx.coroutines.flow.first
@@ -110,8 +111,16 @@ fun GlasmioTextField(
             keyboardOptions = keyboardOptions,
             keyboardActions = keyboardActions,
             decorationBox = { inner ->
-                if (value.text.isEmpty()) Text(placeholder, style = fieldTextStyle, color = colors.tertiaryContent)
-                inner()
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (value.text.isEmpty()) Text(
+                        placeholder,
+                        style = fieldTextStyle,
+                        color = colors.tertiaryContent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    inner()
+                }
             },
         )
         trailing?.let { trailingContent ->

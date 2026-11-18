@@ -196,8 +196,14 @@ fun GlasmioSidebarSearchField(
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSearch?.invoke() }),
             decorationBox = { field ->
-                Box {
-                    if (query.isEmpty()) Text(placeholder, style = IosTypography.body, color = colors.secondaryContent)
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (query.isEmpty()) Text(
+                        placeholder,
+                        style = IosTypography.body,
+                        color = colors.secondaryContent,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     field()
                 }
             },

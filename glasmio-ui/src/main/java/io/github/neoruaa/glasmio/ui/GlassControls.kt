@@ -150,7 +150,7 @@ fun GlasmioSwitch(
     val currentOnCheckedChange by rememberUpdatedState(onCheckedChange)
     var didDrag by remember { mutableStateOf(false) }
     var fraction by remember { mutableFloatStateOf(if (checked) 1f else 0f) }
-    val animation = remember(scope, enabled, travelPx, ltr) {
+    val animation = remember(scope, travelPx, ltr) {
         DampedDragAnimation(
             animationScope = scope,
             initialValue = fraction,
@@ -199,13 +199,13 @@ fun GlasmioSwitch(
     val thumbBackdrop = rememberCombinedBackdrop(backdrop, trackBackdrop)
     val thumbGlassModifier = remember(thumbBackdrop, animation, appearance, colors.isDark, onColor) {
         Modifier.drawPlainBackdrop(
-            backdrop = if (appearance.usesBackdrop) thumbBackdrop else emptyBackdrop(),
+            backdrop = if (appearance.usesRefraction) thumbBackdrop else emptyBackdrop(),
             shape = { Capsule() },
             effects = {
-                if (appearance.usesBackdrop) {
+                if (appearance.usesRefraction) {
                     nativeControlLens(
                         style = NativeControlLensStyle.SwitchThumb,
-                        liftProgress = if (appearance.usesRefraction) animation.pressProgress else 0f,
+                        liftProgress = animation.pressProgress,
                         isDark = colors.isDark,
                         tint = onColor,
                     )
@@ -218,7 +218,7 @@ fun GlasmioSwitch(
                 scaleY = 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
             },
             onDrawSurface = {
-                if (appearance.reduceTransparency) drawRect(Color.White)
+                if (!appearance.usesRefraction) drawRect(Color.White)
             },
         )
     }
@@ -241,7 +241,7 @@ fun GlasmioSwitch(
     ) {
         Box(
             Modifier
-                .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
+                .then(if (appearance.usesRefraction) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
                 .clip(Capsule())
                 .drawBehind { drawRect(colorLerp(track, onColor, animation.value)) }
                 .size(width = 63.dp, height = 28.dp),
@@ -376,25 +376,32 @@ fun GlasmioSlider(
         val thumbBackdrop = rememberCombinedBackdrop(backdrop, trackBackdrop)
         val thumbGlassModifier = remember(thumbBackdrop, animation, appearance, colors.isDark, accent) {
             Modifier.drawPlainBackdrop(
-                backdrop = if (appearance.usesBackdrop) thumbBackdrop else emptyBackdrop(),
+                backdrop = if (appearance.usesRefraction) thumbBackdrop else emptyBackdrop(),
                 shape = { Capsule() },
                 effects = {
-                    if (appearance.usesBackdrop) {
+                    if (appearance.usesRefraction) {
                         nativeControlLens(
                             style = NativeControlLensStyle.SliderThumb,
-                            liftProgress = if (appearance.usesRefraction) animation.pressProgress else 0f,
+                            liftProgress = animation.pressProgress,
                             isDark = colors.isDark,
                             tint = accent,
                         )
                     }
                 },
                 onDrawSurface = {
-                    if (appearance.reduceTransparency) drawRect(Color.White)
+                    if (!appearance.usesRefraction) {
+                        drawRect(Color.White)
+                        drawRoundRect(
+                            color = Color.Black.copy(alpha = 0.12f),
+                            cornerRadius = CornerRadius(size.height / 2f),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()),
+                        )
+                    }
                 },
             )
         }
         Box(
-            Modifier.then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
+            Modifier.then(if (appearance.usesRefraction) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
                 .fillMaxWidth(),
         ) {
             Box(
@@ -618,13 +625,13 @@ fun <T> GlasmioSegmentedControl(
             }
         }
         val indicatorGlassModifier = remember(indicatorBackdrop, tabsBackdrop, animation, appearance, isLight, indicatorColor) {
-            if (!appearance.usesBackdrop) Modifier else Modifier.drawPlainBackdrop(
+            if (!appearance.usesRefraction) Modifier else Modifier.drawPlainBackdrop(
                 backdrop = indicatorBackdrop,
                 shape = { Capsule() },
                 effects = {
                     nativeControlLens(
                         style = NativeControlLensStyle.SegmentedIndicator,
-                        liftProgress = if (appearance.usesRefraction) animation.pressProgress else 0f,
+                        liftProgress = animation.pressProgress,
                         isDark = !isLight,
                         liftedContent = tabsBackdrop,
                         restingColor = indicatorColor,
@@ -641,7 +648,7 @@ fun <T> GlasmioSegmentedControl(
         // 1. Record the actual track independently from both label planes.
         Box(
             Modifier.fillMaxSize()
-                .then(if (appearance.usesBackdrop) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
+                .then(if (appearance.usesRefraction) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
                 .clip(Capsule())
                 .background(trackColor),
         )
@@ -650,7 +657,7 @@ fun <T> GlasmioSegmentedControl(
                 .fillMaxSize()
                 .clip(Capsule())
                 .drawBehind {
-                    if (appearance.reduceTransparency && selectedIndex >= 0) {
+                    if (!appearance.usesRefraction && selectedIndex >= 0) {
                         val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
                         val pillHeight = indicatorHeight.toPx()
                         drawRoundRect(
@@ -673,7 +680,7 @@ fun <T> GlasmioSegmentedControl(
         }
 
         // 2. Keep the original labels in a separate, unfiltered portal recording.
-        if (appearance.usesBackdrop) Row(
+        if (appearance.usesRefraction) Row(
             Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth()

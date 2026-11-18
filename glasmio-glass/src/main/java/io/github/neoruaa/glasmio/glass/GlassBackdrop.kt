@@ -283,12 +283,13 @@ private class StationaryBackdrop(
 
 /** Share a live, flattened player source between modal glass and its small glass controls. */
 @Composable
-fun rememberRasterizedBackdrop(source: LayerBackdrop): Backdrop {
+fun rememberRasterizedBackdrop(source: LayerBackdrop, enabled: Boolean = true): Backdrop {
     val rasterized = rememberGraphicsLayer()
     val view = LocalView.current
     val sourceFrame = remember(view) { mutableIntStateOf(0) }
-    DisposableEffect(view, sourceFrame) {
-        var frame = 0
+    DisposableEffect(view, sourceFrame, enabled) {
+        if (!enabled) return@DisposableEffect onDispose { }
+        var frame = sourceFrame.intValue
         val listener = ViewTreeObserver.OnPreDrawListener {
             // Only cross-window drawing observes this state; the source stays independent.
             sourceFrame.intValue = ++frame
