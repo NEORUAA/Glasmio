@@ -158,6 +158,69 @@ class SheetMotionTest {
         assertTrue(hidden.visibleTop > layout.containerHeight)
     }
 
+    @Test fun tabletPageWidthAndBottomEdgeAgreeWithNativeLandscapeFrames() {
+        val layout = IosSheetLayout.page(
+            width = 2316f, height = 1512f, safeTop = 20f, safeLeft = 0f, safeBottom = 40f,
+            safeRight = 0f, keyboardBottom = 0f, density = 2f,
+            hasMultipleDetents = true, edgeAttachedInCompactHeight = false,
+        )
+        val anchors = layout.anchors(skipPartiallyExpanded = false)
+        val mediumTop = requireNotNull(anchors.medium)
+        val medium = layout.frame(mediumTop, mediumTop)
+        val large = layout.frame(anchors.large, mediumTop)
+        assertEquals(IosSheetPlacement.Floating, layout.placement)
+        assertEquals(111f, medium.visibleLeft / 2f, 0f)
+        assertEquals(936f, medium.visibleWidth / 2f, 0f)
+        assertEquals(354f, medium.visibleTop / 2f, 0f)
+        assertEquals(54f, large.visibleTop / 2f, 0f)
+        assertEquals(736f, (medium.visibleTop + medium.visibleHeight) / 2f, 0f)
+        assertEquals(736f, (large.visibleTop + large.visibleHeight) / 2f, 0f)
+        val overdrag = layout.frame(large.visibleTop - 15f, mediumTop)
+        assertEquals(large.visibleTop - 15f, overdrag.visibleTop, 0f)
+        assertEquals(large.visibleHeight, overdrag.visibleHeight, 0f)
+    }
+
+    @Test fun widthCanKeepAPortraitSheetAttachedAndShortWindowsRemoveMedium() {
+        fun layout(width: Float, height: Float, side: Float = 0f, edgeAttached: Boolean = false) =
+            IosSheetLayout.page(
+                width = width, height = height, safeTop = 0f, safeLeft = side, safeBottom = 20f,
+                safeRight = side, keyboardBottom = 0f, density = 1f,
+                hasMultipleDetents = true, edgeAttachedInCompactHeight = edgeAttached,
+            )
+        val narrow = layout(756f, 1158f)
+        assertEquals(IosSheetPlacement.Bottom, narrow.placement)
+        assertTrue(narrow.anchors(skipPartiallyExpanded = false).medium != null)
+        val phone = layout(844f, 390f, 47f)
+        assertEquals(IosSheetPlacement.FullScreen, phone.placement)
+        assertEquals(null, phone.anchors(skipPartiallyExpanded = false).medium)
+        assertEquals(844f, phone.naturalWidth, 0f)
+        val attached = layout(844f, 390f, 47f, edgeAttached = true)
+        assertEquals(IosSheetPlacement.CompactEdge, attached.placement)
+        assertEquals(750f, attached.naturalWidth, 0f)
+        assertEquals(47f, attached.naturalLeft, 0f)
+    }
+
+    @Test fun fittedTabletSheetStaysCenteredWithAsymmetricInsetsAndLiftsAboveKeyboard() {
+        val density = 2.625f
+        val windowWidth = 2520f
+        val cutoutInset = 105f
+        val keyboardBottom = 520f
+        for ((safeLeft, safeRight) in listOf(0f to cutoutInset, cutoutInset to 0f)) {
+            val layout = IosSheetLayout.page(
+                width = windowWidth, height = 1680f, safeTop = 63f, safeLeft = safeLeft, safeBottom = 42f,
+                safeRight = safeRight, keyboardBottom = keyboardBottom, density = density,
+                hasMultipleDetents = false, edgeAttachedInCompactHeight = false,
+            )
+            val anchors = layout.anchors(skipPartiallyExpanded = true, fitContentHeight = 360f)
+            val sheet = layout.frame(anchors.large, anchors.large, fullHeightDetentAvailable = false)
+            assertEquals(IosSheetPlacement.Floating, layout.placement)
+            assertEquals(windowWidth / 2f, sheet.visibleLeft + sheet.visibleWidth / 2f, 0f)
+            assertEquals(cutoutInset + 25f * density, sheet.visibleLeft, 0f)
+            assertEquals(360f, sheet.visibleHeight, 0f)
+            assertEquals(1680f - keyboardBottom, sheet.visibleTop + sheet.visibleHeight, 0f)
+        }
+    }
+
     @Test fun fittedShortPanelKeepsItsFloatingFrameAndCompactHeightDropsMedium() {
         val layout = IosSheetLayout(1125f, 2436f, fullTop = 150f, safeBottom = 102f, density = 3f)
         val fitted = layout.anchors(skipPartiallyExpanded = true, fitContentHeight = 600f)
@@ -281,6 +344,40 @@ class SheetMotionTest {
         assertEquals(GlasmioSheetValue.Large, state.currentValue)
         assertEquals(1f, state.progress, 0f)
         assertEquals(1f, state.presentationProgress, 0f)
+    }
+
+    @Test fun resizingRestoresTheRequestedMediumAfterItsTemporaryLargeFallback() = runBlocking(SheetFrameClock()) {
+        val confirmations = mutableListOf<GlasmioSheetValue>()
+        val state = GlasmioSheetState(skipPartiallyExpanded = false) {
+            confirmations.add(it)
+            true
+        }
+        val compact = GlasmioSheetAnchors(hidden = 400f, large = 40f)
+        state.updateAnchors(anchors)
+        val opening = launch(start = CoroutineStart.UNDISPATCHED) { state.show() }
+        state.updateAnchors(compact)
+        assertEquals(GlasmioSheetValue.Large, state.presentationDetent)
+        assertEquals(GlasmioSheetValue.Large, state.targetValue)
+        opening.join()
+        assertFalse(state.hasMediumDetent)
+        assertEquals(GlasmioSheetValue.Large, state.currentValue)
+        assertEquals(compact.large, state.offset, 0f)
+        assertEquals(listOf(GlasmioSheetValue.Medium), confirmations)
+
+        state.dragBy(16f)
+        state.cancelDrag()
+        state.updateAnchors(anchors)
+        assertTrue(state.hasMediumDetent)
+        assertEquals(GlasmioSheetValue.Medium, state.currentValue)
+        assertEquals(GlasmioSheetValue.Medium, state.targetValue)
+        assertEquals(requireNotNull(anchors.medium), state.offset, 0f)
+
+        state.updateAnchors(compact)
+        state.expand()
+        state.updateAnchors(anchors)
+        assertEquals(GlasmioSheetValue.Large, state.currentValue)
+        assertEquals(anchors.large, state.offset, 0f)
+        assertEquals(GlasmioSheetValue.Large, confirmations.last())
     }
 
     @Test fun resizingDuringOverdragKeepsTheNextFingerDeltaContinuous() = runBlocking(SheetFrameClock()) {

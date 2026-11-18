@@ -73,10 +73,13 @@ class GlasmioSheetState(
         }
     }
 
-    var currentValue by mutableStateOf(GlasmioSheetValue.Hidden)
+    private var settledDetent by mutableStateOf(GlasmioSheetValue.Hidden)
+    internal var requestedDetent by mutableStateOf(GlasmioSheetValue.Hidden)
         private set
-    var targetValue by mutableStateOf(GlasmioSheetValue.Hidden)
-        private set
+    private var controllerDetent by mutableStateOf<GlasmioSheetValue?>(null)
+
+    val currentValue: GlasmioSheetValue get() = availableDetent(settledDetent)
+    val targetValue: GlasmioSheetValue get() = availableDetent(requestedDetent)
     var offset by mutableFloatStateOf(0f)
         private set
     var velocity by mutableFloatStateOf(0f)
@@ -89,8 +92,7 @@ class GlasmioSheetState(
      * A presentation controller translates the chosen platter without traversing other detents.
      * A finished dismissal retains this value until the presenter removes its window.
      */
-    var presentationDetent by mutableStateOf<GlasmioSheetValue?>(null)
-        private set
+    val presentationDetent: GlasmioSheetValue? get() = controllerDetent?.let(::availableDetent)
 
     private var anchors by mutableStateOf<GlasmioSheetAnchors?>(null)
     private var density = 1f
@@ -142,9 +144,6 @@ class GlasmioSheetState(
         if (previous == resolved) return
         this.anchors = resolved
         anchorsRevision++
-        targetValue = resolve(targetValue, resolved)
-        currentValue = resolve(currentValue, resolved)
-        presentationDetent = presentationDetent?.let { resolve(it, resolved) }
         when {
             previous == null -> offset = resolved.hidden
             isDragging -> {
@@ -153,13 +152,13 @@ class GlasmioSheetState(
                 Unit
             }
             isAnimationRunning -> Unit // The animation observes the new target next frame.
-            else -> offset = resolved.offsetOf(currentValue)
+            else -> offset = resolved.offsetOf(settledDetent)
         }
         rawOffset = if (isDragging) unconstrainedOffset(resolved) else offset
     }
 
     suspend fun show() {
-        val resting = presentationDetent?.takeIf { controllerClosing && isVisible } ?: if (initialValue == GlasmioSheetValue.Hidden) {
+        val resting = controllerDetent?.takeIf { controllerClosing && isVisible } ?: if (initialValue == GlasmioSheetValue.Hidden) {
             if (skipPartiallyExpanded) GlasmioSheetValue.Large else GlasmioSheetValue.Medium
         } else initialValue
         animateRequested(resting, velocity, presentationMotion = true, restingDetent = resting)
@@ -185,29 +184,29 @@ class GlasmioSheetState(
         presentationMotion: Boolean,
         restingDetent: GlasmioSheetValue? = null,
     ) {
-        val geometry = anchors ?: snapshotFlow { anchors }.filterNotNull().first()
-        val destination = resolve(value, geometry)
-        if (!confirmValueChange(destination)) return
+        if (anchors == null) snapshotFlow { anchors }.filterNotNull().first()
+        val requested = if (skipPartiallyExpanded && value == GlasmioSheetValue.Medium) GlasmioSheetValue.Large else value
+        if (!confirmValueChange(availableDetent(requested))) return
         animateConfirmed(
-            destination, initialVelocity.takeIf { it.isFinite() } ?: 0f,
+            requested, initialVelocity.takeIf { it.isFinite() } ?: 0f,
             presentationMotion = presentationMotion,
-            restingDetent = restingDetent?.let { resolve(it, geometry) },
+            restingDetent = restingDetent,
         )
     }
 
     fun beginDrag() {
         val geometry = anchors ?: return
         if (!isVisible || isDragging) return
-        dragOrigin = presentationDetent ?: if (targetValue == GlasmioSheetValue.Hidden) {
+        dragOrigin = controllerDetent ?: if (requestedDetent == GlasmioSheetValue.Hidden) {
             IosSheetMotion.closestValue(offset, 0f, geometry, false, density)
-        } else targetValue
+        } else requestedDetent
         dragDismissible = confirmValueChange(GlasmioSheetValue.Hidden)
         generation++
         animationJob?.cancel()
         animationJob = null
         isAnimationRunning = false
         isDragging = true
-        presentationDetent = null
+        controllerDetent = null
         controllerDimmingActive = false
         controllerClosing = false
         controllerDimmingVelocity = 0f
@@ -248,7 +247,7 @@ class GlasmioSheetState(
         val geometry = anchors ?: return
         val releaseVelocity = velocityPxPerSecond.takeIf { it.isFinite() } ?: 0f
         val candidate = IosSheetMotion.closestValue(rawOffset, releaseVelocity, geometry, dragDismissible, density)
-        val destination = if (confirmValueChange(candidate)) candidate else resolve(dragOrigin, geometry)
+        val destination = if (confirmValueChange(candidate)) candidate else dragOrigin
         val lower = if (dragDismissible) geometry.hidden else geometry.medium ?: geometry.large
         val constrainedVelocity = IosSheetMotion.constrainedReleaseVelocity(
             releaseVelocity, rawOffset, geometry.large, lower,
@@ -264,16 +263,15 @@ class GlasmioSheetState(
 
     suspend fun cancelDrag() {
         if (!isDragging) return
-        val geometry = anchors ?: return
-        animateConfirmed(resolve(dragOrigin, geometry), 0f)
+        animateConfirmed(dragOrigin, 0f)
     }
 
-    private fun resolve(value: GlasmioSheetValue, anchors: GlasmioSheetAnchors): GlasmioSheetValue =
-        if (value == GlasmioSheetValue.Medium && anchors.medium == null) GlasmioSheetValue.Large else value
+    private fun availableDetent(value: GlasmioSheetValue): GlasmioSheetValue =
+        if (value == GlasmioSheetValue.Medium && anchors?.medium == null) GlasmioSheetValue.Large else value
 
-    private fun visibleRestingDetent(): GlasmioSheetValue = presentationDetent
-        ?: targetValue.takeIf { it != GlasmioSheetValue.Hidden }
-        ?: currentValue.takeIf { it != GlasmioSheetValue.Hidden }
+    private fun visibleRestingDetent(): GlasmioSheetValue = controllerDetent
+        ?: requestedDetent.takeIf { it != GlasmioSheetValue.Hidden }
+        ?: settledDetent.takeIf { it != GlasmioSheetValue.Hidden }
         ?: initialValue.takeIf { it != GlasmioSheetValue.Hidden }
         ?: if (skipPartiallyExpanded) GlasmioSheetValue.Large else GlasmioSheetValue.Medium
 
@@ -315,20 +313,20 @@ class GlasmioSheetState(
         animationJob = coroutineContext.job
         isDragging = false
         isAnimationRunning = true
-        targetValue = value
+        requestedDetent = value
         velocity = initialVelocity
         if (releaseNudge && velocity != 0f && offset == requireNotNull(anchors).offsetOf(value)) {
             // HyperAnimator disambiguates a zero-distance release by one millisecond of motion.
             offset += velocity * 0.001f
         }
         if (presentationMotion) {
-            presentationDetent = restingDetent ?: visibleRestingDetent()
+            controllerDetent = restingDetent ?: visibleRestingDetent()
             controllerClosing = value == GlasmioSheetValue.Hidden
             controllerDimming = initialDimming
             controllerDimmingVelocity = initialDimmingVelocity
             controllerDimmingActive = true
         } else {
-            presentationDetent = null
+            controllerDetent = null
             controllerClosing = false
             controllerDimmingActive = false
             controllerDimmingVelocity = 0f
@@ -368,13 +366,13 @@ class GlasmioSheetState(
             if (token == generation) {
                 offset = requireNotNull(anchors).offsetOf(targetValue)
                 rawOffset = offset
-                currentValue = targetValue
+                settledDetent = requestedDetent
                 velocity = 0f
                 if (presentationMotion) {
                     controllerDimming = dimmingTarget
                     controllerDimmingVelocity = 0f
                     if (targetValue != GlasmioSheetValue.Hidden) {
-                        presentationDetent = null
+                        controllerDetent = null
                         controllerClosing = false
                         controllerDimmingActive = false
                     }
@@ -401,7 +399,7 @@ fun rememberGlasmioSheetState(
         skipPartiallyExpanded, initialValue,
         saver = Saver(
             save = { state: GlasmioSheetState ->
-                (if (state.targetValue == GlasmioSheetValue.Hidden) initialValue else state.targetValue).name
+                (if (state.requestedDetent == GlasmioSheetValue.Hidden) initialValue else state.requestedDetent).name
             },
             restore = { saved: String ->
                 GlasmioSheetState(skipPartiallyExpanded, GlasmioSheetValue.valueOf(saved)) { confirm(it) }

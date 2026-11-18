@@ -26,7 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -46,6 +46,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -106,8 +107,6 @@ private fun resolveSheetHorizontalInsets(
     layoutDirection: LayoutDirection,
     view: android.view.View,
 ): WindowInsets {
-    if (!LocalGlasmioHorizontalSafeAreaEnabled.current) return WindowInsets(0, 0, 0, 0)
-
     // Bottom sheets live in a separate edge-to-edge Dialog window. On some Android builds that
     // window reports zero Compose safeDrawing values, so retain the display-wide metrics fallback.
     val composeLeft = WindowInsets.glasmioSafeDrawing.getLeft(density, layoutDirection)
@@ -141,8 +140,7 @@ private fun resolveSheetHorizontalInsets(
         metricsPlatformInsets?.right ?: 0,
         metricsCutout?.safeInsetRight ?: 0,
     )
-    val horizontalSafeZone = maxOf(left, right)
-    return WindowInsets(left = horizontalSafeZone, top = 0, right = horizontalSafeZone, bottom = 0)
+    return WindowInsets(left = left, top = 0, right = right, bottom = 0)
 }
 
 /** Safe content spacing for a sheet with a pinned [GlasmioBottomSheet] top bar.
@@ -174,6 +172,7 @@ private class SheetDragInteractions : MutableInteractionSource {
  * to keep initial scroll content and footer controls clear of the pinned bar and system insets.
  * [topBarBlurProgress] defaults to hidden; drive it from the content's scroll-edge progress.
  * [contentBackground] stays visible while scrollable foreground fades beneath [topBar].
+ * Short windows use a full-screen modal.
  */
 @Composable
 fun GlasmioBottomSheet(
@@ -193,6 +192,51 @@ fun GlasmioBottomSheet(
     topBar: (@Composable () -> Unit)? = null,
     topBarBlurProgress: Float = 0f,
     contentBackground: (@Composable BoxScope.() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) = GlasmioBottomSheet(
+    onDismissRequest = onDismissRequest,
+    modifier = modifier,
+    skipPartiallyExpanded = skipPartiallyExpanded,
+    backdrop = backdrop,
+    contentWindowInsets = contentWindowInsets,
+    sheetState = sheetState,
+    contentNavigationBarInsets = contentNavigationBarInsets,
+    visible = visible,
+    fitContent = fitContent,
+    dismissOnClickOutside = dismissOnClickOutside,
+    dismissOnBackPress = dismissOnBackPress,
+    prefersScrollingExpandsWhenScrolledToEdge = prefersScrollingExpandsWhenScrolledToEdge,
+    title = title,
+    topBar = topBar,
+    topBarBlurProgress = topBarBlurProgress,
+    contentBackground = contentBackground,
+    edgeAttachedInCompactHeight = false,
+    content = content,
+)
+
+/**
+ * Presents a modal sheet with explicit control over placement in short windows.
+ * Set [edgeAttachedInCompactHeight] to use a bottom sheet within the horizontal safe area.
+ */
+@Composable
+fun GlasmioBottomSheet(
+    onDismissRequest: () -> Unit,
+    modifier: Modifier = Modifier,
+    skipPartiallyExpanded: Boolean = true,
+    backdrop: Backdrop = LocalBlurBackdrop.current,
+    contentWindowInsets: @Composable () -> WindowInsets = { WindowInsets.statusBars.union(WindowInsets.ime) },
+    sheetState: GlasmioSheetState = rememberGlasmioSheetState(skipPartiallyExpanded),
+    contentNavigationBarInsets: @Composable () -> WindowInsets = { WindowInsets.navigationBars },
+    visible: Boolean = true,
+    fitContent: Boolean = false,
+    dismissOnClickOutside: Boolean = true,
+    dismissOnBackPress: Boolean = true,
+    prefersScrollingExpandsWhenScrolledToEdge: Boolean = true,
+    title: String = "Sheet",
+    topBar: (@Composable () -> Unit)? = null,
+    topBarBlurProgress: Float = 0f,
+    contentBackground: (@Composable BoxScope.() -> Unit)? = null,
+    edgeAttachedInCompactHeight: Boolean,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -255,29 +299,37 @@ fun GlasmioBottomSheet(
             onDispose { }
         }
         GlasmioTextEditingWindow(backdrop) {
-            BoxWithConstraints(Modifier.fillMaxSize()) {
+            BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = AbsoluteAlignment.TopLeft) {
                 val density = LocalDensity.current
                 val heightPx = constraints.maxHeight.toFloat()
                 val widthPx = constraints.maxWidth.toFloat()
                 val insets = contentWindowInsets()
                 val topInset = insets.getTop(density).toFloat()
                 val lowerInset = insets.getBottom(density).toFloat()
-                val navigationInsets = contentNavigationBarInsets().let {
-                    if (LocalGlasmioHorizontalSafeAreaEnabled.current) it
-                    else it.only(WindowInsetsSides.Vertical)
-                }
+                val navigationInsets = contentNavigationBarInsets()
                 val safeBottom = navigationInsets.getBottom(density).toFloat()
+                val view = LocalView.current
+                val layoutDirection = LocalLayoutDirection.current
+                val hardwareInsets = resolveSheetHorizontalInsets(density, layoutDirection, view)
+                val hardwareLeft = hardwareInsets.getLeft(density, layoutDirection).toFloat()
+                val hardwareRight = hardwareInsets.getRight(density, layoutDirection).toFloat()
                 var measuredContentHeight by remember { mutableStateOf(0) }
-                val contentSized = fitContent && sheetState.skipPartiallyExpanded
-                val effectiveHeight = max(1f, heightPx - lowerInset)
-                val layout = IosSheetLayout(
-                    containerWidth = widthPx,
-                    containerHeight = effectiveHeight,
-                    fullTop = min(topInset, effectiveHeight - 1f),
+                val layout = IosSheetLayout.page(
+                    width = widthPx,
+                    height = heightPx,
+                    safeTop = topInset,
+                    safeLeft = hardwareLeft,
                     safeBottom = safeBottom,
+                    safeRight = hardwareRight,
+                    keyboardBottom = lowerInset,
                     density = density.density,
-                    compactHeight = heightPx <= widthPx,
+                    hasMultipleDetents = !sheetState.skipPartiallyExpanded,
+                    edgeAttachedInCompactHeight = edgeAttachedInCompactHeight,
                 )
+                val fullScreen = layout.placement == IosSheetPlacement.FullScreen
+                val floating = layout.placement == IosSheetPlacement.Floating
+                val compactEdge = layout.placement == IosSheetPlacement.CompactEdge
+                val contentSized = fitContent && sheetState.skipPartiallyExpanded && !fullScreen
                 val anchors = layout.anchors(
                     sheetState.skipPartiallyExpanded,
                     measuredContentHeight.takeIf { contentSized && it > 0 }?.toFloat(),
@@ -331,8 +383,8 @@ fun GlasmioBottomSheet(
                 Box(
                     Modifier.fillMaxSize()
                         .graphicsLayer { alpha = sheetState.presentationProgress }
-                        .background(Color.Black.copy(alpha = 0.2f))
-                        .then(if (dismissOnClickOutside) Modifier.clickable(
+                        .background(Color.Black.copy(alpha = if (colors.isDark) 0.48f else 0.2f))
+                        .then(if (dismissOnClickOutside && !fullScreen) Modifier.clickable(
                             interactionSource = null, indication = null, onClick = dismiss,
                         ) else Modifier),
                 )
@@ -352,22 +404,27 @@ fun GlasmioBottomSheet(
                         if (controllerTop != null) IosSheetPresentationMotion else IosSheetMotion.materialSpringSpec(),
                     )
                 }
-                val surfaceHeight = if (contentSized) max(1f, effectiveHeight - layout.fullTop) else frame.naturalHeight
-                val systemInsets = LocalView.current.rootWindowInsets
+                val surfaceHeight = if (contentSized) layout.containerHeight - layout.fullTop else frame.naturalHeight
+                val systemInsets = view.rootWindowInsets
                 val minimumBottom = with(density) { 20.dp.toPx() }
                 val bottomLeft = max(minimumBottom,
                     (systemInsets?.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT)?.radius ?: 0) - frame.sideInset)
                 val bottomRight = max(minimumBottom,
                     (systemInsets?.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT)?.radius ?: 0) - frame.sideInset)
-                val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
-                val shape = if (frame.capsularProgress > 0f) {
-                    ContinuousRoundedRectangle(with(density) { (frame.naturalHeight / 2f).toDp() })
-                } else ContinuousRoundedRectangle(
-                    topStart = 38.dp,
-                    topEnd = 38.dp,
-                    bottomStart = with(density) { (if (isLtr) bottomLeft else bottomRight).toDp() },
-                    bottomEnd = with(density) { (if (isLtr) bottomRight else bottomLeft).toDp() },
-                )
+                val isLtr = layoutDirection == LayoutDirection.Ltr
+                val shape = when {
+                    fullScreen -> RectangleShape
+                    frame.capsularProgress > 0f ->
+                        ContinuousRoundedRectangle(with(density) { (frame.naturalHeight / 2f).toDp() })
+                    floating -> ContinuousRoundedRectangle(32.dp)
+                    compactEdge -> ContinuousRoundedRectangle(topStart = 38.dp, topEnd = 38.dp)
+                    else -> ContinuousRoundedRectangle(
+                        topStart = 38.dp,
+                        topEnd = 38.dp,
+                        bottomStart = with(density) { (if (isLtr) bottomLeft else bottomRight).toDp() },
+                        bottomEnd = with(density) { (if (isLtr) bottomRight else bottomLeft).toDp() },
+                    )
+                }
                 val dragInteractions = remember { SheetDragInteractions() }
                 val contentMaterial = IosSheetMaterialContext(
                     isDark = colors.isDark,
@@ -381,11 +438,11 @@ fun GlasmioBottomSheet(
                 CompositionLocalProvider(LocalIosSheetMaterialContext provides contentMaterial) {
                 GlasmioSheetSurface(
                     modifier = Modifier
-                        .offset {
-                            IntOffset(frame.sideInset.roundToInt(),
+                        .absoluteOffset {
+                            IntOffset(frame.visibleLeft.roundToInt(),
                                 (frame.visibleTop + if (controllerTop != null) sheetState.offset - controllerTop else 0f).roundToInt())
                         }
-                        .width(with(density) { widthPx.toDp() })
+                        .width(with(density) { layout.naturalWidth.toDp() })
                         .graphicsLayer {
                             alpha = if (!sheetState.hasAnchors || contentSized && measuredContentHeight == 0) 0f else 1f
                             scaleX = frame.scale
@@ -396,7 +453,7 @@ fun GlasmioBottomSheet(
                         .draggable(
                             state = rememberDraggableState { sheetState.dragBy(it) },
                             orientation = Orientation.Vertical,
-                            enabled = visible,
+                            enabled = visible && !fullScreen,
                             interactionSource = dragInteractions,
                             startDragImmediately = sheetState.isAnimationRunning,
                             onDragStarted = { sheetState.beginDrag() },
@@ -404,14 +461,17 @@ fun GlasmioBottomSheet(
                                 if (dragInteractions.cancelled) sheetState.cancelDrag() else sheetState.endDrag(it)
                             },
                         )
-                        .nestedScroll(nestedScroll)
+                        .then(if (fullScreen) Modifier else Modifier.nestedScroll(nestedScroll))
                         .semantics {
                             paneTitle = title
                             stateDescription = sheetState.currentValue.name
                             dismiss { dismiss(); true }
-                            expand { scope.launch { sheetState.expand() }; true }
-                            if (sheetState.hasMediumDetent) collapse {
-                                scope.launch { sheetState.partialExpand() }; true
+                            if (sheetState.hasMediumDetent) {
+                                if (sheetState.currentValue == GlasmioSheetValue.Large) {
+                                    collapse { scope.launch { sheetState.partialExpand() }; true }
+                                } else {
+                                    expand { scope.launch { sheetState.expand() }; true }
+                                }
                             }
                         },
                     backdrop = backdrop,
@@ -425,24 +485,29 @@ fun GlasmioBottomSheet(
                     val sheetBackplate = LocalIosSheetBackdrop.current
                     val appearance = LocalGlassAppearance.current
                     var toolbarHeight by remember(density.density) { mutableStateOf(with(density) { 54.dp.roundToPx() }) }
-                    val handleHeight = 20.dp
+                    val handleHeight = if (fullScreen) with(density) { topInset.toDp() } else 20.dp
                     val headerHeight = handleHeight + with(density) { toolbarHeight.toDp() }
+                    val bottomContentInset = if (floating) 0f else safeBottom
                     val chromePadding = if (topBar != null) PaddingValues(
                         top = headerHeight,
-                        bottom = with(density) { safeBottom.toDp() },
+                        bottom = with(density) { bottomContentInset.toDp() },
                     ) else PaddingValues()
-                    val sheetHorizontalInsets = resolveSheetHorizontalInsets(
-                        density = density,
-                        layoutDirection = LocalLayoutDirection.current,
-                        view = LocalView.current,
+                    val horizontalSafeAreaEnabled = LocalGlasmioHorizontalSafeAreaEnabled.current
+                    val horizontalSafeZone = if (horizontalSafeAreaEnabled && !floating && !compactEdge) {
+                        max(hardwareLeft, hardwareRight).roundToInt()
+                    } else 0
+                    val sheetHorizontalInsets = WindowInsets(
+                        left = horizontalSafeZone, top = 0, right = horizontalSafeZone, bottom = 0,
                     )
+                    val sheetVerticalInsets = if (floating) WindowInsets(0, 0, 0, 0)
+                        else navigationInsets.only(WindowInsetsSides.Vertical)
                     Layout(
                         modifier = Modifier.clip(shape),
                         content = {
                             if (topBar == null) {
-                                Column(Modifier.fillMaxWidth().windowInsetsPadding(navigationInsets.only(WindowInsetsSides.Vertical))) {
+                                Column(Modifier.fillMaxWidth().windowInsetsPadding(sheetVerticalInsets)) {
                                     Box(Modifier.fillMaxWidth().height(handleHeight), contentAlignment = Alignment.TopCenter) {
-                                        Box(
+                                        if (!fullScreen) Box(
                                             Modifier.padding(top = 6.dp).size(60.dp, 4.dp)
                                                 .background(colors.tertiaryContent.copy(alpha = 0.55f), Capsule()),
                                         )
@@ -484,12 +549,19 @@ fun GlasmioBottomSheet(
                                                 alpha = topBarBlurProgress.coerceIn(0f, 1f)
                                             }.background(chromeColors.groupedBackground.copy(alpha = 1f))),
                                     )
-                                    Box(Modifier.fillMaxWidth().padding(top = handleHeight).onSizeChanged { toolbarHeight = it.height }) {
+                                    Box(
+                                        Modifier.fillMaxWidth()
+                                            .padding(top = handleHeight)
+                                            .then(if (fullScreen && horizontalSafeAreaEnabled) {
+                                                Modifier.windowInsetsPadding(hardwareInsets)
+                                            } else Modifier)
+                                            .onSizeChanged { toolbarHeight = it.height },
+                                    ) {
                                         CompositionLocalProvider(LocalGlassBackdrop provides chromeBackdrop) {
                                             topBar()
                                         }
                                     }
-                                    Box(Modifier.fillMaxWidth().height(handleHeight), contentAlignment = Alignment.TopCenter) {
+                                    if (!fullScreen) Box(Modifier.fillMaxWidth().height(handleHeight), contentAlignment = Alignment.TopCenter) {
                                         Box(Modifier.padding(top = 6.dp).size(60.dp, 4.dp)
                                             .background(colors.tertiaryContent.copy(alpha = 0.55f), Capsule()))
                                     }

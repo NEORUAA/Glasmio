@@ -507,6 +507,47 @@ are retained in `iphone/separator-text-material-summary.json`.
 
 ## Android implementation and optical mapping
 
+### Adaptive page-sheet geometry
+
+UIKitCore from the installed iOS/iPadOS 27.2 Simulator image (build
+`24B8117`, UUID `DCD2FE69-E811-31F4-A724-F7F1A047154C`) was extracted
+and inspected with IDA Pro. The [analysis](../.local-research/ios/adaptive-sheet/geometry/FINDINGS.md)
+records the width, attachment, margins and compact-height branches. JSONL
+measurements from the [UIKit probe](../.local-research/ios/adaptive-sheet/probe)
+record the actual container, presentation frame, appearance, and grabber.
+
+| Window in points | Presentation | Medium frame | Large frame |
+| --- | --- | --- | --- |
+| iPad mini portrait, 756 × 1158 | Bottom-attached | (8, 524.03, 740, 625.97) | (0, 32, 756, 1126) |
+| iPad mini landscape, 1158 × 756 | Floating | (111, 354, 936, 382) | (111, 54, 936, 682) |
+| 13-inch iPad Air landscape, 1366 × 1024 | Floating | (215, 472, 936, 532) | (215, 54, 936, 950) |
+| iPhone 17e landscape, 844 × 390 | Full-screen | Unavailable | (0, 0, 844, 390) |
+| iPhone 17e landscape, explicit edge attachment | Bottom-attached | Unavailable | (47, 0, 750, 390) |
+
+The floating tablet frames above use two configured detents. A single detent
+uses the larger of the two vertical safe insets at both edges. The observed
+single Large frames begin 10 pt lower. Medium and Large keep the same width
+and bottom edge. The floating frame has no scale transform, and its content
+sits above the bottom safe area. An explicit 240 pt floating detent measures
+240 pt, with its lower edge in the same place. UIKit's floating radius is
+32 pt, with short detents switching to a capsule. The native black dimmer
+uses alpha 0.20 in light appearance and 0.48 in dark appearance.
+
+UIKit's separate form-sheet mode uses preferred content size. In the
+iPad mini landscape probe its default Large frame was (289, 64, 580, 640),
+and a form with Medium and Large configured used the same 580 pt width
+for both. Glasmio's `GlasmioBottomSheet` follows the page-sheet mode.
+
+Glasmio centers the floating platter in the window and caps its width at 936dp.
+It reserves the larger horizontal hardware inset on both sides. When the
+remaining width reaches 840dp, the platter fits with an additional 25dp
+margin or more on each side.
+The measured tablet scene-bar clearance maps to 44dp above the Android
+top inset. Android windows under 480dp tall use the compact-height
+branch. Apple's width comes from readable text metrics and can vary with
+typography. Its top margin also depends on the UIKit scene bar. The
+Compose window draws with Glasmio's existing surface and content roles.
+
 `GlasmioSheetState` owns detent selection and cancellation. `IosSheetLayout`
 resolves unscaled bounds, floating transforms and capsular geometry;
 `IosSheetMotion` owns gesture projection, resistance and settling.

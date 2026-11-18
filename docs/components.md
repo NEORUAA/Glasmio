@@ -346,10 +346,14 @@ fun MenuScreen() = ExampleHost {
 
 The medium background is glass; the large background uses the system background color. Crossing the native full-height threshold retargets a separate background spring. `fitContent = true` presents a short action panel with floating insets. Vertical spacing includes the IME by default and can be overridden through `contentWindowInsets` and `contentNavigationBarInsets`. See the [native sheet reference](ios-sheet-motion.md) for the recovered implementation and device measurements.
 
-Sheet top bars and grabbers span the full platter without horizontal hardware-safe spacing.
-Only the foreground content reserves `max(left, right)` on both sides, following
-`LocalGlasmioHorizontalSafeAreaEnabled`. The sheet backing and content background remain
-full width. The custom player sheet retains its separate layout and motion contract.
+The page-sheet layout follows the available window size. In regular height, a wide window presents a centered platter with a shared bottom edge for Medium and Large. A narrower window presents a bottom sheet. Compact-height windows use a full-screen modal by default, or a bottom-attached sheet inside the horizontal safe area with `edgeAttachedInCompactHeight = true`. Medium is unavailable at compact height and resumes when it becomes available again if it was the selected detent.
+
+The floating platter is centered in the window after reserving `max(left, right)` on both
+sides. Floating and compact edge-attached platters already sit within the horizontal safe area.
+Edge-to-edge layouts reserve `max(left, right)` on both sides of the foreground content
+according to `LocalGlasmioHorizontalSafeAreaEnabled`. In full-screen mode this setting
+also keeps toolbar controls inside the hardware insets. Backgrounds span the full platter.
+The custom player sheet retains its separate layout and motion contract.
 
 Inside a sheet, grouped rows inherit UIKit's material context. Medium rows transform the sheet's exported backplate with the native vibrancy matrix; Large rows use opaque semantic colors. Labels and separators follow their own native color roles. With `topBar`, the host keeps the grouped-table canvas separate from fading content. Use `contentBackground` for custom backgrounds, rather than painting a background on the foreground scroll container. Without `topBar`, apply `GlasmioTheme.colors.groupedBackground` to the table container as before. The sheet's own backing, the table canvas and its cells are separate layers.
 
