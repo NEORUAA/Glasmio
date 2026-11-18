@@ -36,10 +36,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
-import androidx.compose.material3.pulltorefresh.pullToRefresh
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.listSaver
@@ -1320,7 +1316,6 @@ private fun NavigationDemo(layout: SamplePageLayout) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ListDemo() {
     var reordered by remember { mutableStateOf(listOf("First", "Second", "Third")) }
@@ -1338,7 +1333,7 @@ private fun ListDemo() {
             refreshing = true
             scope.launch {
                 try {
-                    delay(400)
+                    delay(1400)
                     entries = entries.drop(1) + entries.first()
                     swipeRevealed = false
                     swipeItemVisible = true
@@ -1350,7 +1345,6 @@ private fun ListDemo() {
     }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
-    val refreshState = rememberPullToRefreshState()
     val collapseProgress = if (grid) rememberGlasmioHeaderCollapse(gridState) else rememberGlasmioHeaderCollapse(listState)
     val edgeProgress = if (grid) rememberGlasmioHeaderScrollEdge(gridState) else rememberGlasmioHeaderScrollEdge(listState)
     val headerEntry = LocalSampleHeaderEntry.current
@@ -1373,151 +1367,143 @@ private fun ListDemo() {
             bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp),
         topBarBlurProgress = edgeProgress,
     ) { padding ->
-        Box(
-            Modifier.fillMaxSize().pullToRefresh(
-                isRefreshing = refreshing,
-                onRefresh = refresh,
-                state = refreshState,
-            ),
+        GlasmioPullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = refresh,
+            modifier = Modifier.fillMaxSize(),
+            indicatorPadding = PaddingValues(top = padding.calculateTopPadding()),
         ) {
-            Box(Modifier.fillMaxSize().pullToRefreshRebound(refreshState, refreshing)) {
-                if (grid) {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(150.dp),
-                        state = gridState,
-                        modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
-                            .consumeWindowInsets(padding),
-                        contentPadding = glasmioHorizontalContentPadding(padding),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        item(key = "large-title", span = { GridItemSpan(maxLineSpan) }) { SampleLargeTitle("Lists", collapseProgress) }
-                        items(entries, key = { it }) { index ->
-                            GlasmioCard(Modifier.fillMaxWidth().height(120.dp)) {
-                                Text("Item $index", style = IosTypography.headline, modifier = Modifier.padding(20.dp))
-                            }
+            if (grid) {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(150.dp),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+                        .consumeWindowInsets(padding),
+                    contentPadding = glasmioHorizontalContentPadding(padding),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item(key = "large-title", span = { GridItemSpan(maxLineSpan) }) { SampleLargeTitle("Lists", collapseProgress) }
+                    items(entries, key = { it }) { index ->
+                        GlasmioCard(Modifier.fillMaxWidth().height(120.dp)) {
+                            Text("Item $index", style = IosTypography.headline, modifier = Modifier.padding(20.dp))
                         }
                     }
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
-                            .consumeWindowInsets(padding),
-                        contentPadding = glasmioHorizontalContentPadding(padding),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        item(key = "large-title") { SampleLargeTitle("Lists", collapseProgress) }
-                        item(key = "reorderable") {
-                            GlasmioReorderableGroup(reordered, { reordered = it }, "Reorder", "Move up", "Move down") {
-                                Text(it, style = IosTypography.body, modifier = Modifier.weight(1f))
-                            }
+                }
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize().glasmioHorizontalEdgeToEdge()
+                        .consumeWindowInsets(padding),
+                    contentPadding = glasmioHorizontalContentPadding(padding),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    item(key = "large-title") { SampleLargeTitle("Lists", collapseProgress) }
+                    item(key = "reorderable") {
+                        GlasmioReorderableGroup(reordered, { reordered = it }, "Reorder", "Move up", "Move down") {
+                            Text(it, style = IosTypography.body, modifier = Modifier.weight(1f))
                         }
-                        item(key = "grouped") {
-                            GlasmioSectionTitle("Grouped")
-                            GlasmioGroupedList {
-                                GlasmioListRow("Simple row", showTopSeparator = false)
-                                GlasmioListRow(
-                                    "Title",
-                                    subtitle = "Subtitle",
-                                    detail = "Detail",
-                                    leading = {
-                                        Box(
-                                            Modifier.size(30.dp).clip(ContinuousRoundedRectangle(7.dp)).background(colors.accent),
-                                            contentAlignment = Alignment.Center,
-                                        ) { SfIcon("house.fill", null, size = 17.dp, tint = Color.White) }
-                                    },
-                                    trailing = {
-                                        Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
-                                            SfIcon(
-                                                "star", null, size = 22.dp, fontSize = 17.sp,
-                                                weight = FontWeight.Normal, tint = colors.accent,
-                                                fontFeatureSettings = "'ss16' 1", fitGlyphToBounds = false,
-                                            )
-                                        }
-                                    },
-                                    showDisclosure = true,
-                                )
-                                GlasmioListRow("Value", detail = "Detail")
-                                GlasmioListRow("Selection", trailing = {
+                    }
+                    item(key = "grouped") {
+                        GlasmioSectionTitle("Grouped")
+                        GlasmioGroupedList {
+                            GlasmioListRow("Simple row", showTopSeparator = false)
+                            GlasmioListRow(
+                                "Title",
+                                subtitle = "Subtitle",
+                                detail = "Detail",
+                                leading = {
+                                    Box(
+                                        Modifier.size(30.dp).clip(ContinuousRoundedRectangle(7.dp)).background(colors.accent),
+                                        contentAlignment = Alignment.Center,
+                                    ) { SfIcon("house.fill", null, size = 17.dp, tint = Color.White) }
+                                },
+                                trailing = {
                                     Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
                                         SfIcon(
-                                            "checkmark", null, size = 22.dp, fontSize = 17.sp,
-                                            weight = FontWeight(590), tint = colors.accent,
-                                            fontFeatureSettings = "", fitGlyphToBounds = false,
-                                        )
-                                    }
-                                })
-                                GlasmioListRow("Information", trailing = {
-                                    Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
-                                        SfIcon(
-                                            "info.circle", "Information", size = 22.dp, fontSize = 17.sp,
+                                            "star", null, size = 22.dp, fontSize = 17.sp,
                                             weight = FontWeight.Normal, tint = colors.accent,
                                             fontFeatureSettings = "'ss16' 1", fitGlyphToBounds = false,
                                         )
                                     }
-                                })
-                                GlasmioListRow("Date and Time", trailing = {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        GlasmioListValuePill(month, { month = if (month == "June 2024") "July 2024" else "June 2024" })
-                                        GlasmioListValuePill(time, { time = if (time == "9:41 AM") "10:41 AM" else "9:41 AM" })
-                                    }
-                                })
-                                GlasmioListRow("A long row title stays inside its layout and truncates cleanly", onClick = {})
-                            }
-                            GlasmioGroupedTableFooter("Footer")
-                        }
-                        item(key = "flat-actions") {
-                            GlasmioGroupedList {
-                                GlasmioListRow("Action", onClick = {}, showTopSeparator = false, showDisclosure = false,
-                                    titleColor = colors.accent, titleAlignment = TextAlign.Center)
-                                GlasmioListRow("Delete", onClick = {}, showDisclosure = false,
-                                    titleColor = colors.destructive, titleAlignment = TextAlign.Center)
-                                GlasmioListRow("Unavailable", onClick = {}, enabled = false, showDisclosure = false)
-                            }
-                        }
-                        if (swipeItemVisible) {
-                            item(key = "swipe-actions") {
-                                GlasmioListSwipeActions(
-                                    revealed = swipeRevealed,
-                                    onRevealedChange = { swipeRevealed = it },
-                                    actions = {
-                                        GlasmioListSwipeAction(
-                                            "circle.dashed", { swipeRevealed = false },
-                                            if (colors.isDark) Color(0xFF636366) else Color(0xFFAEAEB2),
-                                            label = "Action",
-                                        )
-                                        GlasmioListSwipeAction(
-                                            "circle.dashed", { swipeRevealed = false },
-                                            if (colors.isDark) Color(0xFF0091FF) else Color(0xFF0088FF),
-                                            label = "Action",
-                                        )
-                                        GlasmioListSwipeAction(
-                                            "circle.dashed", { swipeRevealed = false; swipeItemVisible = false },
-                                            if (colors.isDark) Color(0xFF30D158) else Color(0xFF34C759),
-                                            label = "Action",
-                                        )
-                                    },
-                                ) {
-                                    GlasmioListRow(
-                                        "Swipe Actions", subtitle = "Subtitle", detail = "Detail",
-                                        showTopSeparator = false, showDisclosure = true,
+                                },
+                                showDisclosure = true,
+                            )
+                            GlasmioListRow("Value", detail = "Detail")
+                            GlasmioListRow("Selection", trailing = {
+                                Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+                                    SfIcon(
+                                        "checkmark", null, size = 22.dp, fontSize = 17.sp,
+                                        weight = FontWeight(590), tint = colors.accent,
+                                        fontFeatureSettings = "", fitGlyphToBounds = false,
                                     )
                                 }
+                            })
+                            GlasmioListRow("Information", trailing = {
+                                Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+                                    SfIcon(
+                                        "info.circle", "Information", size = 22.dp, fontSize = 17.sp,
+                                        weight = FontWeight.Normal, tint = colors.accent,
+                                        fontFeatureSettings = "'ss16' 1", fitGlyphToBounds = false,
+                                    )
+                                }
+                            })
+                            GlasmioListRow("Date and Time", trailing = {
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    GlasmioListValuePill(month, { month = if (month == "June 2024") "July 2024" else "June 2024" })
+                                    GlasmioListValuePill(time, { time = if (time == "9:41 AM") "10:41 AM" else "9:41 AM" })
+                                }
+                            })
+                            GlasmioListRow("A long row title stays inside its layout and truncates cleanly", onClick = {})
+                        }
+                        GlasmioGroupedTableFooter("Footer")
+                    }
+                    item(key = "flat-actions") {
+                        GlasmioGroupedList {
+                            GlasmioListRow("Action", onClick = {}, showTopSeparator = false, showDisclosure = false,
+                                titleColor = colors.accent, titleAlignment = TextAlign.Center)
+                            GlasmioListRow("Delete", onClick = {}, showDisclosure = false,
+                                titleColor = colors.destructive, titleAlignment = TextAlign.Center)
+                            GlasmioListRow("Unavailable", onClick = {}, enabled = false, showDisclosure = false)
+                        }
+                    }
+                    if (swipeItemVisible) {
+                        item(key = "swipe-actions") {
+                            GlasmioListSwipeActions(
+                                revealed = swipeRevealed,
+                                onRevealedChange = { swipeRevealed = it },
+                                actions = {
+                                    GlasmioListSwipeAction(
+                                        "circle.dashed", { swipeRevealed = false },
+                                        if (colors.isDark) Color(0xFF636366) else Color(0xFFAEAEB2),
+                                        label = "Action",
+                                    )
+                                    GlasmioListSwipeAction(
+                                        "circle.dashed", { swipeRevealed = false },
+                                        if (colors.isDark) Color(0xFF0091FF) else Color(0xFF0088FF),
+                                        label = "Action",
+                                    )
+                                    GlasmioListSwipeAction(
+                                        "circle.dashed", { swipeRevealed = false; swipeItemVisible = false },
+                                        if (colors.isDark) Color(0xFF30D158) else Color(0xFF34C759),
+                                        label = "Action",
+                                    )
+                                },
+                            ) {
+                                GlasmioListRow(
+                                    "Swipe Actions", subtitle = "Subtitle", detail = "Detail",
+                                    showTopSeparator = false, showDisclosure = true,
+                                )
                             }
                         }
-                        items(entries, key = { it }) { index ->
-                            GlasmioCard(Modifier.fillMaxWidth()) {
-                                GlasmioListRow("Item $index", showTopSeparator = false, onClick = {})
-                            }
+                    }
+                    items(entries, key = { it }) { index ->
+                        GlasmioCard(Modifier.fillMaxWidth()) {
+                            GlasmioListRow("Item $index", showTopSeparator = false, onClick = {})
                         }
                     }
                 }
             }
-            PullToRefreshDefaults.Indicator(
-                isRefreshing = refreshing,
-                state = refreshState,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = padding.calculateTopPadding()),
-            )
         }
     }
 }

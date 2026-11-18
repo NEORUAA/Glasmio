@@ -54,7 +54,8 @@ object MaterialGlasmioIconResolver : GlasmioIconResolver {
         systemName.startsWith("arrow.up.arrow.down") -> Icons.Default.SwapVert
         systemName.startsWith("arrow.up") -> Icons.Default.ArrowUpward
         systemName.startsWith("arrow.down") -> Icons.Default.ArrowDownward
-        systemName.startsWith("arrow.clockwise") || systemName.startsWith("arrow.triangle") -> Icons.Default.Refresh
+        systemName == "progress.indicator" || systemName.startsWith("arrow.clockwise") ||
+            systemName.startsWith("arrow.triangle") -> Icons.Default.Refresh
         systemName.startsWith("arrow.counterclockwise") -> Icons.Default.Replay
         systemName.startsWith("magnifyingglass") -> Icons.Default.Search
         systemName.startsWith("house") -> Icons.Default.Home
