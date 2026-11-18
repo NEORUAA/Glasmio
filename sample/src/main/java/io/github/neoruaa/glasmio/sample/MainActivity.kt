@@ -1013,6 +1013,22 @@ private fun MaterialsDemo(layout: SamplePageLayout, onOpen: (String) -> Unit) {
                 }
             }
         }
+        item(key = "materials-popover") {
+            var visible by remember { mutableStateOf(false) }
+            GlasmioPopover(
+                visible = visible,
+                onDismissRequest = { visible = false },
+                adaptToSheet = false,
+                anchor = {
+                    GlasmioButton(
+                        onClick = { visible = true },
+                        size = GlasmioButtonSize.Medium,
+                    ) { Text("Popover") }
+                },
+            ) {
+                Text("Glass picks up the colors behind it.")
+            }
+        }
     }
 }
 
@@ -1619,6 +1635,7 @@ private fun MenusDemo(bottomPadding: Dp, dark: Boolean, onDark: (Boolean) -> Uni
     var alert by rememberSaveable { mutableStateOf(false) }
     var inputAlert by rememberSaveable { mutableStateOf(false) }
     var nestedMenu by remember { mutableStateOf(false) }
+    var appearancePopover by remember { mutableStateOf(false) }
     val nestedAnchor = rememberGlasmioMenuAnchorState()
     val toolbarAnchor = rememberGlasmioMenuAnchorState()
     val headerEntry = LocalSampleHeaderEntry.current
@@ -1648,7 +1665,37 @@ private fun MenusDemo(bottomPadding: Dp, dark: Boolean, onDark: (Boolean) -> Uni
                 }
             }
             item {
-                GlasmioButton(onClick = { nestedMenu = true }, modifier = Modifier.glasmioMenuAnchor(nestedAnchor), size = GlasmioButtonSize.Medium) { Text("Cascading Menu") }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GlasmioTooltip(text = "Browse nested actions") {
+                        GlasmioButton(
+                            onClick = { nestedMenu = true },
+                            modifier = Modifier.glasmioMenuAnchor(nestedAnchor),
+                            size = GlasmioButtonSize.Medium,
+                        ) { Text("Cascading Menu") }
+                    }
+                    GlasmioPopover(
+                        visible = appearancePopover,
+                        onDismissRequest = { appearancePopover = false },
+                        anchor = {
+                            GlasmioButton(
+                                onClick = { appearancePopover = true },
+                                size = GlasmioButtonSize.Medium,
+                            ) { Text("Popover") }
+                        },
+                    ) {
+                        Text(
+                            "Appearance",
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = IosTypography.headline,
+                        )
+                        GlasmioSwitchPreference(
+                            title = { Text("Dark Mode") },
+                            checked = dark,
+                            onCheckedChange = onDark,
+                            showTopSeparator = false,
+                        )
+                    }
+                }
             }
         }
     }

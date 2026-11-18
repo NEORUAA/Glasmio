@@ -8,10 +8,14 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.nativeCanvas
+import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions
+import io.github.neoruaa.glasmio.glass.render.cachedResource
+import io.github.neoruaa.glasmio.glass.render.effects.effect
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -88,6 +92,13 @@ internal data class NavigationMaterialRecipe(
 
 internal fun NavigationMaterialRecipe.hasFillLayers(): Boolean =
     fills.isNotEmpty() || appearanceAlternate?.hasFillLayers() == true
+
+/** Apply the Regular glass color response without imposing a rounded-box optical field. */
+fun BackdropEffectScope.regularGlassFace(darkFraction: Float) {
+    val renderer = cachedResource("Glasmio.RegularGlassFace", ::NavigationMaterialRenderer)
+    val recipe = NavigationMaterialRecipe.resolve(darkFraction, NavigationGlassMaterial.RegularMedium)
+    effect(renderer.effect(recipe).asComposeRenderEffect())
+}
 
 /**
  * Cached material program. Modern HWUI can consume the destination directly; older HWUI applies

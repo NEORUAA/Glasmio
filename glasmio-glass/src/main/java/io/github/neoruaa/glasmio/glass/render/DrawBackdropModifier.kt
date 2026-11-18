@@ -47,6 +47,7 @@ import androidx.compose.ui.node.ObserverModifierNode
 import androidx.compose.ui.node.observeReads
 import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.requireGraphicsContext
+import androidx.compose.ui.node.requireLayoutDirection
 import androidx.compose.ui.node.requireView
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Constraints
@@ -226,7 +227,7 @@ private class DrawBackdropElement(
     override fun create(): DrawBackdropNode {
         return DrawBackdropNode(
             backdrop = backdrop,
-            shapeProvider = shapeProvider,
+            initialShapeProvider = shapeProvider,
             effects = effects,
             layerBlock = layerBlock,
             exportedBackdrop = exportedBackdrop,
@@ -319,7 +320,7 @@ private class DrawBackdropElement(
 
 private class DrawBackdropNode(
     private var backdrop: Backdrop,
-    var shapeProvider: ShapeProvider,
+    initialShapeProvider: ShapeProvider,
     var effects: BackdropEffectScope.() -> Unit,
     var layerBlock: (GraphicsLayerScope.() -> Unit)?,
     var exportedBackdrop: LayerBackdrop?,
@@ -333,6 +334,8 @@ private class DrawBackdropNode(
     var sampleBounds: (() -> Rect)?,
 ) : LayoutModifierNode, DrawModifierNode, GlobalPositionAwareModifierNode, ObserverModifierNode, Modifier.Node() {
 
+    // The retained layer block must refresh its outline even when only the shape changes.
+    var shapeProvider by mutableStateOf(initialShapeProvider)
     var luminanceOnly by mutableStateOf(luminanceOnly)
 
     private val effectScope =
@@ -397,7 +400,8 @@ private class DrawBackdropNode(
     private val layoutLayerBlock: GraphicsLayerScope.() -> Unit = {
         // The native background owns its SDF coverage, including the exterior key/fill strip.
         // Clip foreground explicitly below instead of cropping the entire control layer.
-        clip = !completedLayout
+        clip = !completedLayout &&
+            !shapeProvider.shape.createOutline(size, requireLayoutDirection(), this).needsConcaveClip()
         shape = shapeProvider.shape
         compositingStrategy = if (completedLayout) androidx.compose.ui.graphics.CompositingStrategy.Auto
             else androidx.compose.ui.graphics.CompositingStrategy.Offscreen
@@ -669,15 +673,25 @@ private class DrawBackdropNode(
             effectsDirty = false
         }
 
-        onDrawBehind?.invoke(this)
         if (effectScope.nativeMaterialCompleted) {
+            onDrawBehind?.invoke(this)
             drawBackdropLayer()
             withForegroundClip {
                 onDrawSurface?.invoke(this)
                 this@draw.drawContent()
                 onDrawFront?.invoke(this)
             }
+        } else if (shapeProvider.shape.createOutline(size, layoutDirection, this).needsConcaveClip()) {
+            // The hardware outline clip can omit protrusions from concave shapes.
+            withForegroundClip {
+                onDrawBehind?.invoke(this)
+                drawBackdropLayer()
+                onDrawSurface?.invoke(this)
+                this@draw.drawContent()
+                onDrawFront?.invoke(this)
+            }
         } else {
+            onDrawBehind?.invoke(this)
             drawBackdropLayer()
             onDrawSurface?.invoke(this)
             drawContent()
@@ -703,6 +717,8 @@ private class DrawBackdropNode(
             exportedBackdrop?.notifySourceRecorded()
         }
     }
+
+    private fun Outline.needsConcaveClip(): Boolean = this is Outline.Generic && !path.isConvex
 
     private inline fun DrawScope.withForegroundClip(block: DrawScope.() -> Unit) {
         val canvas = drawContext.canvas

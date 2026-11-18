@@ -18,6 +18,7 @@ Glasmio uses state-hoisted Compose APIs: pass a value and handle its change call
 | Toolbars | `GlasmioTopBar`, `GlasmioTopBarStyle`, `GlasmioToolbarActionGroup`, `GlasmioToolbarActionStyle`, `GlasmioBottomToolbar`, `GlasmioSheetTopToolbar`, `GlasmioSheetToolbarButton`, `GlasmioSheetButton` |
 | Navigation | `GlasmioNavigationBar`, `GlasmioNavigationBarWithTrailingItem`, `GlasmioTabItem`, `GlasmioNavigationScrollState`, `rememberGlasmioNavigationScrollState`, `Modifier.glasmioNavigationScrollHint` |
 | Menus | `GlasmioMenu`, `GlasmioMenuItem`, `GlasmioContextMenu`, `GlasmioCascadingMenu`, `GlasmioCascadingMenuItem`, `GlasmioPopUpButton`, `rememberGlasmioMenuAnchorState`, `Modifier.glasmioMenuAnchor` |
+| Anchored help and content | `GlasmioTooltip`, `GlasmioPopover` |
 | Alerts | `GlasmioAlertDialog`, `GlasmioAlertButtonSpec`, `GlasmioAlertButtonRole`, `GlasmioAlertButtonLayout`, `GlasmioAlertSurface`, `GlasmioAlertButton`, `GlasmioAlertFieldGroup`, `GlasmioAlertTextField` |
 | Sheets and overlays | `GlasmioBottomSheet`, `GlasmioSheetSurface`, `GlasmioActionSheet`, `GlasmioActionSheetContent`, `GlasmioModalOverlay` |
 | Pages | `GlasmioNavigationScaffold`, `GlasmioPageBody`, `GlasmioPageTitle`, `GlasmioScaffold`, `GlasmioListPage`, `GlasmioPinnedListPage`, `GlasmioPinnedPage`, `rememberGlasmioGridCollapseProgress`, `GlasmioOverscrollHost`, `Modifier.pullToRefreshRebound`, `rememberGlasmioAppBarScrollBehavior` |
@@ -337,6 +338,26 @@ fun MenuScreen() = ExampleHost {
     }
 }
 ```
+
+## Tooltips and popovers
+
+`GlasmioTooltip` wraps an anchor and shows a brief, noninteractive hint after
+pointer hover or touch and hold. The hint can flip below its anchor to stay
+within the safe area. Touch and hold also works with a stylus.
+
+`GlasmioPopover` takes a caller-owned `visible` value, a dismissal callback,
+an anchor, and arbitrary column content. Its rounded pointer and panel share
+one outline for the shadow, highlight, and refraction. The panel uses the
+Regular glass color response with adaptive contrast and springs from the
+pointer tip. It prefers the direction with the most visible area and closes
+on outside tap or Back. In windows narrower than
+600dp or shorter than 480dp it uses the existing sheet presenter by default.
+Pass `adaptToSheet = false` to keep it anchored in compact windows.
+
+Glasmio's contour and material were informed by a native popover probe on an
+iPhone 13 mini. The `probe` and `native` notes under
+`.local-research/ios/anchored-presentations/` record the geometry, motion, and
+material observations. The touch tooltip is specific to Glasmio.
 
 ## Alerts and sheets
 
