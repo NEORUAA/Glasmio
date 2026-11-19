@@ -2833,6 +2833,14 @@ half4 main(half4 src, half4 dst) {
             }
             val target = center("Longer tab label")
             val search = center("Search")
+            val selectedCenter = center("Library")
+            bar.performTouchInput {
+                down(0, selectedCenter)
+                down(1, target)
+                up(0)
+                up(1)
+            }
+            compose.runOnIdle { assertTrue("A second finger cannot take over tab selection", requests.isEmpty()) }
             val originalIndicator = compose.onNodeWithTag("LandscapeNavigationIndicator").fetchSemanticsNode().boundsInRoot
             bar.performTouchInput { down(target) }
             compose.runOnIdle { assertTrue("A held landscape preview leaves the route selected", requests.isEmpty()) }

@@ -89,7 +89,6 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
 import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
 import com.kyant.shapes.Capsule
-import io.github.neoruaa.glasmio.glass.DampedDragAnimation
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -392,99 +391,115 @@ fun <T> GlasmioNavigationBar(
         val expandedTabWidthPx = expandedTabs.widthPx
         val labelMaxWidth = expandedTabs.labelMaxWidth(tabItems.size, density)
         val compactInnerWidthPx = (compactWidthPx - paddingPx * 2f).coerceAtLeast(1f)
-        val tabStepPx = rememberUpdatedState(expandedTabs.stepPx.coerceAtLeast(1f))
+        val indicatorHeightPx = with(density) { ExpandedNavigationItemHeight.toPx() }
+        val currentExpandedTabs = rememberUpdatedState(expandedTabs)
+        val currentFullWidthPx = rememberUpdatedState(fullWidthPx)
+        val currentPaddingPx = rememberUpdatedState(paddingPx)
+        val offsetAnimation = remember { Animatable(0f) }
+        val selectionPressOrigin = remember { mutableStateOf(true) }
+
+        fun logicalTouchX(position: Offset): Float =
+            (if (isLtr) position.x else currentFullWidthPx.value - position.x) - currentPaddingPx.value
+
+        fun touchedIndex(logicalX: Float): Int {
+            val geometry = currentExpandedTabs.value
+            return ((logicalX - geometry.widthPx / 2f) / geometry.stepPx.coerceAtLeast(1f))
+                .fastRoundToInt().fastCoerceIn(0, tabItemsState.value.lastIndex)
+        }
+
+        val selectionMotion = remember(animationScope, tabItems.size, isLtr, density.density, indicatorHeightPx) {
+            var touchAnchor = 0f
+            fun settlePlatter() {
+                animationScope.launch { offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f)) }
+            }
+            NavigationTabMotion(
+                animationScope = animationScope,
+                isTopBar = false,
+                density = density.density,
+                initialCenterPx = expandedTabs.center(selectedIndex.toFloat()),
+                initialWidthPx = expandedTabWidthPx,
+                heightPx = indicatorHeightPx,
+                dragCoordinateSpace = { dragCoordinateSpace.value },
+                onDragStarted = { position ->
+                    selectionPressOrigin.value = compactState.value < 0.05f
+                    val geometry = currentExpandedTabs.value
+                    val logicalX = logicalTouchX(position)
+                    val center = geometry.center(touchedIndex(logicalX).toFloat())
+                    touchAnchor = ((logicalX - center) / geometry.widthPx).coerceIn(-0.5f, 0.5f)
+                    moveTo(center, geometry.widthPx)
+                },
+                onDragStopped = { position ->
+                    val compact = compactState.value >= 0.74f
+                    val target = if (compact) selectedIndexState.value else touchedIndex(logicalTouchX(position))
+                    val geometry = currentExpandedTabs.value
+                    moveTo(geometry.center(target.toFloat()), geometry.widthPx)
+                    if (compact) {
+                        onExpandState.value()
+                    } else if (target != selectedItemIndexState.value) {
+                        stableOnSelected(tabItemsState.value[target].key)
+                    }
+                    settlePlatter()
+                },
+                onDragCancelled = {
+                    val geometry = currentExpandedTabs.value
+                    moveTo(geometry.center(selectedIndexState.value.toFloat()), geometry.widthPx)
+                    settlePlatter()
+                },
+                onDrag = { position, displacement ->
+                    if (compactState.value < 0.74f) {
+                        val geometry = currentExpandedTabs.value
+                        val center = (logicalTouchX(position) - touchAnchor * geometry.widthPx)
+                            .coerceIn(geometry.center(0f), geometry.center(tabItemsState.value.lastIndex.toFloat()))
+                        moveTo(center, geometry.widthPx, tracking = true)
+                        animationScope.launch { offsetAnimation.snapTo(displacement.x) }
+                    }
+                },
+            )
+        }
+        val onUserSelected: (T) -> Unit = remember(selectionMotion, compactState, stableOnSelected) {
+            { key ->
+                selectionPressOrigin.value = compactState.value < 0.05f
+                selectionMotion.press()
+                stableOnSelected(key)
+                selectionMotion.release()
+            }
+        }
+        val previousExpandedTabs = remember(selectionMotion) { mutableStateOf(expandedTabs) }
+        LaunchedEffect(selectedIndex, expandedTabs, selectionMotion) {
+            val center = expandedTabs.center(selectedIndex.toFloat())
+            // Route and preference updates only move the indicator. Navigation callbacks
+            // belong to user input, including while the bar is fading out on a detail page.
+            if (previousExpandedTabs.value != expandedTabs) {
+                previousExpandedTabs.value = expandedTabs
+                selectionMotion.snapTo(center, expandedTabWidthPx)
+            } else if (!selectionMotion.isDragging) {
+                selectionPressOrigin.value = compactState.value < 0.05f
+                selectionMotion.moveTo(center, expandedTabWidthPx)
+            }
+        }
         val innerGlassVisibilityState = remember(compactState) {
             derivedStateOf { compactIndicatorVisibility(compactState.value) }
         }
         val indicatorSizeModifier = remember(
-            compactState, expandedTabWidthPx, compactInnerWidthPx, compactWidthPx, compactSize,
+            compactState, selectionMotion, compactInnerWidthPx, compactWidthPx, compactSize,
         ) {
             Modifier.layout { measurable, constraints ->
                 val progress = compactState.value
                 val settled = progress >= 1f
                 val width = constraints.constrainWidth((if (settled) compactWidthPx else
-                    lerp(expandedTabWidthPx, compactInnerWidthPx, progress)).roundToInt())
+                    lerp(selectionMotion.widthPx, compactInnerWidthPx, progress)).roundToInt())
                 val height = constraints.constrainHeight((if (settled) compactSize else
                     androidx.compose.ui.unit.lerp(ExpandedNavigationItemHeight, compactSize - 8.dp, progress)).roundToPx())
                 val placeable = measurable.measure(androidx.compose.ui.unit.Constraints.fixed(width, height))
                 layout(width, height) { placeable.placeRelative(0, 0) }
             }
         }
-        val currentExpandedTabs = rememberUpdatedState(expandedTabs)
-        val currentFullWidthPx = rememberUpdatedState(fullWidthPx)
-        val currentPaddingPx = rememberUpdatedState(paddingPx)
-        val offsetAnimation = remember { Animatable(0f) }
-        val selectionPressOrigin = remember { mutableStateOf(true) }
-        val dragAnimation = remember(animationScope, tabItems.size, isLtr) {
-            DampedDragAnimation(
-                animationScope = animationScope,
-                initialValue = selectedIndexState.value.toFloat(),
-                valueRange = 0f..(tabItems.lastIndex.coerceAtLeast(1)).toFloat(),
-                visibilityThreshold = 0.001f,
-                initialScale = 1f,
-                pressedScale = 78f / 56f,
-                dragCoordinateSpace = { dragCoordinateSpace.value },
-                onDragStarted = { position ->
-                    selectionPressOrigin.value = compactState.value < 0.05f
-                    val logicalX = if (isLtr) position.x else currentFullWidthPx.value - position.x
-                    val geometry = currentExpandedTabs.value
-                    val index = ((logicalX - currentPaddingPx.value - geometry.widthPx / 2f) /
-                        geometry.stepPx.coerceAtLeast(1f)).fastRoundToInt()
-                        .fastCoerceIn(0, tabItemsState.value.lastIndex)
-                    updateValue(index.toFloat())
-                },
-                onDragStopped = {
-                    if (compactState.value >= 0.74f) {
-                        onExpandState.value()
-                        animateToValue(selectedIndexState.value.toFloat())
-                        return@DampedDragAnimation
-                    }
-                    val target = targetValue.fastRoundToInt().fastCoerceIn(0, tabItems.lastIndex)
-                    if (target != selectedItemIndexState.value) {
-                        stableOnSelected(tabItemsState.value[target].key)
-                    }
-                    animateToValue(target.toFloat())
-                    animationScope.launch {
-                        offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f))
-                    }
-                },
-                onDragCancelled = {
-                    updateValue(selectedIndexState.value.toFloat())
-                    animationScope.launch { offsetAnimation.animateTo(0f, spring(1f, 300f, 0.5f)) }
-                },
-                onDrag = { _, dragAmount ->
-                    if (compactState.value >= 0.74f) return@DampedDragAnimation
-                    updateValue(
-                        (targetValue + dragAmount.x / tabStepPx.value * if (isLtr) 1f else -1f)
-                            .fastCoerceIn(0f, tabItems.lastIndex.toFloat()),
-                    )
-                    animationScope.launch { offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x) }
-                },
-                lensStyle = NativeControlLensStyle.TabBarIndicator,
-            )
-        }
-        val onUserSelected: (T) -> Unit = remember(dragAnimation, compactState, stableOnSelected) {
-            { key ->
-                selectionPressOrigin.value = compactState.value < 0.05f
-                dragAnimation.press()
-                stableOnSelected(key)
-                dragAnimation.release()
-            }
-        }
-        LaunchedEffect(selectedIndex, dragAnimation) {
-            // Route and preference updates only move the indicator. Navigation callbacks
-            // belong to user input, including while the bar is fading out on a detail page.
-            if (!dragAnimation.isDragging && dragAnimation.targetValue != selectedIndex.toFloat()) {
-                selectionPressOrigin.value = compactState.value < 0.05f
-                dragAnimation.animateToValue(selectedIndex.toFloat(), animatePress = false)
-            }
-        }
         // Compact input keeps panel feedback without pressing the emerging selection.
         val selectionFeedbackEnabled = remember(compactState, selectionPressOrigin) {
             derivedStateOf { selectionPressOrigin.value && compactState.value < 0.05f }
         }
-        val selectionPressProgressState = remember(dragAnimation, selectionFeedbackEnabled) {
-            derivedStateOf { if (selectionFeedbackEnabled.value) dragAnimation.pressProgress else 0f }
+        val selectionPressProgressState = remember(selectionMotion, selectionFeedbackEnabled) {
+            derivedStateOf { if (selectionFeedbackEnabled.value) selectionMotion.pressProgress else 0f }
         }
         val interactiveHighlight = remember(
             animationScope,
@@ -492,14 +507,13 @@ fun <T> GlasmioNavigationBar(
             fullWidthPx,
             compactWidthPx,
             paddingPx,
-            expandedTabs,
-            dragAnimation,
+            selectionMotion,
         ) {
             InteractiveHighlight(
                 animationScope = animationScope,
                 position = { size, _ ->
                     val progress = compactState.value
-                    val expandedTabCenter = expandedTabs.center(dragAnimation.value)
+                    val expandedTabCenter = selectionMotion.centerPx
                     val tabCenter = if (isLtr) {
                         paddingPx + expandedTabCenter
                     } else {
@@ -533,7 +547,7 @@ fun <T> GlasmioNavigationBar(
         val tabContentAlpha = remember {
             { (1f - compactState.value).coerceIn(0f, 1f) }
         }
-        val pressProgressState = dragAnimation.pressProgressState
+        val pressProgressState = selectionMotion.pressProgressState
         val platterPuff = remember { Animatable(0f, .001f) }
         val flexWidth = if (compactMode) compactWidthPx else fullWidthPx
         val flexHeight = with(density) { (if (compactMode) compactSize else NavigationBarSurfaceHeight).toPx() }
@@ -721,15 +735,13 @@ fun <T> GlasmioNavigationBar(
         val indicatorPositionLayerBlock: GraphicsLayerScope.() -> Unit = remember(
             compactState,
             offsetAnimation,
-            dragAnimation,
+            selectionMotion,
             indicatorPanelScale,
             isLtr,
             fullWidthPx,
             compactWidthPx,
             paddingPx,
-            expandedTabWidthPx,
             compactInnerWidthPx,
-            expandedTabs,
             compactInsetPx,
             compactProgress,
         ) {
@@ -738,7 +750,7 @@ fun <T> GlasmioNavigationBar(
                 // the compact center. This keeps the first, middle and last tabs symmetric.
                 val progress = compactState.value
                 val currentWidth = morphSurfaceWidthPx(fullWidthPx, compactWidthPx, progress)
-                val expandedTabCenter = expandedTabs.center(dragAnimation.value)
+                val expandedTabCenter = selectionMotion.centerPx
                 val tabCenter = if (isLtr) {
                     paddingPx + expandedTabCenter
                 } else {
@@ -747,7 +759,7 @@ fun <T> GlasmioNavigationBar(
                 val indicatorWidth = if (progress >= 1f) {
                     compactWidthPx
                 } else {
-                    lerp(expandedTabWidthPx, compactInnerWidthPx, progress)
+                    lerp(selectionMotion.widthPx, compactInnerWidthPx, progress)
                 }
                 if (progress >= 1f) {
                     // The transparent compact interaction target follows the material center.
@@ -759,10 +771,14 @@ fun <T> GlasmioNavigationBar(
                         compactWidthPx / 2f - indicatorWidth / 2f,
                         progress,
                     )
-                    val indicatorLeft = targetIndicatorLeft.coerceIn(
-                        paddingPx,
-                        currentWidth - paddingPx - indicatorWidth,
-                    )
+                    val indicatorLeft = if (progress == 0f) {
+                        targetIndicatorLeft
+                    } else {
+                        targetIndicatorLeft.coerceIn(
+                            paddingPx,
+                            (currentWidth - paddingPx - indicatorWidth).coerceAtLeast(paddingPx),
+                        )
+                    }
                     val surfaceBaseLeft = if (isLtr) 0f else fullWidthPx - currentWidth
                     val directionalBase = if (isLtr) 0f else fullWidthPx - indicatorWidth
                     val fraction = (offsetAnimation.value / fullWidthPx).fastCoerceIn(-1f, 1f)
@@ -776,15 +792,18 @@ fun <T> GlasmioNavigationBar(
             }
         }
         val indicatorBackdropLayerBlock: GraphicsLayerScope.() -> Unit = remember(
-            dragAnimation,
+            selectionMotion,
             innerGlassVisibilityState,
             selectionFeedbackEnabled,
             panelPressScale,
+            isLtr,
         ) {
             {
-                val velocity = if (selectionFeedbackEnabled.value) dragAnimation.velocity / 10f else 0f
-                scaleX = panelPressScale.value / (1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f))
-                scaleY = panelPressScale.value * (1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f))
+                val flex = selectionFeedbackEnabled.value
+                scaleX = panelPressScale.value * if (flex) selectionMotion.scaleX else 1f
+                scaleY = panelPressScale.value * if (flex) selectionMotion.scaleY else 1f
+                translationX = if (flex && isLtr) selectionMotion.flexOffsetPx
+                    else if (flex) -selectionMotion.flexOffsetPx else 0f
                 // drawBackdrop installs this block on the backdrop layer itself. Keep the
                 // complete refractive surface, highlight and shadows on the same alpha curve.
                 alpha = innerGlassVisibilityState.value
@@ -794,7 +813,6 @@ fun <T> GlasmioNavigationBar(
             remember(
                 sourceBackdrop,
                 tabsBackdrop,
-                dragAnimation,
                 compactState,
                 containerColor,
                 isLight,
@@ -1010,9 +1028,7 @@ fun <T> GlasmioNavigationBar(
                         .nativeControlLensGeometry(
                             NativeControlLensStyle.TabBarIndicator,
                             horizontalProgress = {
-                                if (appearance.usesRefraction && selectionFeedbackEnabled.value) {
-                                    dragAnimation.pressProgress
-                                } else 0f
+                                if (appearance.usesRefraction) selectionPressProgressState.value else 0f
                             },
                         )
                         .then(indicatorBackdropModifier),
@@ -1026,7 +1042,7 @@ fun <T> GlasmioNavigationBar(
                 Modifier.then(surfaceSizeModifier)
                     .then(commonTransform)
                     .then(interactiveHighlight.gestureModifier)
-                    .then(dragAnimation.modifier),
+                    .then(selectionMotion.modifier),
             )
         }
         if (compactMode) CompositionLocalProvider(LocalViewConfiguration provides navigationViewConfiguration) {

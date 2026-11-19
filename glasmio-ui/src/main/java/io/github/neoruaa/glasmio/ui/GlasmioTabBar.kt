@@ -48,7 +48,6 @@ import io.github.neoruaa.glasmio.core.IosTypography
 import io.github.neoruaa.glasmio.core.LocalGlassAppearance
 import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.swipeBackExcluded
-import io.github.neoruaa.glasmio.glass.DampedDragAnimation
 import io.github.neoruaa.glasmio.glass.LocalGlassBackdrop
 import io.github.neoruaa.glasmio.glass.NativeControlLensStyle
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -149,6 +148,7 @@ fun <T> GlasmioTabBar(
     val colors = LocalGlassColors.current
     val appearance = LocalGlassAppearance.current
     val presentation = LocalGlasmioTabBarPresentation.current
+    val isInteractive = presentation.interactive
     SideEffect { presentation.onMaterialEndpoint(colors, appearance) }
     val previewLayer = rememberGraphicsLayer()
     val previewDisplayLayer = rememberGraphicsLayer()
@@ -195,7 +195,7 @@ fun <T> GlasmioTabBar(
                     }
                 } else if (presentation.drawsContentInPlace) drawContent()
             }
-            .then(if (presentation.interactive) Modifier.selectableGroup() else Modifier.clearAndSetSemantics { })
+            .then(if (isInteractive) Modifier.selectableGroup() else Modifier.clearAndSetSemantics { })
             .layout { measurable, constraints ->
                 val child = measurable.measure(constraints)
                 layout(child.width, child.height) {
@@ -222,68 +222,75 @@ fun <T> GlasmioTabBar(
         val widthsPx = labelWidthsPx.map { (it * labelRatio).coerceAtLeast(.001f) } + actionWidthPx
         val lefts = widthsPx.runningFold(sidebarWidthPx, Float::plus).dropLast(1)
         val centers = widthsPx.indices.map { lefts[it] + widthsPx[it] / 2f }
-        fun interpolate(values: List<Float>, index: Float): Float {
-            val position = index.coerceIn(0f, tabs.lastIndex.toFloat())
-            val lower = position.toInt()
-            val upper = (lower + 1).coerceAtMost(tabs.lastIndex)
-            return values[lower] + (values[upper] - values[lower]) * (position - lower)
+        val currentWidths by rememberUpdatedState(widthsPx)
+        val currentCenters by rememberUpdatedState(centers)
+        val currentLefts by rememberUpdatedState(lefts)
+        val currentLogicalX by rememberUpdatedState<(Offset) -> Float> { position ->
+            if (isLtr) position.x - paddingPx else surfaceWidthPx - paddingPx - position.x
         }
-        fun centerFor(index: Float) = interpolate(centers, index)
-        fun indexFor(center: Float): Float {
-            if (center <= centers.first()) return 0f
-            for (upper in 1..tabs.lastIndex) {
-                if (center <= centers[upper]) return upper - 1f +
-                    (center - centers[upper - 1]) / (centers[upper] - centers[upper - 1])
-            }
-            return tabs.lastIndex.toFloat()
-        }
-        val currentCenterFor by rememberUpdatedState(::centerFor)
-        val currentIndexFor by rememberUpdatedState(::indexFor)
-        val currentPressedIndex by rememberUpdatedState<(Offset) -> Int> { position ->
-            val logicalX = if (isLtr) position.x else totalWidthPx - sidebarWidthPx - position.x
-            lefts.indexOfLast { it <= logicalX + sidebarWidthPx }.coerceAtLeast(0)
-        }
+        fun indexAt(x: Float): Int = currentLefts.indexOfLast { it <= x }.coerceAtLeast(0)
         val dragOffset = remember { Animatable(0f) }
-        val animation = remember(scope, tabs.size, isLtr) {
-            DampedDragAnimation(
+        val animation = remember(scope, tabs.size, isLtr, density.density) {
+            var touchAnchor = .5f
+            NavigationTabMotion(
                 animationScope = scope,
-                initialValue = selectedIndex.coerceAtLeast(0).toFloat(),
-                valueRange = 0f..tabs.lastIndex.coerceAtLeast(1).toFloat(),
-                visibilityThreshold = 0.001f,
-                initialScale = 1f,
-                pressedScale = 78f / 56f,
+                isTopBar = true,
+                density = density.density,
+                initialCenterPx = centers[selectedIndex.coerceAtLeast(0)],
+                initialWidthPx = widthsPx[selectedIndex.coerceAtLeast(0)],
+                heightPx = with(density) { GlasmioTabBarDefaults.IndicatorHeight.toPx() },
                 dragCoordinateSpace = { coordinates },
-                lensStyle = NativeControlLensStyle.TabBarIndicator,
-                onDragStarted = { position -> updateValue(currentPressedIndex(position).toFloat()) },
-                onDragStopped = {
-                    val index = targetValue.roundToInt().coerceIn(0, currentItems.lastIndex)
+                onDragStarted = { position ->
+                    val x = currentLogicalX(position)
+                    val index = indexAt(x)
+                    val width = currentWidths[index]
+                    touchAnchor = ((x - currentLefts[index]) / width).coerceIn(0f, 1f)
+                    moveTo(currentCenters[index], width, tracking = true)
+                },
+                onDragStopped = { position ->
+                    val index = indexAt(currentLogicalX(position))
+                    moveTo(currentCenters[index], currentWidths[index])
                     if (index != currentSelection) select(currentItems[index].key)
-                    animateToValue(index.toFloat())
                     scope.launch { dragOffset.animateTo(0f, spring(1f, 300f, .5f)) }
                 },
                 onDragCancelled = {
-                    updateValue(currentSelection.coerceAtLeast(0).toFloat())
+                    val index = currentSelection.coerceAtLeast(0)
+                    moveTo(currentCenters[index], currentWidths[index])
                     scope.launch { dragOffset.animateTo(0f, spring(1f, 300f, .5f)) }
                 },
-                onDrag = { _, amount ->
-                    updateValue(currentIndexFor(currentCenterFor(targetValue) + amount.x * if (isLtr) 1f else -1f)
-                        .coerceIn(0f, currentItems.lastIndex.toFloat()))
-                    scope.launch { dragOffset.snapTo(dragOffset.value + amount.x) }
+                onDrag = { position, amount ->
+                    val x = currentLogicalX(position)
+                    val width = currentWidths[indexAt(x)]
+                    val center = (x + (.5f - touchAnchor) * width)
+                        .coerceIn(currentCenters.first(), currentCenters.last())
+                    moveTo(center, width, tracking = true)
+                    scope.launch { dragOffset.snapTo(amount.x) }
                 },
             )
         }
-        LaunchedEffect(selectedIndex, animation) {
-            if (selectedIndex >= 0 && animation.targetValue != selectedIndex.toFloat()) {
-                animation.animateToValue(selectedIndex.toFloat(), animatePress = false)
+        val indicatorWidthPx by remember(animation) {
+            derivedStateOf { animation.widthPx.roundToInt().coerceAtLeast(1) }
+        }
+        var previousSelection by remember(animation) { mutableIntStateOf(selectedIndex) }
+        LaunchedEffect(animation, isInteractive, selectedIndex, centers, widthsPx) {
+            val selectionChanged = previousSelection != selectedIndex
+            previousSelection = selectedIndex
+            val index = selectedIndex.coerceAtLeast(0)
+            if (!isInteractive) {
+                // Keep the sidebar transition's hidden tab preview at its current endpoint.
+                animation.cancelPress()
+                animation.snapTo(centers[index], widthsPx[index])
+                dragOffset.snapTo(0f)
+            } else if (selectionChanged || !animation.isDragging) {
+                if (selectionChanged || animation.isMoving) {
+                    animation.moveTo(centers[index], widthsPx[index])
+                } else {
+                    animation.snapTo(centers[index], widthsPx[index])
+                }
             }
         }
         val onUserSelected: (T) -> Unit = remember(animation) {
             { key -> animation.press(); select(key); animation.release() }
-        }
-        fun indicatorLeft(): Float {
-            val left = interpolate(lefts, animation.value)
-            val width = interpolate(widthsPx, animation.value)
-            return if (isLtr) left else totalWidthPx - left - width
         }
 
         fun panelOffset(): Float {
@@ -292,18 +299,12 @@ fun <T> GlasmioTabBar(
         }
         val highlight = remember(scope, animation, surfaceWidthPx, isLtr) {
             InteractiveHighlight(scope) { size, _ ->
-                val center = currentCenterFor(animation.value)
+                val center = animation.centerPx
                 Offset((if (isLtr) paddingPx + center else surfaceWidthPx - paddingPx - center) + panelOffset(),
                     size.height / 2f)
             }
         }
-        LaunchedEffect(presentation.interactive) {
-            if (!presentation.interactive) {
-                highlight.cancelPress()
-                animation.updateValue(currentSelection.coerceAtLeast(0).toFloat())
-                animation.release()
-            }
-        }
+        LaunchedEffect(highlight, isInteractive) { if (!isInteractive) highlight.cancelPress() }
         val puff = remember { Animatable(0f, .001f) }
         val longDimension = with(density) { surfaceWidthPx.toDp().value }.coerceAtLeast(44f)
         val springProgress = if (longDimension < 120f) 0f else ((longDimension - 44f) / 116f).coerceIn(0f, 1f)
@@ -340,7 +341,7 @@ fun <T> GlasmioTabBar(
         fun RowScope.Labels(interactive: Boolean) {
             if (onSidebarToggle != null) Box(
                 Modifier.weight(sidebarWidthPx).fillMaxHeight().clip(Capsule())
-                    .then(if (interactive && presentation.interactive) Modifier
+                    .then(if (interactive && isInteractive) Modifier
                         .semantics { contentDescription = sidebarToggleLabel }
                         .clickable(interactionSource = null, indication = null, role = Role.Button,
                             onClick = onSidebarToggle) else Modifier),
@@ -361,7 +362,7 @@ fun <T> GlasmioTabBar(
                         })
                         .then(if (interactive && item.key == searchKey && onSearchBoundsChanged != null) Modifier
                             .onGloballyPositioned { onSearchBoundsChanged(it.boundsInWindow()) } else Modifier)
-                        .then(if (interactive && presentation.interactive) Modifier
+                        .then(if (interactive && isInteractive) Modifier
                             .semantics { contentDescription = item.contentDescription }
                             .selectable(selected, interactionSource = null, indication = null, role = Role.Tab,
                                 onClick = { onUserSelected(item.key) }) else Modifier),
@@ -394,13 +395,13 @@ fun <T> GlasmioTabBar(
 
         if (selectedIndex >= 0) Box(
             Modifier.align(AbsoluteAlignment.TopLeft).graphicsLayer {
-                val width = interpolate(widthsPx, animation.value)
-                val left = paddingPx + indicatorLeft()
-                translationX = left + (left + width / 2f - surfaceWidthPx / 2f) * (panelScale() - 1f) + panelOffset()
+                val center = if (isLtr) paddingPx + animation.centerPx else surfaceWidthPx - paddingPx - animation.centerPx
+                val panelCenter = surfaceWidthPx / 2f
+                translationX = panelCenter + (center - panelCenter) * panelScale() + panelOffset() - size.width / 2f
                 translationY = GlasmioTabBarDefaults.ContentPadding.toPx()
             }.height(GlasmioTabBarDefaults.IndicatorHeight).clearAndSetSemantics { }
                 .layout { measurable, constraints ->
-                    val width = interpolate(widthsPx, animation.value).roundToInt().coerceAtLeast(1)
+                    val width = indicatorWidthPx
                     val child = measurable.measure(constraints.copy(minWidth = width, maxWidth = width))
                     layout(child.width, child.height) { child.place(0, 0) }
                 }.testTag("LandscapeNavigationIndicator"),
@@ -423,15 +424,15 @@ fun <T> GlasmioTabBar(
                             isDark = colors.isDark, liftedContent = labelsBackdrop,
                         )
                     }, layerBlock = {
-                        val velocity = animation.velocity / 10f
-                        scaleX = panelScale() / (1f - (velocity * .75f).coerceIn(-.2f, .2f))
-                        scaleY = panelScale() * (1f - (velocity * .25f).coerceIn(-.2f, .2f))
+                        scaleX = panelScale() * animation.scaleX
+                        scaleY = panelScale() * animation.scaleY
+                        translationX = animation.flexOffsetPx * if (isLtr) 1f else -1f
                     }, onDrawSurface = {
                         if (!appearance.usesRefraction) drawRect(colors.content.copy(alpha = .1f))
                     },
                 ))
         }
-        if (presentation.interactive) Box(
+        if (isInteractive) Box(
             Modifier.fillMaxSize()
                 .padding(
                     start = with(density) { (paddingPx + sidebarWidthPx).toDp() },
