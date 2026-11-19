@@ -91,10 +91,9 @@ internal fun configureNativeGlassCompletion(
         ?: Size(scope.size.width / scale, scope.size.height / scale)
     val clear = completion.clearFraction.coerceIn(0f, 1f)
     val shadow = completion.shadow
-    // Native key/fill extends by its measured height plus the device-pixel AA support.
     val shadowRadius = max(shadow?.radius ?: 0f, completion.sourceShadow?.profile?.radius ?: 0f)
     val guard = ceil(max(.5333333333333333f * density + 1f,
-        if (shadowRadius > 0f) shadowRadius * density * 2f + 8f * density + 1f else 0f))
+        navigationShadowSupport(shadowRadius, density)))
     val outputOrigin = Offset(guard, guard)
     val outputSize = IntSize(ceil(output.width + guard * 2f).toInt(), ceil(output.height + guard * 2f).toInt())
     scope.materialOutputOrigin = outputOrigin

@@ -5,6 +5,7 @@
  */
 package io.github.neoruaa.glasmio.glass
 
+import android.graphics.BitmapShader
 import android.os.Build
 import androidx.annotation.RequiresApi
 import io.github.neoruaa.glasmio.core.*
@@ -58,12 +59,30 @@ internal fun navigationToolbarGlassField(
     shape.nativeUnion?.let { return it.shaderField(Offset(1f, 1f), Offset.Zero) }
     val contour = shape.refractionContour()
     val field = shape.refractionField()
-    val grid = field.grid(contour, maxOf(contour.bounds.size.minDimension * .5f, minimumBand))
-    val input = field.input(grid)
-    return NativeGlassFilterField(NavigationContainerGlassFieldShader) { shader ->
+    return navigationContourGlassField(contour, minimumBand, field)
+}
+
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+internal fun navigationContourGlassField(
+    contour: NavigationContactContour,
+    minimumBand: Float,
+    field: NavigationContactField = NavigationContactField(),
+): NativeGlassFilterField {
+    val grid = field.grid(contour, minimumBand)
+    return navigationContourGlassField(grid, field.input(grid))
+}
+
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+internal fun navigationContourGlassField(
+    grid: NavigationContactField.Grid,
+    input: BitmapShader,
+): NativeGlassFilterField {
+    val step = grid.step
+    val origin = grid.origin
+    return NativeGlassFilterField(StaticNavigationGlassFieldShader) { shader ->
         shader.setInputBuffer("contour", input)
-        shader.setFloatUniform("fieldScale", 1f / grid.step, 1f / grid.step)
-        shader.setFloatUniform("fieldOffset", -grid.origin.x / grid.step + .5f, -grid.origin.y / grid.step + .5f)
+        shader.setFloatUniform("fieldScale", 1f / step, 1f / step)
+        shader.setFloatUniform("fieldOffset", -origin.x / step + .5f, -origin.y / step + .5f)
         shader.setFloatUniform("normalScale", 1f, 1f)
         shader.setFloatUniform("opticalCenter", 0f, 0f)
         shader.setFloatUniform("depthCenterEnabled", 0f)
@@ -93,6 +112,12 @@ float3 navigationGlassField(float2 point) {
         normal = navigationContainerNormal(normal + depthNormal * max(dot(normal, depthNormal), 0.0));
     }
     return float3(field.x, normal);
+}
+"""
+
+private const val StaticNavigationGlassFieldShader = NavigationContainerGlassFieldShader + """
+float3 navigationGlassOpticalFieldFromShape(float2 point, float3 rawShapeField) {
+    return rawShapeField;
 }
 """
 

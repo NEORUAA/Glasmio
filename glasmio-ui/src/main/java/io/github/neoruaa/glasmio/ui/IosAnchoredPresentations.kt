@@ -49,6 +49,7 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.layout.positionOnScreen
@@ -70,6 +71,7 @@ import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.offset
 import androidx.compose.ui.unit.round
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -80,12 +82,16 @@ import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.core.glasmioSafeDrawing
 import io.github.neoruaa.glasmio.glass.LocalBlurBackdrop
 import io.github.neoruaa.glasmio.glass.NavigationGlassMaterial
-import io.github.neoruaa.glasmio.glass.regularGlassFace
+import io.github.neoruaa.glasmio.glass.NavigationGlassOutlineShape
+import io.github.neoruaa.glasmio.glass.navigationGlassBackground
+import io.github.neoruaa.glasmio.glass.navigationRegularGlassShadowPadding
+import io.github.neoruaa.glasmio.glass.rememberNavigationInnerShadows
 import io.github.neoruaa.glasmio.glass.rememberStationaryBackdrop
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.render.drawBackdrop
 import io.github.neoruaa.glasmio.glass.render.effects.blur
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.render.shadow.Shadow
 import io.github.neoruaa.glasmio.icons.SfIcon
@@ -98,6 +104,7 @@ private val RtlPopoverSides = listOf(AnchoredSide.Above, AnchoredSide.Left, Anch
 private val TooltipShape = RoundedCornerShape(9.dp)
 private val PopoverPointerDepth = 9.dp
 private val PopoverVerticalPadding = 14.dp
+private val PopoverShadowSpace = 28.dp
 private val PassivePopupProperties = PopupProperties(
     flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
         WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
@@ -264,8 +271,14 @@ private fun GlasmioPopoverPopup(
     backdrop: Backdrop,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    AnchoredPopup(visible = visible, tooltip = false, onDismissRequest = onDismissRequest) { placement, bounds, transform ->
-        val appearance = LocalGlassAppearance.current
+    val appearance = LocalGlassAppearance.current
+    val usesRegularGlass = appearance.usesBackdrop && isRuntimeShaderSupported()
+    AnchoredPopup(
+        visible = visible,
+        tooltip = false,
+        onDismissRequest = onDismissRequest,
+        usesRegularShadow = usesRegularGlass,
+    ) { placement, bounds, transform ->
         val material = rememberGlassMaterialContext(inheritLuminance = false)
         val dark = material.isDark
         val bodyStyle = IosTypography.body
@@ -278,52 +291,45 @@ private fun GlasmioPopoverPopup(
         }
         var samplingCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
         val sampling = rememberStationaryBackdrop(backdrop, remember { { samplingCoordinates } })
-        val optics = remember { PopoverOptics() }
         val fill = if (dark) Color(0xFF202126) else Color(0xFFF6F7FA)
         val shadowColor = Color.Black.copy(alpha = if (dark) 0.35f else 0.15f)
-        val rim = Modifier.drawWithCache {
-            val path = (shape.createOutline(size, layoutDirection, this) as? Outline.Generic)?.path
-            val edge = Brush.verticalGradient(
-                0f to Color.Black.copy(alpha = if (dark) 0.14f else 0.10f),
-                1f to Color.Black.copy(alpha = if (dark) 0.22f else 0.17f),
+        val surface = if (placement == null) {
+            Modifier
+        } else if (usesRegularGlass) {
+            val opticalShape = remember(shape) { NavigationGlassOutlineShape(shape, bodyInset = PopoverPointerDepth) }
+            Modifier.navigationGlassBackground(
+                backdrop = sampling,
+                shape = { opticalShape },
+                containerColor = fill,
+                navigationMaterial = true,
+                innerShadows = rememberNavigationInnerShadows(enabled = true),
+                layerBlock = transform,
+                appearance = appearance,
+                materialContext = material,
             )
-            val highlight = Brush.linearGradient(
-                0f to Color.White.copy(alpha = if (dark) 0.50f else 0.87f),
-                0.52f to Color.White.copy(alpha = if (dark) 0.20f else 0.32f),
-                1f to Color.White.copy(alpha = if (dark) 0.46f else 0.64f),
+        } else if (appearance.usesBackdrop) {
+            Modifier.drawBackdrop(
+                backdrop = sampling,
+                shape = { shape },
+                layerBlock = transform,
+                luminanceState = material.luminanceState,
+                effects = { blur(NavigationGlassMaterial.RegularMedium.frostRadius.toPx()) },
+                shadow = { Shadow(radius = 18.dp, offset = DpOffset(0.dp, 6.dp), color = shadowColor) },
+                highlight = null,
             )
-            val edgeStroke = Stroke(width = 1.dp.toPx())
-            val highlightStroke = Stroke(width = 1.5.dp.toPx())
-            onDrawWithContent {
-                drawContent()
-                if (path != null) {
-                    drawPath(path, edge, style = edgeStroke)
-                    clipPath(path) { drawPath(path, highlight, style = highlightStroke) }
+        } else {
+            Modifier.graphicsLayer(transform)
+                .dropShadow(shape) {
+                    radius = 18.dp.toPx()
+                    offset = Offset(0f, 6.dp.toPx())
+                    color = shadowColor
                 }
-            }
+                .background(fill, shape)
         }
         Box(Modifier.onGloballyPositioned { samplingCoordinates = it }) {
             Column(
-                (if (appearance.usesBackdrop) Modifier.drawBackdrop(
-                        backdrop = sampling,
-                        shape = { shape },
-                        layerBlock = transform,
-                        luminanceState = material.luminanceState,
-                        effects = {
-                            blur(NavigationGlassMaterial.RegularMedium.frostRadius.toPx())
-                            if (appearance.usesRefraction) popoverEdgeRefraction(optics)
-                            regularGlassFace(material.darkFraction)
-                        },
-                        shadow = { Shadow(radius = 18.dp, offset = DpOffset(0.dp, 6.dp), color = shadowColor) },
-                        highlight = null,
-                    ) else Modifier.graphicsLayer(transform)
-                        .dropShadow(shape) {
-                            radius = 18.dp.toPx()
-                            offset = Offset(0f, 6.dp.toPx())
-                            color = shadowColor
-                        }
-                        .background(fill, shape))
-                    .then(rim)
+                surface
+                    .then(if (usesRegularGlass) Modifier else Modifier.popoverFallbackRim(shape, dark))
                     .padding(PopoverPointerDepth)
                     .widthIn(max = minOf(maxWidth, bounds.width))
                     .heightIn(max = bounds.height)
@@ -340,11 +346,34 @@ private fun GlasmioPopoverPopup(
     }
 }
 
+private fun Modifier.popoverFallbackRim(shape: PopoverShape, dark: Boolean): Modifier = drawWithCache {
+    val path = (shape.createOutline(size, layoutDirection, this) as? Outline.Generic)?.path
+    val edge = Brush.verticalGradient(
+        0f to Color.Black.copy(alpha = if (dark) 0.14f else 0.10f),
+        1f to Color.Black.copy(alpha = if (dark) 0.22f else 0.17f),
+    )
+    val highlight = Brush.linearGradient(
+        0f to Color.White.copy(alpha = if (dark) 0.50f else 0.87f),
+        0.52f to Color.White.copy(alpha = if (dark) 0.20f else 0.32f),
+        1f to Color.White.copy(alpha = if (dark) 0.46f else 0.64f),
+    )
+    val edgeStroke = Stroke(width = 1.dp.toPx())
+    val highlightStroke = Stroke(width = 1.5.dp.toPx())
+    onDrawWithContent {
+        drawContent()
+        if (path != null) {
+            drawPath(path, edge, style = edgeStroke)
+            clipPath(path) { drawPath(path, highlight, style = highlightStroke) }
+        }
+    }
+}
+
 @Composable
 private fun AnchoredPopup(
     visible: Boolean,
     tooltip: Boolean,
     onDismissRequest: (() -> Unit)? = null,
+    usesRegularShadow: Boolean = false,
     content: @Composable (AnchoredPlacement?, DpSize, GraphicsLayerScope.() -> Unit) -> Unit,
 ) {
     val visibility = remember { MutableTransitionState(false) }.apply { targetState = visible }
@@ -367,9 +396,10 @@ private fun AnchoredPopup(
     val window = LocalWindowInfo.current.containerSize
     val view = LocalView.current
     val safe = WindowInsets.glasmioSafeDrawing
-    val shadowSpace = if (tooltip) 16.dp else 28.dp
     val pointerSpace = if (tooltip) 0.dp else PopoverPointerDepth
-    val gutter = with(density) { shadowSpace.roundToPx() + pointerSpace.roundToPx() }
+    val pointerPx = with(density) { pointerSpace.roundToPx() }
+    val baseShadowPx = with(density) { (if (tooltip) 16.dp else PopoverShadowSpace).roundToPx() }
+    val baseGutter = baseShadowPx + pointerPx
     val edge = with(density) { 8.dp.roundToPx() }
     val left = safe.getLeft(density, direction) + edge
     val right = safe.getRight(density, direction) + edge
@@ -377,8 +407,8 @@ private fun AnchoredPopup(
     val bottom = safe.getBottom(density) + edge
     val bounds = with(density) {
         DpSize(
-            (window.width - left - right - gutter * 2).coerceAtLeast(1).toDp(),
-            (window.height - top - bottom - gutter * 2).coerceAtLeast(1).toDp(),
+            (window.width - left - right - baseGutter * 2).coerceAtLeast(1).toDp(),
+            (window.height - top - bottom - baseGutter * 2).coerceAtLeast(1).toDp(),
         )
     }
     val separation = with(density) { (if (tooltip) 7.dp else pointerSpace).roundToPx() }
@@ -390,7 +420,8 @@ private fun AnchoredPopup(
         modifier = Modifier.onGloballyPositioned { anchorCoordinates = it.parentLayoutCoordinates },
     ) { _, _ -> layout(0, 0) {} }
     var placement by remember { mutableStateOf<AnchoredPlacement?>(null) }
-    val provider = remember(view, window, tooltip, left, top, right, bottom, gutter, separation, pointerInset) {
+    var shadowPadding by remember(baseShadowPx) { mutableStateOf(IntOffset(baseShadowPx, baseShadowPx)) }
+    val provider = remember(view, window, tooltip, left, top, right, bottom, baseShadowPx, pointerPx, separation, pointerInset) {
         object : PopupPositionProvider {
             override fun calculatePosition(
                 anchorBounds: IntRect,
@@ -398,9 +429,10 @@ private fun AnchoredPopup(
                 layoutDirection: LayoutDirection,
                 popupContentSize: IntSize,
             ): IntOffset {
+                val gutter = shadowPadding + IntOffset(pointerPx, pointerPx)
                 val bodySize = IntSize(
-                    (popupContentSize.width - gutter * 2).coerceAtLeast(1),
-                    (popupContentSize.height - gutter * 2).coerceAtLeast(1),
+                    (popupContentSize.width - gutter.x * 2).coerceAtLeast(1),
+                    (popupContentSize.height - gutter.y * 2).coerceAtLeast(1),
                 )
                 val sides = when {
                     tooltip -> TooltipSides
@@ -423,7 +455,7 @@ private fun AnchoredPopup(
                     bodySize, sides, separation, pointerInset, preferMaximumVisibleArea = !tooltip,
                 )
                 placement = next
-                return next.body.topLeft - IntOffset(gutter, gutter)
+                return next.body.topLeft - gutter
             }
         }
     }
@@ -440,11 +472,12 @@ private fun AnchoredPopup(
         ),
     ) {
         val dismissGutter = if (visible && onDismissRequest != null) {
-            Modifier.pointerInput(onDismissRequest, gutter) {
+            Modifier.pointerInput(onDismissRequest, baseShadowPx, pointerPx) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    if (down.position.x < gutter || down.position.x >= size.width - gutter ||
-                        down.position.y < gutter || down.position.y >= size.height - gutter
+                    val gutter = shadowPadding + IntOffset(pointerPx, pointerPx)
+                    if (down.position.x < gutter.x || down.position.x >= size.width - gutter.x ||
+                        down.position.y < gutter.y || down.position.y >= size.height - gutter.y
                     ) {
                         down.consume()
                         onDismissRequest()
@@ -459,8 +492,7 @@ private fun AnchoredPopup(
             scaleX = startScale + (1f - startScale) * fraction
             scaleY = scaleX
             if (!tooltip && frame != null && size.width > 0f && size.height > 0f) {
-                val pointer = pointerSpace.roundToPx()
-                val pivot = frame.tip - frame.body.topLeft + IntOffset(pointer, pointer)
+                val pivot = frame.tip - frame.body.topLeft + IntOffset(pointerPx, pointerPx)
                 transformOrigin = TransformOrigin(pivot.x / size.width, pivot.y / size.height)
             }
         }
@@ -468,7 +500,20 @@ private fun AnchoredPopup(
             dismissGutter.graphicsLayer {
                 alpha = if (placement == null) 0f else progress.coerceIn(0f, 1f)
                 if (tooltip) transform(this)
-            }.padding(shadowSpace),
+            }.layout { measurable, constraints ->
+                // Reserve extra space for the shadow only after measuring the original content.
+                val child = measurable.measure(constraints.offset(-2 * baseShadowPx, -2 * baseShadowPx))
+                val desired = if (usesRegularShadow) {
+                    val bodySize = minOf(child.width, child.height) - 2 * pointerPx
+                    maxOf(baseShadowPx, navigationRegularGlassShadowPadding(bodySize, this.density))
+                } else baseShadowPx
+                val horizontal = minOf(desired, (constraints.maxWidth - child.width) / 2)
+                val vertical = minOf(desired, (constraints.maxHeight - child.height) / 2)
+                shadowPadding = IntOffset(horizontal, vertical)
+                layout(child.width + 2 * horizontal, child.height + 2 * vertical) {
+                    child.place(horizontal, vertical)
+                }
+            },
         ) { content(placement, bounds, transform) }
     }
 }

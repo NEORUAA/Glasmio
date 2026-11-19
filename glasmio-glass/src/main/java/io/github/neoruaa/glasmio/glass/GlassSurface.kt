@@ -775,7 +775,9 @@ internal fun Modifier.navigationGlassBackgroundResolved(
             if (sampleBackdrop && appearance.usesBackdrop) {
                 val storage = this as? io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
                 val surfaceShape = shape()
-                val extent = ((surfaceShape as? NavigationGlassUnionShape)?.minimumDimension ?: size.minDimension) / density
+                val outlineShape = surfaceShape as? NavigationGlassOutlineShape
+                val extent = outlineShape?.bodyDimension(size, this)
+                    ?: ((surfaceShape as? NavigationGlassUnionShape)?.minimumDimension ?: size.minDimension) / density
                 val geometry = if (cachedGeometry == null || geometryExtent != extent) {
                     navigationGlassGeometryProfile(extent, material).also { cachedGeometry = it; geometryExtent = extent }
                 } else requireNotNull(cachedGeometry)
@@ -788,7 +790,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                     NativeGlassPressGlow(sampledPressHighlight?.invoke(storage.fullSize))
                 } else null
                 val completion = nativeRecipe?.let { recipe ->
-                    NativeGlassCompletion(recipe, isDark,
+                    NativeGlassCompletion(if (outlineShape == null) recipe else recipe.forMinimumDimension(extent), isDark,
                         if (material == NavigationGlassMaterial.Clear) 1f else 0f,
                         materialAlpha = materialPaintAlpha, edgeAlpha = innerShadowAlpha,
                         shadow = if (dropShadow == null) navigationNativeShadowProfile(extent, shadowMaterial) else null,
@@ -800,6 +802,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                     is LiquidContactShape -> navigationContainerGlassField(surfaceShape, opticalCenter?.invoke(), completionBand)
                     is ToolbarActionShape -> navigationToolbarGlassField(surfaceShape, completionBand)
                     is NavigationGlassUnionShape -> surfaceShape.nativeField()
+                    is NavigationGlassOutlineShape -> surfaceShape.nativeField(size, layoutDirection, this, completionBand)
                     else -> null
                 } else null
                 if (nativeOptics) {

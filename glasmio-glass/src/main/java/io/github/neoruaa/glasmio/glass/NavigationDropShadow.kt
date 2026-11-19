@@ -10,6 +10,7 @@ import android.graphics.RenderEffect
 import android.graphics.RenderNode
 import android.graphics.RuntimeShader
 import android.graphics.Shader
+import androidx.annotation.RestrictTo
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -51,6 +52,17 @@ internal fun navigationNativeShadowProfile(minimumDimension: Float, material: Na
     }
     return NativeNavigationShadowProfile(4f + 20f * t, .04f + .56f * t)
 }
+
+/** Window padding for an adaptive Regular shadow around a body measured in physical pixels. */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+fun navigationRegularGlassShadowPadding(minimumBodySize: Int, density: Float): Int {
+    val radius = navigationNativeShadowProfile(minimumBodySize / density, material = null).radius
+    return ceil(navigationShadowSupport(radius, density)).toInt()
+}
+
+// The native key/fill offset and one device pixel for antialiasing.
+internal fun navigationShadowSupport(radius: Float, density: Float): Float =
+    if (radius > 0f) radius * density * 2f + 8f * density + 1f else 0f
 
 /** Exterior-only shadow with a retained GPU mask and native material profile support. */
 class NavigationDropShadowRenderer(
