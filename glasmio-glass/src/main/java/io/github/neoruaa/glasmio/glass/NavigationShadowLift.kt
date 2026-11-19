@@ -5,6 +5,8 @@ import io.github.neoruaa.glasmio.icons.*
 
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
+import android.os.Build
+import androidx.annotation.RequiresApi
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.effects.runtimeShaderEffect
 
@@ -17,6 +19,7 @@ fun BackdropEffectScope.liftNavigationShadows() {
 }
 
 /** Retain this effect with the morph renderer rather than compiling it during drawing. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 fun navigationShadowLiftEffect(): RenderEffect =
     RenderEffect.createRuntimeShaderEffect(RuntimeShader(NavigationShadowLiftShader).apply {
         setFloatUniform("suppression", 0f)

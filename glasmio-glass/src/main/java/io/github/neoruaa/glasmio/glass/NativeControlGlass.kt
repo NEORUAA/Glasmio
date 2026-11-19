@@ -2,6 +2,8 @@ package io.github.neoruaa.glasmio.glass
 
 import android.graphics.BlendMode
 import android.graphics.RenderEffect
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -14,6 +16,7 @@ import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
 import io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.optics.glassCornerRadii
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSdfFunctions
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassRefractionFunctions
@@ -49,7 +52,7 @@ internal fun BackdropEffectScope.nativeControlGlassImpl(
     optics: BackdropEffectScope.() -> Unit,
 ) {
     val storage = this as? BackdropEffectScopeImpl
-    if (storage == null) { optics(); return }
+    if (storage == null || !isRuntimeShaderSupported()) { optics(); return }
     // Existing controls use an explicit blur no larger than 8 pt and an inward lens.
     // Reserve its Gaussian source support before the lambda binds its capture origin.
     padding = max(padding, sourcePadding)
@@ -81,6 +84,7 @@ internal data class NativeMenuTransitionRefraction(
     val amount: Float,
     val hasSecondary: Boolean,
 ) {
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun configure(shader: android.graphics.RuntimeShader) {
         shader.setFloatUniform("transitionSampleExtent", sampleExtent.width.toFloat(), sampleExtent.height.toFloat())
         shader.setFloatUniform("transitionDrawingBounds", drawingBounds.left, drawingBounds.top, drawingBounds.right, drawingBounds.bottom)
@@ -100,6 +104,7 @@ private data class NativeControlCompletionSourceKey(
 )
 
 /** Raw and explicitly filtered regions have identical grids, rather than native mip dimensions. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal fun BackdropEffectScope.completeNativeFilteredGlass(
     base: IntSize,
     producer: RenderEffect?,
@@ -150,6 +155,7 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
 }
 
 /** Only the owned menu caller supplies A and raw L0; generic control sources remain unchanged. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal fun BackdropEffectScope.completeNativeMenuFilteredGlass(
     base: IntSize,
     origin: Offset,

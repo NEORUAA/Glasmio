@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.glass
 
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
 
@@ -76,7 +77,8 @@ class NavigationDropShadowRenderer(
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = shadowColor.copy(alpha = 1f).toArgb() }
     private val compositingPaint = ComposePaint().apply { blendMode = shadowBlendMode }
     private val nativeShaders = mutableMapOf<String?, RuntimeShader>()
-    private val nativePaint = if (useNativeProfile) Paint(Paint.ANTI_ALIAS_FLAG) else null
+    private val useNativeShader = useNativeProfile && isRuntimeShaderSupported()
+    private val nativePaint = if (useNativeShader) Paint(Paint.ANTI_ALIAS_FLAG) else null
     private var outlinePath = android.graphics.Path()
     private var key: GeometryKey? = null
     private var blurDensity = Float.NaN
@@ -192,21 +194,21 @@ class NavigationDropShadowRenderer(
                 is Outline.Generic -> addPath(outline.path)
             }
         }.asAndroidPath()
-        val profile = if (useNativeProfile) navigationNativeShadowProfile(size.minDimension / scope.density, nativeMaterial) else null
+        val profile = if (useNativeShader) navigationNativeShadowProfile(size.minDimension / scope.density, nativeMaterial) else null
         val radiusPoints = profile?.radius ?: shadowRadius.value
         activeAlpha = if (profile != null) profile.opacity * 0.3f else shadowAlpha
         if (blurDensity != scope.density || activeRadius != radiusPoints) {
             // SDF profiles retain native inverse-radius packing; ordinary CALayer sigma is opt-in.
-            val sigma = (radiusPoints * if (useNativeProfile || gaussianRadiusIsSigma) 1f else 0.5f).coerceAtLeast(0f) * scope.density
+            val sigma = (radiusPoints * if (useNativeShader || gaussianRadiusIsSigma) 1f else 0.5f).coerceAtLeast(0f) * scope.density
             val radius = ((sigma * renderScale - 0.5f) / 0.57735f).coerceAtLeast(0.001f)
-            mask.setRenderEffect(if (useNativeProfile) null else RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
+            mask.setRenderEffect(if (useNativeShader) null else RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
             verticalOffset = shadowOffsetY.value * scope.density
             horizontalOffset = shadowOffsetX.value * scope.density
             padding = ceil(3f * sigma + maxOf(abs(horizontalOffset), abs(verticalOffset)))
             blurDensity = scope.density
             activeRadius = radiusPoints
         }
-        if (nativePaint != null) {
+        if (nativePaint != null && isRuntimeShaderSupported()) {
             val field = fieldOverride ?: (shape as? LiquidContactShape)?.let { navigationContainerGlassField(it, minimumBand = padding) }
             val shader = nativeShaders.getOrPut(field?.shaderFunctions) {
                 val source = field?.shaderFunctions?.let { it + "\nfloat nativeShadowDistance(float2 p) { return navigationGlassField(p).x; }\n" }

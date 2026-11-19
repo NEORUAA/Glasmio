@@ -21,7 +21,7 @@ android {
     compileSdk = 37
     defaultConfig {
         applicationId = "io.github.neoruaa.glasmio.sample"
-        minSdk = 33
+        minSdk = 31
         targetSdk = 37
         versionCode = 4
         versionName = "0.1.3"

@@ -17,7 +17,10 @@ interface RuntimeShaderCache {
 
 internal class RuntimeShaderCacheImpl(
     private val pool: () -> RuntimeShaderPool? = SharedRuntimeShaderPool::current,
-    private val compile: (String) -> RuntimeShader = ::RuntimeShader,
+    private val compile: (String) -> RuntimeShader = { source ->
+        if (isRuntimeShaderSupported()) RuntimeShader(source)
+        else error("RuntimeShader requires Android 13 (API 33)+")
+    },
 ) : RuntimeShaderCache {
 
     private data class Entry(val source: String, val shader: RuntimeShader)

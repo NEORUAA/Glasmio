@@ -60,6 +60,7 @@ class PressHighlightRenderer {
     }
 
     /** The identical transfer for a sampled material on API 33–35. No white-overlay fallback. */
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     internal fun effect(
         progress: Float,
         position: Offset,
@@ -107,6 +108,7 @@ internal fun nativePressDodgeGain(isDark: Boolean, tint: Color?, clear: Boolean)
     return 1f / (1f - white)
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal fun configureNativePressGlow(
     shader: RuntimeShader,
     progress: Float,

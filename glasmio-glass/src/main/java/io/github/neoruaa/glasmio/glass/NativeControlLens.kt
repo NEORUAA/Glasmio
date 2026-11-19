@@ -1,5 +1,8 @@
 package io.github.neoruaa.glasmio.glass
 
+import android.os.Build
+import androidx.annotation.RequiresApi
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import android.graphics.BlendMode
 import android.graphics.RenderEffect
 import android.graphics.Shader
@@ -43,6 +46,7 @@ fun BackdropEffectScope.nativeControlLens(
     tint: Color = Color.Unspecified,
 ) {
     val scope = this as? BackdropEffectScopeImpl ?: return
+    if (!isRuntimeShaderSupported()) return
     val small = style == NativeControlLensStyle.SwitchThumb || style == NativeControlLensStyle.SliderThumb
     val lift = liftProgress.takeIf { it.isFinite() } ?: 0f
     val rest = (1f - lift).coerceIn(0f, 1f)
@@ -269,6 +273,7 @@ internal fun nativeControlScenePlaneProgram(
 }
 
 /** Explicit analytic fixture; owned control renderers materialize each Gaussian stage. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal fun BackdropEffectScope.nativeControlLensReferenceProducer(
     style: NativeControlLensStyle,
     liftProgress: Float,

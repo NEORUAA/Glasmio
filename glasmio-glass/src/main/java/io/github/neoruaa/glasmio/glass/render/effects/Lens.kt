@@ -2,6 +2,7 @@ package io.github.neoruaa.glasmio.glass.render.effects
 
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.optics.GlassSdfShader
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassRefractionFunctions
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSpectralFunctions
@@ -20,7 +21,7 @@ fun BackdropEffectScope.lens(
     outerRefractionAmount: Float = 0f,
     refractionOpacity: Float = .6f,
 ) {
-    if (refractionHeight <= 0f || refractionAmount <= 0f || size.minDimension <= 0f) return
+    if (!isRuntimeShaderSupported() || refractionHeight <= 0f || refractionAmount <= 0f || size.minDimension <= 0f) return
     val shader = obtainRuntimeShader("Glasmio.SDF.Refraction", GlassRefractionShader)
     shader.setFloatUniform("size", size.width, size.height)
     shader.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, layoutDirection, this))

@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.glass
 
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
 import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
@@ -118,7 +119,7 @@ class GlasmioMenuAnchorState constructor() {
 
     @Synchronized
     fun prewarmShaders() {
-        if (shaderPrograms == null) shaderPrograms = LiquidMenuShaderPrograms()
+        if (isRuntimeShaderSupported() && shaderPrograms == null) shaderPrograms = LiquidMenuShaderPrograms()
     }
     var portal by mutableStateOf<ToolbarMenuPortal?>(null)
         private set
@@ -439,7 +440,8 @@ fun GlasmioToolbarActionHost(
     }
     group.materialEffect = remember(materialRenderer, materialRecipe, appearance) {
         { material, alpha ->
-            if (material.color == null && material.sampleBackdrop && appearance.usesBackdrop) materialRenderer.effect(materialRecipe, alpha)
+            if (isRuntimeShaderSupported() && material.color == null && material.sampleBackdrop && appearance.usesBackdrop)
+                materialRenderer.effect(materialRecipe, alpha)
             else null
         }
     }

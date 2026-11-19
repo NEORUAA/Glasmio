@@ -5,6 +5,8 @@
  */
 package io.github.neoruaa.glasmio.glass
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
 
@@ -21,6 +23,7 @@ import androidx.compose.ui.geometry.Offset
 import kotlin.math.ceil
 
 /** One cached contour texture supplies native sampling, edges and custom centered optics. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal fun navigationContainerGlassField(
     shape: LiquidContactShape,
     opticalCenter: Offset? = null,
@@ -47,6 +50,7 @@ internal fun navigationContainerGlassField(
 }
 
 /** Toolbar contours are captured in local physical pixels without an optical center. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal fun navigationToolbarGlassField(
     shape: ToolbarActionShape,
     minimumBand: Float,

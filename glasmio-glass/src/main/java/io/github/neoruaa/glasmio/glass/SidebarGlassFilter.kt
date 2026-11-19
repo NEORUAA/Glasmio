@@ -10,6 +10,9 @@ import io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
 import io.github.neoruaa.glasmio.glass.render.backdrops.applySidebarBackgroundExtension
 import io.github.neoruaa.glasmio.glass.render.cachedResource
+import io.github.neoruaa.glasmio.glass.render.effects.blur
+import io.github.neoruaa.glasmio.glass.render.effects.vibrancy
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.pow
@@ -20,6 +23,11 @@ import kotlin.math.pow
  * color processing without transporting numeric gamma colors through HWUI textures.
  */
 fun BackdropEffectScope.sidebarGlass(backdrop: Backdrop, isDark: Boolean) {
+    if (!isRuntimeShaderSupported()) {
+        vibrancy()
+        blur(16.dp.toPx())
+        return
+    }
     val storage = this as? BackdropEffectScopeImpl ?: return
     // Spec.Blur evaluates the largest-area minimum distance; regular sidebars are rectangles.
     // Its 64...160 -> 0...4 recipe scale is doubled by the Spec-to-CA parameter conversion.

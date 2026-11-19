@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.glass
 
+import androidx.annotation.RequiresApi
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
 
@@ -110,10 +112,12 @@ fun LiquidMenuMorphSurface(
     DisposableEffect(sourceShadow) {
         onDispose { sourceShadow.release() }
     }
-    val portal = remember(shaderPrograms) { shaderPrograms?.portal ?: RuntimeShader(LiquidMenuPortalShader) }
+    val portal = remember(shaderPrograms) {
+        if (isRuntimeShaderSupported()) shaderPrograms?.portal ?: RuntimeShader(LiquidMenuPortalShader) else null
+    }
     DisposableEffect(portal) {
         onDispose {
-            bindLiquidMenuField(portal, null)
+            if (isRuntimeShaderSupported() && portal != null) bindLiquidMenuField(portal, null)
             LiquidMenuNativeField.release()
         }
     }
@@ -214,7 +218,7 @@ fun LiquidMenuMorphSurface(
                     addPath(shape.path(bounds.size))
                     translate(bounds.topLeft)
                 }
-                fieldTexture.update(shape.sampledField(), bounds.topLeft)
+                if (isRuntimeShaderSupported()) fieldTexture.update(shape.sampledField(), bounds.topLeft)
                 // Evaluate the live block rather than the layer's possibly previous-frame
                 // coordinate matrix. The measured screen origin belongs to the stable host.
                 samplingLayer.reset(this, size)
@@ -255,7 +259,7 @@ fun LiquidMenuMorphSurface(
                 fun DrawScope.drawMaterial() {
                     val glowPosition = highlight.highlightPosition(size)
                     val retainedMaterialEffect = if (knownSourceMaterial == null && Build.VERSION.SDK_INT < 36 && sourceHasGlassBackground &&
-                        sourceMaterialEffect != null && appearance.usesBackdrop) {
+                        sourceMaterialEffect != null && appearance.usesBackdrop && isRuntimeShaderSupported()) {
                         val sourceEffect = sourceMaterialEffect(1f - frame.contentProgress)
                         val targetEffect = renderer.materialEffect(context.isDark, frame.contentProgress)
                         RenderEffect.createChainEffect(targetEffect, sourceEffect)
@@ -379,7 +383,8 @@ fun LiquidMenuMorphSurface(
                 // Clip in physical surface space. Scaling a clipped full-size menu would
                 // squeeze its corners and make the initial capsule rectangular.
                 clipPath(path) {
-                    if (frame.lensHeight <= 0.01f && frame.portalBlur <= 0.01f) {
+                    if (!isRuntimeShaderSupported() || portal == null ||
+                        (frame.lensHeight <= 0.01f && frame.portalBlur <= 0.01f)) {
                         this@drawWithContent.drawContent()
                     } else {
                         // AnimationKit filters the shared portal container: Gaussian first,
@@ -528,7 +533,7 @@ class LiquidMenuFieldTexture {
         bytes.rewind()
         bitmap.copyPixelsFromBuffer(bytes)
         current = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
-            setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+            if (isRuntimeShaderSupported()) setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
         }
     }
 }
@@ -537,6 +542,7 @@ private val EmptyLiquidMenuField by lazy {
     BitmapShader(Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888), Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 fun bindLiquidMenuField(
     shader: RuntimeShader,
     field: LiquidMenuFieldTexture?,

@@ -2,6 +2,8 @@ package io.github.neoruaa.glasmio.glass
 
 import android.graphics.BlendMode
 import android.graphics.RenderEffect
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.asComposeRenderEffect
@@ -10,6 +12,9 @@ import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
 import io.github.neoruaa.glasmio.glass.render.cachedResource
+import io.github.neoruaa.glasmio.glass.render.effects.blur
+import io.github.neoruaa.glasmio.glass.render.effects.vibrancy
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.optics.GlassSdfShader
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassRefractionFunctions
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSdfFunctions
@@ -64,6 +69,12 @@ internal fun BackdropEffectScope.nativeNavigationGlassFilter(
     completion: NativeGlassCompletion? = null,
     darkFraction: Float = if (isDark) 1f else 0f,
 ) {
+    if (!isRuntimeShaderSupported()) {
+        if (!clear) vibrancy()
+        val radius = blurRadius.takeIf { it.isFinite() && it > 0f } ?: 0f
+        if (radius > 0f) blur(radius)
+        return
+    }
     val source = renderEffect?.asAndroidRenderEffect()
     val radius = blurRadius.takeIf { it.isFinite() && it > 0f } ?: 0f
     val fillRadius = if (clear || radius <= 0f) 0f else radius * (8f / 5f)
@@ -171,6 +182,7 @@ private data class NativeAtlasMaterialSourceKey(
 )
 
 /** The producer is materialized before this single sampled material program evaluates its ROI. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     pyramid: NativeGlassMipPyramid,
     source: RenderEffect?,

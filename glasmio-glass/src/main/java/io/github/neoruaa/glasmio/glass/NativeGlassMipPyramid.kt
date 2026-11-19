@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.glass
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import androidx.compose.ui.graphics.GraphicsContext
@@ -18,6 +20,7 @@ import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
 import io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import kotlin.math.ceil
 
@@ -68,6 +71,7 @@ internal class NativeGlassMipLevel(
     private val sourceSize: IntSize,
     private val lastLevel: Int,
 ) {
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun configure(shader: RuntimeShader, sampling: Boolean = true, weighting: Boolean = true) {
         if (sampling) {
             shader.setFloatUniform("nativeMipBaseSize", sourceSize.width.toFloat(), sourceSize.height.toFloat())
@@ -156,6 +160,7 @@ internal class NativeGlassMipAtlas(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun configure(shader: RuntimeShader) {
         shader.setFloatUniform("nativeAtlasBaseSize", baseSize.width.toFloat(), baseSize.height.toFloat())
         shader.setFloatUniform("nativeAtlasRects", packedRects)
@@ -228,7 +233,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         plane: NativeControlLensFieldPlane?,
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
     ) {
-        if (plane == null) {
+        if (!isRuntimeShaderSupported() || plane == null) {
             fieldLayer?.let(context::releaseGraphicsLayer)
             fieldLayer = null
             recordedFieldKey = null
@@ -563,6 +568,7 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
     private val texturePrograms = mutableMapOf<String, String>()
 
     /** One unique single-input stage per level; no shared-prefix branch evaluation. */
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun atlas(
         source: RenderEffect?,
         sourceSize: IntSize,
@@ -716,6 +722,7 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
             compatibilityProducer = compatibilityProducer).also { cachedAtlas = it }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun levels(
         source: RenderEffect?,
         sourceSize: IntSize,

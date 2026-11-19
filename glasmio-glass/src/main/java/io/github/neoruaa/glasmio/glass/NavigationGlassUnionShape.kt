@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.glass
 
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
@@ -42,10 +43,12 @@ class NavigationGlassUnionShape(
     private val packedBounds = FloatArray(16 * 4)
     private val packedRadii = FloatArray(16 * 2)
     private val opticalField = NativeGlassFilterField(NavigationGlassUnionFieldShader) { shader ->
-        shader.setFloatUniform("compoundElements", packedBounds)
-        shader.setFloatUniform("compoundRadii", packedRadii)
-        shader.setFloatUniform("compoundCount", elements.size.toFloat())
-        shader.setFloatUniform("compoundSmoothness", smoothness)
+        if (isRuntimeShaderSupported()) {
+            shader.setFloatUniform("compoundElements", packedBounds)
+            shader.setFloatUniform("compoundRadii", packedRadii)
+            shader.setFloatUniform("compoundCount", elements.size.toFloat())
+            shader.setFloatUniform("compoundSmoothness", smoothness)
+        }
     }
 
     init {

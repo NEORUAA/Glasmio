@@ -60,7 +60,7 @@ UI dependencies expose their underlying modules transitively. Add the highest-le
 
 ## Build and run
 
-Requires JDK 21, Android SDK 37, NDK `27.1.12297006`, and CMake `3.22.1`. The minimum supported Android version is API 33. The repository includes its Gradle wrapper.
+Requires JDK 21, Android SDK 37, NDK `27.1.12297006`, and CMake `3.22.1`. Source builds support Android 12 (API 31) or newer. On Android 12 and 12L, glass uses standard blur and simpler materials. AGSL refraction and related shader effects require API 33. The repository includes its Gradle wrapper.
 
 ```sh
 ./gradlew :sample:assembleDebug testDebugUnitTest lintDebug

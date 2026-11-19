@@ -20,6 +20,7 @@ import io.github.neoruaa.glasmio.glass.LiquidContactShape
 import io.github.neoruaa.glasmio.glass.render.RuntimeShader
 import io.github.neoruaa.glasmio.glass.render.RuntimeShaderCacheImpl
 import io.github.neoruaa.glasmio.glass.render.asComposeShader
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.internal.ShapeProvider
 
 internal data class HighlightElement(
@@ -74,7 +75,7 @@ internal class HighlightNode(
         }
         if (geometry != nextGeometry || style != nextStyle || shape is LiquidContactShape) {
             shader = with(nextStyle) { createShader(shape, cache) }
-            paint.shader = shader?.asComposeShader()
+            paint.shader = if (isRuntimeShaderSupported()) shader?.asComposeShader() else null
             geometry = nextGeometry
             style = nextStyle
             lastWidth = Float.NaN
@@ -93,7 +94,8 @@ internal class HighlightNode(
             blender.prepare(matrix)
             paint.asFrameworkPaint().xfermode = blender.shader
         }
-        paint.alpha = (effect.alpha * nextStyle.color.alpha).coerceIn(0f, 1f)
+        val fallbackAlpha = if (shader == null && nativeStyle) 0.28f else nextStyle.color.alpha
+        paint.alpha = (effect.alpha * fallbackAlpha).coerceIn(0f, 1f)
         val canvas = drawContext.canvas
         canvas.save()
         try {
@@ -101,7 +103,7 @@ internal class HighlightNode(
             canvas.clipPath(path)
             if (shader == null) {
                 paint.color = nextStyle.color.copy(alpha = 1f)
-                paint.alpha = (effect.alpha * nextStyle.color.alpha).coerceIn(0f, 1f)
+                paint.alpha = (effect.alpha * fallbackAlpha).coerceIn(0f, 1f)
                 paint.style = PaintingStyle.Stroke
                 paint.strokeWidth = width * 2f
                 canvas.drawPath(path, paint)

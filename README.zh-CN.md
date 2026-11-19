@@ -60,7 +60,7 @@ UI 模块会传递暴露其底层依赖，添加所需的最高层模块即可�
 
 ## 构建与运行
 
-需要 JDK 21、Android SDK 37、NDK `27.1.12297006` 和 CMake `3.22.1`。最低支持 Android API 33。仓库包含 Gradle Wrapper。
+需要 JDK 21、Android SDK 37、NDK `27.1.12297006` 和 CMake `3.22.1`。源码构建支持 Android 12（API 31）及以上版本。在 Android 12 和 12L 上，玻璃材质使用普通模糊和简化渲染。AGSL 折射等着色器效果需要 API 33。仓库包含 Gradle Wrapper。
 
 ```sh
 ./gradlew :sample:assembleDebug testDebugUnitTest lintDebug

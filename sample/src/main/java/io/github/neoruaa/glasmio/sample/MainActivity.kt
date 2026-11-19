@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.sample
 
+import android.os.Build
 import android.os.Bundle
 import android.graphics.Typeface
 import android.graphics.BitmapFactory
@@ -94,6 +95,7 @@ import io.github.neoruaa.glasmio.scaffold.navigation.iosTransitionSpec
 import io.github.neoruaa.glasmio.scaffold.navigation.iosPopTransitionSpec
 import io.github.neoruaa.glasmio.scaffold.navigation.iosPredictivePopTransitionSpec
 import com.kyant.capsule.ContinuousRoundedRectangle
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.LocalGlassAdaptiveLuminanceRange
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
@@ -805,7 +807,13 @@ private fun AboutDemo(layout: SamplePageLayout) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
     val version = remember(context) {
-        context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0)).versionName.orEmpty()
+        val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageInfo(context.packageName, 0)
+        }
+        packageInfo.versionName.orEmpty()
     }
     DemoList(layout) {
         item {
@@ -1524,6 +1532,7 @@ private fun DemoSettings(
     fpsCounter: Boolean,
     onFpsCounter: (Boolean) -> Unit,
 ) {
+    val shaderEffectsSupported = isRuntimeShaderSupported()
     DemoList(layout) {
         item {
             // Keep a full viewport below the independently scrolling large title.
@@ -1535,8 +1544,10 @@ private fun DemoSettings(
                         GlasmioSwitchPreference(title = { Text("Reduce Transparency") }, checked = reduceTransparency, onCheckedChange = onReduceTransparency, showTopSeparator = true)
                         GlasmioSwitchPreference(
                             modifier = Modifier.testTag("settings-hdr-effects"),
-                            title = { Text("HDR Effects") }, checked = hdrEffects, onCheckedChange = onHdrEffects,
-                            isEnabled = !reduceTransparency, showTopSeparator = true,
+                            title = { Text("HDR Effects") },
+                            checked = shaderEffectsSupported && hdrEffects,
+                            onCheckedChange = onHdrEffects,
+                            isEnabled = shaderEffectsSupported && !reduceTransparency, showTopSeparator = true,
                         )
                     }
                 }

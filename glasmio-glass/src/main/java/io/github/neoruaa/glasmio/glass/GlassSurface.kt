@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.glass
 
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
 
 import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
@@ -521,7 +522,7 @@ fun rememberNavigationInnerShadows(
     renderScale: Float = 1f,
 ): NavigationInnerShadowRenderer? {
     val renderer = remember(enabled, renderScale) {
-        if (enabled) NavigationInnerShadowRenderer(renderScale = renderScale) else null
+        if (enabled && isRuntimeShaderSupported()) NavigationInnerShadowRenderer(renderScale = renderScale) else null
     }
     DisposableEffect(renderer) {
         onDispose { renderer?.release() }
@@ -544,7 +545,7 @@ fun Modifier.navigationLensSourceBackground(
     pressGlowBounds: ((Size) -> Rect)? = null,
 ): Modifier {
     val recipe = NavigationMaterialRecipe.resolve(isDark, null)
-    val sampledPressRenderer = if (Build.VERSION.SDK_INT < 36 && pressGlow != null) PressHighlightRenderer() else null
+    val sampledPressRenderer = if (isRuntimeShaderSupported() && Build.VERSION.SDK_INT < 36 && pressGlow != null) PressHighlightRenderer() else null
     return navigationLensSourceDropShadow(shape).drawBackdrop(
     backdrop = backdrop,
     shape = shape,
@@ -564,7 +565,7 @@ fun Modifier.navigationLensSourceBackground(
                 chromaticAberration = true,
             )
         }
-        if (innerShadows != null && Build.VERSION.SDK_INT < 36) {
+        if (isRuntimeShaderSupported() && innerShadows != null && Build.VERSION.SDK_INT < 36) {
             val coating = innerShadows.materialEffect(
             recipe, shape = shape(), size = size, density = this, layoutDirection = layoutDirection,
             origin = Offset(padding, padding), highlight = Highlight.Default,
@@ -573,7 +574,7 @@ fun Modifier.navigationLensSourceBackground(
                 RenderEffect.createChainEffect(coating, it.asAndroidRenderEffect()).asComposeRenderEffect()
             } ?: coating.asComposeRenderEffect()
         } else if (innerShadows == null && !isDark && appearance.usesBackdrop) liftNavigationShadows()
-        if (sampledPressRenderer != null) {
+        if (isRuntimeShaderSupported() && sampledPressRenderer != null) {
             val glow = pressGlow?.invoke()
             if (glow != null && glow.glowProgress > 0f) {
                 val bounds = (pressGlowBounds?.invoke(size) ?: Rect(Offset.Zero, size)).translate(Offset(padding, padding))
@@ -725,7 +726,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
     fusePressOverlayIntoCompletion: Boolean = false,
     shadowMaterial: NavigationGlassMaterial? = material,
 ): Modifier {
-    val nativeRecipe = if (navigationMaterial && innerShadows != null && surfaceOverlay == null &&
+    val nativeRecipe = if (isRuntimeShaderSupported() && navigationMaterial && innerShadows != null && surfaceOverlay == null &&
         sampleBackdrop && appearance.usesBackdrop) {
         NavigationMaterialRecipe.resolve(darkFraction, material, prominentTint, materialTint, containerAlphaMultiplier)
     } else null
@@ -740,7 +741,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
             (outline is RoundedRectangularShape || outline is CornerBasedShape || outline === RectangleShape))
             navigationGlassCaptureScale(size.minDimension / density.density) else 1f
     }
-    val sampledPressRenderer = if (Build.VERSION.SDK_INT < 36 && sampledPressHighlight != null) PressHighlightRenderer() else null
+    val sampledPressRenderer = if (isRuntimeShaderSupported() && Build.VERSION.SDK_INT < 36 && sampledPressHighlight != null) PressHighlightRenderer() else null
     // Only the shared bottom base opts in: it has no child content before its press overlay.
     val canFusePressOverlay = fusePressOverlayIntoCompletion && Build.VERSION.SDK_INT >= 36 &&
         sampledPressHighlight != null && pressOverlay != null && nativeRecipe != null &&
@@ -795,7 +796,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                         highlightAngle = highlightAngle, darkFraction = darkFraction, pressGlow = pressGlow)
                 }
                 val completionBand = completion?.shadow?.let { (it.radius * 2f + 8f) * density + 2f } ?: 0f
-                val nativeField = if (nativeOptics || completion != null) when (surfaceShape) {
+                val nativeField = if (isRuntimeShaderSupported() && (nativeOptics || completion != null)) when (surfaceShape) {
                     is LiquidContactShape -> navigationContainerGlassField(surfaceShape, opticalCenter?.invoke(), completionBand)
                     is ToolbarActionShape -> navigationToolbarGlassField(surfaceShape, completionBand)
                     is NavigationGlassUnionShape -> surfaceShape.nativeField()
@@ -830,7 +831,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                     else explicitOptics()
                 }
                 completedPressOverlay = pressGlow != null && storage?.nativeMaterialCompleted == true
-                if (nativeRecipe != null && !completeNativeMaterial && Build.VERSION.SDK_INT < 36) {
+                if (isRuntimeShaderSupported() && nativeRecipe != null && !completeNativeMaterial && Build.VERSION.SDK_INT < 36) {
                     val coating = requireNotNull(innerShadows).materialEffect(
                         nativeRecipe, materialPaintAlpha, size.minDimension / density,
                         shape = shape(), size = size, density = this, layoutDirection = layoutDirection,
@@ -841,7 +842,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                         RenderEffect.createChainEffect(coating, it.asAndroidRenderEffect()).asComposeRenderEffect()
                     } ?: coating.asComposeRenderEffect()
                 } else if (nativeRecipe == null && navigationMaterial && !isDark && !preserveBackdropColors) liftNavigationShadows()
-                if (sampledPressRenderer != null) {
+                if (isRuntimeShaderSupported() && sampledPressRenderer != null) {
                     val captureScale = samplingScale(size, this)
                     val source = sampledPressHighlight?.invoke(size / captureScale)
                     val press = source?.highlight
@@ -1050,7 +1051,7 @@ fun GlassSurface(
     interactiveHighlight.materialTint = nativeSourceRecipe?.tint
     interactiveHighlight.materialClear = material == NavigationGlassMaterial.Clear
     val sourceMaterialEffect: ((Float) -> RenderEffect)? = remember(nativeSourceRecipe, innerShadows) {
-        if (nativeSourceRecipe != null && innerShadows != null) {
+        if (isRuntimeShaderSupported() && nativeSourceRecipe != null && innerShadows != null) {
             { alpha: Float -> innerShadows.materialEffect(nativeSourceRecipe, alpha) }
         } else null
     }

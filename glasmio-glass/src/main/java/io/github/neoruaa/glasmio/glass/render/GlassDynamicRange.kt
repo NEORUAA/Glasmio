@@ -34,7 +34,7 @@ fun configureGlassDynamicRange(
         "Desired HDR headroom must be zero (automatic) or finite and in [1, 10000]."
     }
     val display = window.glassDisplay()
-    val requestHdr = hdrEnabled && display?.isHdr == true
+    val requestHdr = hdrEnabled && isRuntimeShaderSupported() && display?.isHdr == true
     window.colorMode = if (requestHdr) ActivityInfo.COLOR_MODE_HDR else ActivityInfo.COLOR_MODE_DEFAULT
     if (Build.VERSION.SDK_INT >= 35) {
         window.desiredHdrHeadroom = if (requestHdr) desiredHeadroom else 1f

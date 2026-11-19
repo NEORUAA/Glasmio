@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.glass.render.backdrops
 
+import androidx.annotation.RequiresApi
+import android.os.Build
 import android.graphics.Rect as AndroidRect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
@@ -167,6 +169,7 @@ internal fun BackdropEffectScope.applySidebarBackgroundExtension(backdrop: Backd
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private class ExtensionBlurPasses(scope: BackdropEffectScope) {
     private val horizontalShader = scope.obtainRuntimeShader("Glasmio.SidebarExtension.Horizontal", ExtensionBlurShader)
     private val verticalShader = scope.obtainRuntimeShader("Glasmio.SidebarExtension.Vertical", ExtensionBlurShader)

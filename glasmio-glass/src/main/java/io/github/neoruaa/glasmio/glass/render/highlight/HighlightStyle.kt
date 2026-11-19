@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.glass.render.highlight
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.graphics.BlendMode
@@ -9,6 +11,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import io.github.neoruaa.glasmio.glass.render.RuntimeShader
 import io.github.neoruaa.glasmio.glass.render.RuntimeShaderCache
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.optics.GlassSdfShader
 import io.github.neoruaa.glasmio.glass.render.optics.glassCornerRadii
 import kotlin.math.PI
@@ -39,16 +42,20 @@ interface HighlightStyle {
         val falloff: Float = 1f,
         val clear: Boolean = false,
     ) : HighlightStyle {
-        override fun DrawScope.createShader(shape: Shape, runtimeShaderCache: RuntimeShaderCache): RuntimeShader =
-            nativeHighlightShader(shape, runtimeShaderCache, color, angle, falloff, clear, nativeVibrantMatrix() != null)
+        override fun DrawScope.createShader(shape: Shape, runtimeShaderCache: RuntimeShaderCache): RuntimeShader? =
+            if (isRuntimeShaderSupported()) {
+                nativeHighlightShader(shape, runtimeShaderCache, color, angle, falloff, clear, nativeVibrantMatrix() != null)
+            } else null
     }
 
     @Immutable
     data class Ambient(val intensity: Float = 0.38f) : HighlightStyle {
         override val color: Color get() = Color.White.copy(alpha = intensity.coerceIn(0f, 1f))
         override val blendMode: BlendMode get() = BlendMode.SrcOver
-        override fun DrawScope.createShader(shape: Shape, runtimeShaderCache: RuntimeShaderCache): RuntimeShader =
-            nativeHighlightShader(shape, runtimeShaderCache, Color.White, 0f, 1f, false, true)
+        override fun DrawScope.createShader(shape: Shape, runtimeShaderCache: RuntimeShaderCache): RuntimeShader? =
+            if (isRuntimeShaderSupported()) {
+                nativeHighlightShader(shape, runtimeShaderCache, Color.White, 0f, 1f, false, true)
+            } else null
     }
 
     companion object {
@@ -58,6 +65,7 @@ interface HighlightStyle {
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 private fun DrawScope.nativeHighlightShader(
     shape: Shape,
     cache: RuntimeShaderCache,

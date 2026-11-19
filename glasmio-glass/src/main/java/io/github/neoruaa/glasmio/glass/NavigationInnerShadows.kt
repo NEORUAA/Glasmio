@@ -70,6 +70,7 @@ class NavigationInnerShadowRenderer(
         clearFraction: Float? = null,
     ) = drawInternal(scope, shape, bounds, isDark, alpha, null, 0f, field, clearFraction)
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     internal fun materialEffect(
         recipe: NavigationMaterialRecipe,
         alpha: Float = 1f,
@@ -183,6 +184,7 @@ class NavigationInnerShadowRenderer(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun obtainShader(field: NativeGlassFilterField?, effect: Boolean): RuntimeShader {
         val cache = if (effect) effectShaders else maskShaders
         return cache.getOrPut(field?.shaderFunctions) {
@@ -193,6 +195,7 @@ class NavigationInnerShadowRenderer(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun prepareGeometry(shader: RuntimeShader, geometry: Geometry, field: NativeGlassFilterField?) {
         if (field == null) {
             val density = Density(geometry.density, geometry.fontScale)
@@ -205,6 +208,7 @@ class NavigationInnerShadowRenderer(
         shader.setFloatUniform("nativeEdgeOrigin", geometry.origin.x, geometry.origin.y)
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun configureHighlight(shader: RuntimeShader, highlight: Highlight?, geometry: Geometry?, clearFraction: Float?) {
         val style = highlight?.style
         val matrix = style?.nativeVibrantMatrix()

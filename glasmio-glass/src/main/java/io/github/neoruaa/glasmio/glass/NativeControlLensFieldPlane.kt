@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.glass
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import android.graphics.RuntimeShader
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -39,6 +41,7 @@ internal class NativeControlLensFieldPlane(
     val sceneRect: IntRect get() = key.sceneRect
     val consumerRect: IntRect get() = key.consumerRect
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun configure(shader: RuntimeShader, scene: Boolean) {
         val rect = if (scene) sceneRect else consumerRect
         shader.setFloatUniform("lensFieldOrigin", key.origin.x, key.origin.y)
@@ -47,6 +50,7 @@ internal class NativeControlLensFieldPlane(
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal fun BackdropEffectScopeImpl.nativeControlLensFieldPlane(
     shape: Shape,
     surfaceSize: Size,

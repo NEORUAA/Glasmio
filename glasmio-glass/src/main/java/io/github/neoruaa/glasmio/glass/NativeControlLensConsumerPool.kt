@@ -1,10 +1,13 @@
 package io.github.neoruaa.glasmio.glass
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import java.util.LinkedHashMap
 
 /** Fully configured built-in consumers only; mutable shaders never leave a snapshot lease. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal class NativeControlLensConsumerPool(
     private val capacity: Int = 8,
     private val factory: (String) -> RuntimeShader = ::RuntimeShader,
@@ -69,6 +72,7 @@ internal class NativeControlLensConsumerPool(
 }
 
 /** No scopes, Contexts, input shaders or bitmaps are retained by the shared cache. */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal object NativeControlLensConsumerShaders {
     private val pools = object : ThreadLocal<NativeControlLensConsumerPool>() {
         override fun initialValue(): NativeControlLensConsumerPool = NativeControlLensConsumerPool()

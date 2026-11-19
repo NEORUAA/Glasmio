@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.glass
 
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.ColorSpace
@@ -249,7 +250,7 @@ internal class NavigationContactField {
             grid.bitmap = bitmap
             grid.upload = ByteBuffer.allocateDirect(bitmap.byteCount).order(ByteOrder.nativeOrder())
             grid.shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
-                setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+                if (isRuntimeShaderSupported()) setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
             }
         }
         if (grid.uploadedGeneration != grid.generation) {

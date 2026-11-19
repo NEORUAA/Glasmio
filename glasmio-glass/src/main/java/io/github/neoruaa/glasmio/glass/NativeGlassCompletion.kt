@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.glass
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import android.graphics.RuntimeShader
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -76,6 +78,7 @@ internal data class NativeGlassSourceShadow(
     val alpha: Float,
 )
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 internal fun configureNativeGlassCompletion(
     shader: RuntimeShader,
     completion: NativeGlassCompletion,

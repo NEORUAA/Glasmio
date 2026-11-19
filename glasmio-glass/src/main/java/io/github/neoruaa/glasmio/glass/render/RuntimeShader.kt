@@ -38,10 +38,12 @@ fun RuntimeShader(shaderString: String): RuntimeShader {
     return AndroidRuntimeShader(shader)
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 fun RuntimeShader.asComposeShader(): Shader {
     return this.asAndroidRuntimeShader()
 }
 
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
 fun RuntimeShader.asAndroidRuntimeShader(): android.graphics.RuntimeShader {
     return (this as AndroidRuntimeShader).shader
 }

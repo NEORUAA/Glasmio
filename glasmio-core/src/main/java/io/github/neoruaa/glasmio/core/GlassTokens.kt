@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.core
 
+import android.os.Build
+import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Composable
@@ -12,6 +14,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontFamily
 
+@ChecksSdkIntAtLeast(api = Build.VERSION_CODES.TIRAMISU)
+fun supportsLiquidGlassShaders(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+
 @Immutable
 data class GlassAppearance(
     val liquidGlassEnabled: Boolean = true,
@@ -20,7 +25,7 @@ data class GlassAppearance(
     val adaptiveColorScheme: Boolean = false,
 ) {
     val usesRefraction: Boolean
-        get() = liquidGlassEnabled && !reduceTransparency
+        get() = liquidGlassEnabled && !reduceTransparency && supportsLiquidGlassShaders()
 
     val usesBackdrop: Boolean
         get() = !reduceTransparency

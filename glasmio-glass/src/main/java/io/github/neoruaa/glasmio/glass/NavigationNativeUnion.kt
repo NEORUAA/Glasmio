@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.glass
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.collection.MutableLongFloatMap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -107,6 +109,7 @@ internal class NavigationNativeUnion private constructor(
     private fun distance(x: Float, y: Float): Float =
         if (b == null) a.field.distance(x, y) else field(x, y, sample)[0]
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun shaderField(scale: Offset, translation: Offset): NativeGlassFilterField =
         if (multipleElements.isNotEmpty()) multipleShaderField(scale, translation)
         else NativeGlassFilterField(NavigationNativeUnionShader) { shader ->
@@ -123,6 +126,7 @@ internal class NavigationNativeUnion private constructor(
             shader.setFloatUniform("unionTranslation", translation.x, translation.y)
         }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun multipleShaderField(scale: Offset, translation: Offset): NativeGlassFilterField {
         val elements = FloatArray(MaximumUnionElements * 4)
         val radii = FloatArray(MaximumUnionElements * 2)

@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.RenderEffect
 import android.graphics.RenderNode
 import android.graphics.RuntimeShader
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import android.graphics.Shader
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
@@ -78,7 +79,7 @@ internal class InnerShadowNode(
         val nextKey = Geometry(shape, size, layoutDirection, density, fontScale)
         val nativeDefault = effect.radius == InnerShadow.Default.radius && effect.offset == InnerShadow.Default.offset &&
             effect.color == InnerShadow.Default.color && effect.blendMode == InnerShadow.Default.blendMode
-        if (nativeDefault) {
+        if (isRuntimeShaderSupported() && nativeDefault) {
             if (nextKey != pathKey) {
                 updatePath()
                 pathKey = nextKey

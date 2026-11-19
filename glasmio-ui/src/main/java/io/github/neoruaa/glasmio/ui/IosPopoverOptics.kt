@@ -69,7 +69,7 @@ internal class PopoverOptics {
         }, maskPath)
         Canvas(bitmap).drawPath(maskPath, paint)
         val input = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
-            setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+            if (isRuntimeShaderSupported()) setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
         }
         return Mask(input, scale, margin).also {
             geometry = next
