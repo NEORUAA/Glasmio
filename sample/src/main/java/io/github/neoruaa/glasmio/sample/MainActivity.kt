@@ -1673,6 +1673,7 @@ private fun MenusDemo(bottomPadding: Dp, dark: Boolean, onDark: (Boolean) -> Uni
                     GlasmioPopover(
                         visible = appearancePopover,
                         onDismissRequest = { appearancePopover = false },
+                        adaptToSheet = false,
                         anchor = {
                             GlasmioButton(
                                 onClick = { appearancePopover = true },
