@@ -14,6 +14,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxScope
@@ -21,6 +23,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -67,7 +70,9 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
@@ -144,12 +149,43 @@ internal val PopupMenuWidth = 238.dp
  *  fits inside the shell's constraints and actually renders. */
 private const val PopupMenuOvershootScale = 1.15f
 
-private class IosPopupPositionProvider(
+@Composable
+internal fun menuSafeViewport(viewportBounds: Rect?): IntRect {
+    val density = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    val safe = WindowInsets.glasmioSafeDrawing
+    return menuSafeViewport(
+        LocalWindowInfo.current.containerSize,
+        IntRect(
+            safe.getLeft(density, direction), safe.getTop(density),
+            safe.getRight(density, direction), safe.getBottom(density),
+        ),
+        viewportBounds,
+    )
+}
+
+internal fun menuSafeViewport(window: IntSize, insets: IntRect, viewport: Rect?): IntRect {
+    val width = window.width.coerceAtLeast(1)
+    val height = window.height.coerceAtLeast(1)
+    val safeLeft = insets.left.coerceIn(0, width - 1)
+    val safeTop = insets.top.coerceIn(0, height - 1)
+    val safeRight = (width - insets.right).coerceIn(safeLeft + 1, width)
+    val safeBottom = (height - insets.bottom).coerceIn(safeTop + 1, height)
+    val left = viewport?.left?.roundToInt()?.coerceIn(safeLeft, safeRight - 1) ?: safeLeft
+    val top = viewport?.top?.roundToInt()?.coerceIn(safeTop, safeBottom - 1) ?: safeTop
+    val right = viewport?.right?.roundToInt()?.coerceIn(left + 1, safeRight) ?: safeRight
+    val bottom = viewport?.bottom?.roundToInt()?.coerceIn(top + 1, safeBottom) ?: safeBottom
+    return IntRect(left, top, right, bottom)
+}
+
+internal class IosPopupPositionProvider(
     private val targetMenuHeightPx: Int,
     private val targetMenuWidthPx: Int,
     private val horizontalInsetPx: Int,
+    private val viewport: IntRect,
     private val forceBelowAnchor: Boolean,
     private val centerHorizontally: Boolean,
+    private val viewportCenterXPx: Int?,
     private val alignToAnchorStart: Boolean,
     private val anchorAlignment: Alignment.Horizontal,
     private val horizontalOvershootMarginPx: Int,
@@ -172,30 +208,27 @@ private class IosPopupPositionProvider(
             false
         } else {
             opensAbove ?: run {
-                val roomBelow = windowSize.height - anchorBounds.bottom
-                val roomAbove = anchorBounds.top
+                val roomBelow = viewport.bottom - anchorBounds.bottom
+                val roomAbove = anchorBounds.top - viewport.top
                 (roomBelow < targetMenuHeightPx && roomAbove > roomBelow).also {
                     opensAbove = it
                     onDirectionResolved(it)
                 }
             }
         }
-        // Constrain the visible menu, not its transparent animation shell. The shell may
-        // start offscreen; clamping it to zero pushes wider menus away from their anchor.
+        // The transparent animation shell can extend past the safe viewport.
         val inset = horizontalInsetPx.coerceAtMost(
-            ((windowSize.width - targetMenuWidthPx) / 2).coerceAtLeast(0),
+            ((viewport.width - targetMenuWidthPx) / 2).coerceAtLeast(0),
         )
         val requestedLeft = if (centerHorizontally) {
-            (windowSize.width - targetMenuWidthPx) / 2
+            (viewportCenterXPx ?: windowSize.width / 2) - targetMenuWidthPx / 2
         } else if (alignToAnchorStart) {
             if (layoutDirection == LayoutDirection.Rtl) anchorBounds.right - targetMenuWidthPx else anchorBounds.left
         } else {
             anchorBounds.right - targetMenuWidthPx
         }
-        val menuLeft = requestedLeft.coerceIn(
-            inset,
-            (windowSize.width - targetMenuWidthPx - inset).coerceAtLeast(inset),
-        )
+        val minLeft = viewport.left + inset
+        val menuLeft = requestedLeft.coerceIn(minLeft, (viewport.right - targetMenuWidthPx - inset).coerceAtLeast(minLeft))
         val anchorX = anchorBounds.left + anchorAlignment.align(0, anchorBounds.width, layoutDirection)
         onAnchorOriginResolved((anchorX - menuLeft).toFloat() / targetMenuWidthPx.coerceAtLeast(1))
         val menuLeftInHost = if (layoutDirection == LayoutDirection.Rtl) {
@@ -214,7 +247,7 @@ private class IosPopupPositionProvider(
             resolvedDirection -> anchorBounds.bottom - targetMenuHeightPx
             else -> anchorBounds.top
         }
-        val menuTop = requestedTop.coerceIn(0, (windowSize.height - targetMenuHeightPx).coerceAtLeast(0))
+        val menuTop = requestedTop.coerceIn(viewport.top, (viewport.bottom - targetMenuHeightPx).coerceAtLeast(viewport.top))
         val y = menuTop - menuTopInHost
         return IntOffset(x, y)
     }
@@ -674,16 +707,15 @@ fun GlasmioMenu(
             }
         }
         if (popupAlive && (anchorSize != IntSize.Zero || externalAnchorBounds != null)) {
-            val density = androidx.compose.ui.platform.LocalDensity.current
+            val viewport = menuSafeViewport(viewportBounds)
             val requestedHeight = heightOverride ?: (20.dp + 44.dp * itemCount)
-            val menuHeight = viewportBounds?.let {
-                minOf(requestedHeight, with(density) { it.height.coerceAtLeast(1f).toDp() })
-            } ?: requestedHeight
+            val menuHeight = minOf(requestedHeight, with(density) { viewport.height.toDp() })
+            val resolvedMenuWidth = minOf(menuWidth, with(density) { viewport.width.toDp() })
             val targetMenuHeightPx = with(density) { menuHeight.roundToPx() }
-            val targetMenuWidthPx = with(density) { menuWidth.roundToPx() }
+            val targetMenuWidthPx = with(density) { resolvedMenuWidth.roundToPx() }
             val horizontalInsetPx = with(density) { 12.dp.roundToPx() }
             val visualHostWidthPx = with(density) {
-                (PopupMenuOvershootMarginStart + menuWidth * PopupMenuOvershootScale).roundToPx()
+                (PopupMenuOvershootMarginStart + resolvedMenuWidth * PopupMenuOvershootScale).roundToPx()
             }
             val visualHostHeightPx = with(density) {
                 (
@@ -693,12 +725,15 @@ fun GlasmioMenu(
             }
             // Popup tracks live anchor bounds; caption resizing must not reset its
             // resolved offset and briefly dispose the content during collapse.
+            val viewportCenterXPx = viewportBounds?.center?.x?.roundToInt()
             val positionProvider = remember(
                 targetMenuHeightPx,
                 targetMenuWidthPx,
                 horizontalInsetPx,
+                viewport,
                 forceBelowAnchor,
                 centerHorizontally,
+                viewportCenterXPx,
                 alignToAnchorStart,
                 expandFromAnchor,
                 visualHostWidthPx,
@@ -708,8 +743,10 @@ fun GlasmioMenu(
                     targetMenuHeightPx = targetMenuHeightPx,
                     targetMenuWidthPx = targetMenuWidthPx,
                     horizontalInsetPx = horizontalInsetPx,
+                    viewport = viewport,
                     forceBelowAnchor = forceBelowAnchor,
                     centerHorizontally = centerHorizontally,
+                    viewportCenterXPx = viewportCenterXPx,
                     alignToAnchorStart = alignToAnchorStart,
                     anchorAlignment = expandFromAnchor ?: Alignment.Start,
                     horizontalOvershootMarginPx = with(density) { PopupMenuOvershootMarginStart.roundToPx() },
@@ -725,10 +762,10 @@ fun GlasmioMenu(
                     opensAbove = resolved
                 }
             }
-            var resolvedFullScreenMenuOffset by remember(positionProvider, positionAnchorBounds, resolvedFullScreen) {
+            var resolvedFullScreenMenuOffset by remember(resolvedFullScreen) {
                 mutableStateOf<IntOffset?>(null)
             }
-            val popupPositionProvider = remember(positionProvider, positionAnchorBounds, resolvedFullScreen, viewportBounds) {
+            val popupPositionProvider = remember(positionProvider, positionAnchorBounds, resolvedFullScreen) {
                 object : PopupPositionProvider {
                     override fun calculatePosition(
                         anchorBounds: IntRect,
@@ -739,17 +776,12 @@ fun GlasmioMenu(
                         val requestedAnchor = positionAnchorBounds?.let {
                             IntRect(it.left.toInt(), it.top.toInt(), it.right.toInt(), it.bottom.toInt())
                         } ?: anchorBounds
-                        val viewport = viewportBounds?.let {
-                            IntRect(it.left.roundToInt(), it.top.roundToInt(), it.right.roundToInt(), it.bottom.roundToInt())
-                        }
-                        val origin = viewport?.topLeft ?: IntOffset.Zero
-                        val available = viewport?.let { IntSize(it.width.coerceAtLeast(1), it.height.coerceAtLeast(1)) } ?: windowSize
                         val menuOffset = positionProvider.calculatePosition(
-                            requestedAnchor.translate(-origin),
-                            available,
+                            requestedAnchor,
+                            windowSize,
                             layoutDirection,
                             popupContentSize,
-                        ) + origin
+                        )
                         return if (resolvedFullScreen) {
                             resolvedFullScreenMenuOffset = menuOffset
                             IntOffset.Zero
@@ -819,7 +851,7 @@ fun GlasmioMenu(
                             initialTransformOrigin = if (expandFromAnchor != null) {
                                 TransformOrigin(anchorFractionX, if (opensAbove) 1f else 0f)
                             } else null,
-                            menuWidth = menuWidth,
+                            menuWidth = resolvedMenuWidth,
                             onMenuBoundsChanged = onMenuBoundsChanged,
                             morphMotion = liquidMotion.takeIf { usesMorph },
                             morphSourceAcquired = sourceAnchor.isAcquired,
@@ -903,16 +935,18 @@ fun <T> GlasmioPopUpButton(
             }
         },
     ) { childBackdrop, close ->
-        items.forEach { item ->
-            GlasmioMenuItem(
-                title = label(item),
-                onClick = {
-                    onSelected(item)
-                    close()
-                },
-                systemName = if (item == selected) "checkmark" else null,
-                backdrop = childBackdrop,
-            )
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            items.forEach { item ->
+                GlasmioMenuItem(
+                    title = label(item),
+                    onClick = {
+                        onSelected(item)
+                        close()
+                    },
+                    systemName = if (item == selected) "checkmark" else null,
+                    backdrop = childBackdrop,
+                )
+            }
         }
     }
 }

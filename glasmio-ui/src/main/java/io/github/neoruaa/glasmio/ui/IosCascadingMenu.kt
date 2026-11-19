@@ -23,7 +23,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import com.kyant.capsule.ContinuousRoundedRectangle
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,7 +30,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
@@ -44,9 +42,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.isFinite
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.semantics.hideFromAccessibility
@@ -118,6 +118,8 @@ fun GlasmioCascadingMenu(
     }
     var menuBounds by remember { mutableStateOf<Rect?>(null) }
     val density = LocalDensity.current
+    val hostView = LocalView.current
+    val safeViewport = menuSafeViewport(viewportBounds)
     val menuScroll = rememberScrollState()
     var selectedBounds by remember { mutableStateOf<Rect?>(null) }
     val colors = LocalGlassColors.current
@@ -191,37 +193,51 @@ fun GlasmioCascadingMenu(
         // Keep the child in the existing full-screen Popup. Its origin is measured
         // before selection so the parent row and child header hand off in one frame.
         overlayContent = { menuAlpha ->
-            var windowOrigin by remember { mutableStateOf<Offset?>(null) }
-            BoxWithConstraints(
+            var popupScreenOrigin by remember { mutableStateOf<Offset?>(null) }
+            var hostWindowScreenOrigin by remember { mutableStateOf(Offset.Zero) }
+            val hostScreenLocation = remember { IntArray(2) }
+            val hostWindowLocation = remember { IntArray(2) }
+            Box(
                 Modifier.fillMaxSize().onGloballyPositioned {
-                    windowOrigin = it.localToScreen(Offset.Zero)
+                    hostView.getLocationOnScreen(hostScreenLocation)
+                    hostView.getLocationInWindow(hostWindowLocation)
+                    hostWindowScreenOrigin = Offset(
+                        (hostScreenLocation[0] - hostWindowLocation[0]).toFloat(),
+                        (hostScreenLocation[1] - hostWindowLocation[1]).toFloat(),
+                    )
+                    popupScreenOrigin = it.localToScreen(Offset.Zero)
                 }.semantics { paneTitle = title },
                 contentAlignment = AbsoluteAlignment.TopLeft,
             ) {
-                val selected = selectedIndex?.let(items::getOrNull) ?: return@BoxWithConstraints
-                val bounds = selectedBounds ?: return@BoxWithConstraints
-                val origin = windowOrigin ?: return@BoxWithConstraints
-                val density = LocalDensity.current
+                val selected = selectedIndex?.let(items::getOrNull) ?: return@Box
+                val bounds = selectedBounds ?: return@Box
+                val origin = popupScreenOrigin?.takeIf { it.isFinite } ?: return@Box
+                val popupOriginInHost = origin - hostWindowScreenOrigin
                 val p = child.value.coerceIn(0f, 1f)
-                val topInset = with(density) {
-                    (viewportBounds?.top?.minus(origin.y)?.coerceAtLeast(0f)
-                        ?: androidx.compose.foundation.layout.WindowInsets.safeDrawing.getTop(this).toFloat()).toDp()
-                } + 12.dp
-                val bottomInset = with(density) {
-                    (viewportBounds?.bottom?.let { constraints.maxHeight - (it - origin.y) }?.coerceAtLeast(0f)
-                        ?: androidx.compose.foundation.layout.WindowInsets.safeDrawing.getBottom(this).toFloat()).toDp()
-                } + 12.dp
+                val onePixel = with(density) { 1.toDp() }
+                val viewportHeight = with(density) { safeViewport.height.toDp() }
+                val viewportWidth = with(density) { safeViewport.width.toDp() }
+                val verticalMargin = minOf(12.dp, (viewportHeight - onePixel).coerceAtLeast(0.dp) / 2)
+                val topLimit = with(density) { (safeViewport.top - popupOriginInHost.y).toDp() } + verticalMargin
+                val bottomLimit = with(density) { (safeViewport.bottom - popupOriginInHost.y).toDp() } - verticalMargin
                 val selectedRowHeight = menuItemHeight(itemHeight, selected.title, selected.subtitle)
                 val collapsedHeight = 20.dp + selectedRowHeight
                 val targetHeight = minOf(
                     collapsedHeight + selected.children.fold(0.dp) { total, item -> total + menuItemHeight(itemHeight, item.title, item.subtitle) } +
                         separatorHeight * (1 + selected.children.count { it.separatorBefore }),
-                    maxHeight - topInset - bottomInset,
+                    (bottomLimit - topLimit).coerceAtLeast(onePixel),
                 )
                 val rowTop = with(density) { (bounds.top - origin.y).toDp() } - 10.dp
-                val targetTop = rowTop.coerceIn(topInset, (maxHeight - bottomInset - targetHeight).coerceAtLeast(topInset))
+                val targetTop = rowTop.coerceIn(topLimit, (bottomLimit - targetHeight).coerceAtLeast(topLimit))
                 val top = rowTop + (targetTop - rowTop) * p
-                val left = with(density) { (bounds.left - origin.x).toDp() } - 10.dp
+                val rowLeft = with(density) { (bounds.left - origin.x).toDp() } - 10.dp
+                val rowWidth = with(density) { bounds.width.toDp() } + 20.dp
+                val targetWidth = rowWidth.coerceIn(onePixel, viewportWidth.coerceAtLeast(onePixel))
+                val horizontalMargin = minOf(12.dp, (viewportWidth - targetWidth).coerceAtLeast(0.dp) / 2)
+                val leftLimit = with(density) { (safeViewport.left - popupOriginInHost.x).toDp() } + horizontalMargin
+                val rightLimit = with(density) { (safeViewport.right - popupOriginInHost.x).toDp() } - horizontalMargin
+                val targetLeft = rowLeft.coerceIn(leftLimit, (rightLimit - targetWidth).coerceAtLeast(leftLimit))
+                val left = rowLeft + (targetLeft - rowLeft) * p
                 Box(Modifier.fillMaxSize().clickable(interactionSource = null, indication = null) { childExpanded = false })
                 GlasmioContextMenu(
                     visible = true,
@@ -229,7 +245,7 @@ fun GlasmioCascadingMenu(
                     backdrop = backdrop,
                     exportChildBackdrop = false,
                     compact = true,
-                    menuWidth = menuWidth,
+                    menuWidth = rowWidth + (targetWidth - rowWidth) * p,
                     heightOverride = collapsedHeight + (targetHeight - collapsedHeight) * p,
                     shadowAlpha = p,
                     highlightAlpha = p,
