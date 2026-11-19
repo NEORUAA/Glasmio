@@ -78,6 +78,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.platform.testTag
@@ -116,6 +117,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
+import androidx.compose.ui.window.Popup
 import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -142,6 +144,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import io.github.neoruaa.glasmio.glass.NavigationDropShadowRenderer
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropProvider
+import io.github.neoruaa.glasmio.glass.rememberSettledBackdrop
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.GlassSurface
 import io.github.neoruaa.glasmio.glass.GlassEmphasis
@@ -2478,6 +2481,47 @@ half4 main(half4 src, half4 dst) {
         } finally {
             println("GLASMIO_ADAPTIVE_REGION flipped=${flipped.value} $diagnostic")
         }
+    }
+
+    @Test
+    fun popupRefreshesOnPresentingWindowDrawsOnlyWhenSettled() {
+        val pageColor = mutableStateOf(Color.Red)
+        val renderedPage = java.util.concurrent.atomic.AtomicReference(Color.Unspecified)
+        val sampledPage = java.util.concurrent.atomic.AtomicReference(Color.Unspecified)
+        val settled = mutableStateOf(true)
+        compose.setContent {
+            val presenter = LocalView.current
+            Box(Modifier.fillMaxSize().drawWithContent {
+                drawRect(pageColor.value)
+                renderedPage.set(pageColor.value)
+                drawContent()
+            }) {
+                Popup(Alignment.Center) {
+                    // This source reads no snapshot state and emits no recording notifications.
+                    // Its consumer must wake up when the presenting window actually draws.
+                    val raw = rememberCanvasBackdrop {
+                        val color = renderedPage.get()
+                        sampledPage.set(color)
+                        drawRect(color)
+                    }
+                    val backdrop = rememberSettledBackdrop(raw, presenter) { settled.value }
+                    Box(Modifier.size(96.dp).drawPlainBackdrop(
+                        backdrop = backdrop,
+                        shape = { RectangleShape },
+                        effects = {},
+                    ))
+                }
+            }
+        }
+        compose.waitUntil(5_000) { sampledPage.get() == Color.Red }
+        compose.runOnIdle { pageColor.value = Color.Blue }
+        compose.waitUntil(5_000) { sampledPage.get() == Color.Blue }
+        compose.runOnIdle { settled.value = false }
+        compose.runOnIdle { pageColor.value = Color.Green }
+        compose.waitUntil(5_000) { renderedPage.get() == Color.Green }
+        compose.runOnIdle { assertEquals(Color.Blue, sampledPage.get()) }
+        compose.runOnIdle { settled.value = true }
+        compose.waitUntil(5_000) { sampledPage.get() == Color.Green }
     }
 
     @Test

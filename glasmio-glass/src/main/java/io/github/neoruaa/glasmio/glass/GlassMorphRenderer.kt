@@ -373,7 +373,12 @@ class GlassMorphRenderer(
         if (dropShadowAlpha > 0f && !completeNativeMaterial) {
             drawDropShadow(this, shape, bounds, dropShadowAlpha)
         }
-        if (appearance.usesBackdrop && recordedViewport != viewport) {
+        val settledSource = (backdrop as? SettledBackdrop)?.takeIf { it.isSettled }
+        // Observe cross-window redraws only at rest. Re-recording the raw source also lets
+        // custom draw callbacks subscribe to their own state without polling.
+        settledSource?.revision
+        val viewportChanged = recordedViewport != viewport
+        if (appearance.usesBackdrop && (viewportChanged || settledSource != null)) {
             val bufferSize = IntSize(
                 ceil(viewport.width * renderScale).toInt(),
                 ceil(viewport.height * renderScale).toInt(),
@@ -408,11 +413,13 @@ class GlassMorphRenderer(
                     }
                 }
             }
-            refracted.record(
-                density = this@GlassMorphRenderer.density,
-                layoutDirection = recordedLayoutDirection,
-                size = bufferSize,
-            ) { drawLayer(source) }
+            if (viewportChanged) {
+                refracted.record(
+                    density = this@GlassMorphRenderer.density,
+                    layoutDirection = recordedLayoutDirection,
+                    size = bufferSize,
+                ) { drawLayer(source) }
+            }
             recordedViewport = viewport
         }
         val clearFraction = if (sourceFilterProgress == null) {

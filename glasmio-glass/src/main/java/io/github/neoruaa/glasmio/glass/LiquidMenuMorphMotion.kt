@@ -51,6 +51,8 @@ data class LiquidMenuMorphFrame(
 class LiquidMenuMorphMotion {
     var initialized by mutableStateOf(false)
         private set
+    var isExpandedSettled by mutableStateOf(false)
+        private set
     var frame by mutableStateOf(
         LiquidMenuMorphFrame(Rect.Zero, 0f, 0f, 0f, 1f),
     )
@@ -143,6 +145,7 @@ class LiquidMenuMorphMotion {
         sourceKickReleased = false
         portalBlurReleased = false
         initialized = true
+        isExpandedSettled = false
         publish()
     }
 
@@ -167,6 +170,7 @@ class LiquidMenuMorphMotion {
         if (destination == target && destinationRadius == radius) return false
         destination = target
         destinationRadius = radius
+        isExpandedSettled = false
         if (expanded) configureExpansionGeometry() else configureCollapse()
         publish()
         return true
@@ -202,6 +206,7 @@ class LiquidMenuMorphMotion {
     fun retarget(expanded: Boolean) {
         if (!initialized) return
         this.expanded = expanded
+        isExpandedSettled = false
         portalZoomReferenceHeight = destination.height
         elapsed = 0f
         correctionApplied = false
@@ -275,7 +280,9 @@ class LiquidMenuMorphMotion {
             publish()
             return true
         }
-        return (!expanded || smoothingReleased) && channels.all { it.isSettled }
+        val settled = (!expanded || smoothingReleased) && channels.all { it.isSettled }
+        isExpandedSettled = expanded && settled
+        return settled
     }
 
     private fun applyTimelineActions() {

@@ -330,6 +330,7 @@ interface ViewportBackdrop : Backdrop {
 internal fun Backdrop.hasBuiltInGlassLayerBlockIndependentSource(): Boolean = when (this) {
     is CrossWindowBackdrop -> true
     is SharedGlassBackdrop -> hasLayerBlockIndependentBase()
+    is SettledBackdrop -> hasLayerBlockIndependentSource()
     else -> false
 }
 

@@ -8,6 +8,7 @@ import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.icons.*
 
+import android.view.View
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -97,6 +98,27 @@ import kotlinx.coroutines.launch
 
 
 internal val LocalIosPopupMenuInteractive = staticCompositionLocalOf { true }
+
+internal class MenuBackdropHost(val view: View, val isSettled: () -> Boolean)
+
+internal class MenuScaleMotion(
+    private val scale: () -> Float,
+    val isSettled: () -> Boolean,
+) : () -> Float {
+    override fun invoke(): Float = scale()
+}
+
+internal val LocalMenuBackdropHost = staticCompositionLocalOf<MenuBackdropHost?> { null }
+
+@Composable
+internal fun rememberMenuBackdropHost(isSettled: () -> Boolean): MenuBackdropHost {
+    val parent = LocalMenuBackdropHost.current
+    val view = parent?.view ?: LocalView.current
+    val latestSettled by rememberUpdatedState(isSettled)
+    return remember(view, parent) {
+        MenuBackdropHost(view) { latestSettled() && parent?.isSettled?.invoke() != false }
+    }
+}
 
 // AnimationKit MorphAnimationSettings.liquidMorph copies this content spring to
 // width, height, position and transform (UIKitCore/AnimationKit iOS 27).
@@ -272,8 +294,17 @@ fun GlasmioContextMenu(
     val samplingCoordinatesProvider = remember { { samplingCoordinates } }
     // Sample from the stable host, then compensate the live menu transform explicitly.
     // The animated graphics layer's coordinates can lag behind its current draw transform.
+    val popupBackdrop = if (appearance.usesBackdrop) {
+        val host = rememberMenuBackdropHost {
+            val motionSettled = if (morphMotion == null) animationProgress == 1f && menuAlpha == 1f
+                else morphMotion.isExpandedSettled && morphSourceAcquired
+            motionSettled && !interactiveHighlight.isPressed &&
+                interactiveHighlight.pressProgress == 0f && interactiveHighlight.offset == Offset.Zero
+        }
+        rememberSettledBackdrop(backdrop, host.view, host.isSettled)
+    } else backdrop
     val samplingBackdrop = if (appearance.usesBackdrop) {
-        rememberStationaryBackdrop(backdrop, samplingCoordinatesProvider)
+        rememberStationaryBackdrop(popupBackdrop, samplingCoordinatesProvider)
     } else {
         emptyBackdrop()
     }
@@ -361,7 +392,7 @@ fun GlasmioContextMenu(
                     LiquidMenuMorphSurface(
                         motion = morphMotion,
                         screenOrigin = menuScreenOrigin!!,
-                        backdrop = backdrop,
+                        backdrop = popupBackdrop,
                         exportChildBackdrop = exportChildBackdrop,
                         sourcePortal = morphSourcePortal,
                         sourceHasGlassBackground = morphSourceHasGlassBackground,
@@ -728,6 +759,13 @@ fun GlasmioMenu(
                     }
                 }
             }
+            val menuBackdropHost = rememberMenuBackdropHost {
+                val scaleSettled = (menuScale as? MenuScaleMotion)?.isSettled?.invoke() != false
+                val transitionSettled = if (usesMorph) liquidMotion.isExpandedSettled
+                    else !progress.isRunning && progress.value == 1f
+                expanded && !menuAlpha.isRunning && menuAlpha.value == 1f &&
+                    transitionSettled && scaleSettled
+            }
             Popup(
                 popupPositionProvider = popupPositionProvider,
                 onDismissRequest = { onExpandedChange(false) },
@@ -752,7 +790,10 @@ fun GlasmioMenu(
                             indication = null,
                         ) { onExpandedChange(false) },
                     )
-                    CompositionLocalProvider(LocalIosPopupMenuInteractive provides expanded) {
+                    CompositionLocalProvider(
+                        LocalIosPopupMenuInteractive provides expanded,
+                        LocalMenuBackdropHost provides menuBackdropHost,
+                    ) {
                         // Wide cascading menus exceed the platform Popup's measured width.
                         // Keep their window at screen size and position the existing animation
                         // shell inside it so its right-hand shadow is not cut off by the window.
@@ -800,7 +841,9 @@ fun GlasmioMenu(
                             content(childBackdrop) { onExpandedChange(false) }
                         }
                     }
-                    overlayContent { menuAlpha.value.coerceIn(0f, 1f) }
+                    CompositionLocalProvider(LocalMenuBackdropHost provides menuBackdropHost) {
+                        overlayContent { menuAlpha.value.coerceIn(0f, 1f) }
+                    }
                 }
             }
         }

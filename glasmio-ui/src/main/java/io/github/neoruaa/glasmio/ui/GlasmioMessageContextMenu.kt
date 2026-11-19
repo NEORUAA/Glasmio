@@ -137,6 +137,9 @@ fun GlasmioMessageContextMenu(
             placeMessageContext(captured.bounds, viewport, retainedActions, retainedReactions.isNotEmpty(), tailOnRight, px, pickerScale)
         }
         val popupBackdrop = rememberCrossWindowBackdrop(backdrop)
+        val menuBackdropHost = rememberMenuBackdropHost {
+            expanded && !progress.isRunning && progress.value == 1f
+        }
         var popupOrigin by remember { mutableStateOf<Offset?>(null) }
         val positionProvider = remember { object : PopupPositionProvider {
             override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize) = IntOffset.Zero
@@ -197,7 +200,10 @@ fun GlasmioMessageContextMenu(
                             scaleX = 0.2f + 0.8f * progress.value
                             scaleY = scaleX
                         }) {
-                        CompositionLocalProvider(LocalIosPopupMenuInteractive provides expanded) {
+                        CompositionLocalProvider(
+                            LocalIosPopupMenuInteractive provides expanded,
+                            LocalMenuBackdropHost provides menuBackdropHost,
+                        ) {
                             GlasmioContextMenu(
                                 visible = true,
                                 modifier = Modifier.offset(margin, margin),

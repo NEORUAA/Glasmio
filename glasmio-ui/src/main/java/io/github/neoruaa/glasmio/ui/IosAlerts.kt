@@ -1,5 +1,6 @@
 package io.github.neoruaa.glasmio.ui
 
+import android.view.View
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
@@ -14,10 +15,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imeAnimationSource
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
@@ -40,16 +44,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.Role
@@ -92,6 +100,7 @@ data class GlasmioAlertButtonSpec(
  * Keep this call in composition and change [visible] to retain the window through the exit
  * animation. Removing the call itself immediately removes the window.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GlasmioAlertDialog(
     onDismissRequest: () -> Unit,
@@ -114,7 +123,9 @@ fun GlasmioAlertDialog(
     val opacity = remember { Animatable(0f) }
     val dimming = remember { Animatable(0f) }
     var presented by remember { mutableStateOf(visible) }
+    var presentationSettled by remember { mutableStateOf(false) }
     LaunchedEffect(visible) {
+        presentationSettled = false
         if (visible) {
             if (!presented) {
                 scale.snapTo(IosAlertMotion.InitialScale)
@@ -123,6 +134,7 @@ fun GlasmioAlertDialog(
                 presented = true
             }
             IosAlertMotion.animate(true, scale, opacity, dimming)
+            presentationSettled = true
         } else if (presented) {
             IosAlertMotion.animate(false, scale, opacity, dimming)
             presented = false
@@ -130,6 +142,8 @@ fun GlasmioAlertDialog(
     }
     if (!presented) return
 
+    val sourceView = LocalView.current
+    val currentVisible by rememberUpdatedState(visible)
     val colors = LocalGlassColors.current
     val dimAmount = if (colors.isDark) 0.2f else 0.08f
     val fullScreenProperties = DialogProperties(
@@ -146,6 +160,19 @@ fun GlasmioAlertDialog(
     Dialog(onDismissRequest = dismiss, properties = fullScreenProperties) {
         val window = (LocalView.current.parent as? DialogWindowProvider)?.window
         val focusManager = LocalFocusManager.current
+        val imeStart = WindowInsets.imeAnimationSource
+        val imeEnd = WindowInsets.imeAnimationTarget
+        val density = LocalDensity.current
+        val direction = LocalLayoutDirection.current
+        val isPresentationSettled = remember(imeStart, imeEnd, density, direction) {
+            {
+                currentVisible && presentationSettled &&
+                    imeStart.getBottom(density) == imeEnd.getBottom(density) &&
+                    imeStart.getTop(density) == imeEnd.getTop(density) &&
+                    imeStart.getLeft(density, direction) == imeEnd.getLeft(density, direction) &&
+                    imeStart.getRight(density, direction) == imeEnd.getRight(density, direction)
+            }
+        }
         SideEffect { window?.setWindowAnimations(0) }
         LaunchedEffect(visible) {
             if (!visible) focusManager.clearFocus(force = true)
@@ -181,7 +208,7 @@ fun GlasmioAlertDialog(
                             alpha = opacity.value
                         },
                 ) {
-                    GlasmioAlertSurface(
+                    AlertSurface(
                         modifier = modifier.align(Alignment.Center)
                             .then(if (visible) Modifier else Modifier.clearAndSetSemantics {}),
                         backdrop = backdrop,
@@ -189,6 +216,8 @@ fun GlasmioAlertDialog(
                         message = message,
                         dimAmount = 0f,
                         titleContent = titleContent,
+                        sourceView = sourceView,
+                        isPresentationSettled = isPresentationSettled,
                     ) {
                         content()
                         if (buttons.isNotEmpty()) {
@@ -254,6 +283,28 @@ fun GlasmioAlertSurface(
     dimAmount: Float? = null,
     titleContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit = {},
+) = AlertSurface(
+    modifier = modifier,
+    backdrop = backdrop,
+    title = title,
+    message = message,
+    dimAmount = dimAmount,
+    titleContent = titleContent,
+    sourceView = LocalView.current,
+    content = content,
+)
+
+@Composable
+private fun AlertSurface(
+    modifier: Modifier,
+    backdrop: Backdrop,
+    title: String,
+    message: String?,
+    dimAmount: Float?,
+    titleContent: (@Composable () -> Unit)?,
+    sourceView: View,
+    isPresentationSettled: () -> Boolean = { true },
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     val materialContext = rememberGlassMaterialContext(inheritLuminance = false)
     val colors = materialContext.colors
@@ -269,7 +320,13 @@ fun GlasmioAlertSurface(
         InteractiveHighlight(animationScope = animationScope)
     }
     val samplingBackdrop = if (appearance.usesBackdrop) {
-        rememberCrossWindowBackdrop(backdrop)
+        val isSettled = remember(isPresentationSettled, interactiveHighlight) {
+            {
+                isPresentationSettled() && !interactiveHighlight.isPressed &&
+                    interactiveHighlight.pressProgress == 0f && interactiveHighlight.offset == Offset.Zero
+            }
+        }
+        rememberSettledBackdrop(backdrop, sourceView, isSettled)
     } else {
         emptyBackdrop()
     }

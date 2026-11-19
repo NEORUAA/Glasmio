@@ -5,6 +5,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.RectangleShape
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertNull
@@ -56,8 +57,10 @@ class LiquidMenuMorphMotionTest {
     @Test
     fun parallelEnvelopesContractBeforeTheyFormTheMenu() {
         val motion = motion()
+        assertFalse(motion.isExpandedSettled)
         motion.retarget(true)
         motion.advanceBy(0.05f)
+        assertFalse(motion.isExpandedSettled)
         val early = motion.frame
         val lobe = requireNotNull(early.sourceLobe)
         assertTrue("The fused source contracts rather than detaching", lobe.width < source.width * 0.75f)
@@ -65,6 +68,7 @@ class LiquidMenuMorphMotionTest {
         assertTrue("The optical field joins both lobes", early.smoothing > 0f)
         assertTrue("The physical kick bends the path downward", early.bounds.center.y > source.center.y + 40f)
         motion.advanceBy(3f)
+        assertTrue(motion.isExpandedSettled)
         assertRectEquals(destination, motion.frame.bounds)
         assertEquals(102f, motion.frame.radiusX, 0.001f)
         assertEquals(102f, motion.frame.radiusY, 0.001f)
@@ -121,17 +125,22 @@ class LiquidMenuMorphMotionTest {
                     control.frame.contentZoom, motion.frame.contentZoom, 0.00001f)
                 assertEquals(control.frame.portalBlur, motion.frame.portalBlur, 0.00001f)
                 motion.advanceBy(4f)
+                assertTrue(motion.isExpandedSettled)
                 assertRectEquals(shorter, motion.frame.bounds)
                 assertEquals(102f, motion.frame.radiusY, 0.001f)
 
                 val taller = Rect(shorter.left - 36f, shorter.top - 44f, shorter.right + 12f, shorter.top + 660f)
                 val settled = motion.frame
                 assertTrue(motion.updateTarget(taller, 102f))
+                assertFalse(motion.isExpandedSettled)
                 assertEquals("A settled menu also retains its presentation before resizing", settled, motion.frame)
                 motion.advanceBy(4f)
+                assertTrue(motion.isExpandedSettled)
                 assertRectEquals(taller, motion.frame.bounds)
                 motion.retarget(false)
+                assertFalse(motion.isExpandedSettled)
                 motion.advanceBy(4f)
+                assertFalse(motion.isExpandedSettled)
                 assertRectEquals(source, requireNotNull(motion.frame.sourceLobe))
             }
         }

@@ -108,7 +108,13 @@ fun GlasmioCascadingMenu(
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val child = remember { Animatable(0f) }
     val menuScale = remember(child) {
-        { 1f - 0.04f * child.value.coerceIn(0f, 1f) }
+        MenuScaleMotion(
+            scale = { 1f - 0.04f * child.value.coerceIn(0f, 1f) },
+            isSettled = {
+                val target = if (childExpanded) 1f else 0f
+                !child.isRunning && child.value == target
+            },
+        )
     }
     var menuBounds by remember { mutableStateOf<Rect?>(null) }
     val density = LocalDensity.current
