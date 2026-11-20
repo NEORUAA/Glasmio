@@ -23,6 +23,24 @@ class LiquidMenuMorphMotionTest {
     private val destination = Rect(242f, 185f, 996f, 687f)
 
     @Test
+    fun menuFlexRetargetAddsVelocityOnlyForChangesInDestination() {
+        val spring = LiquidMenuSpring()
+        val tracking = LiquidMenuSpringSpec(0.5f, 0.15f)
+        val release = LiquidMenuSpringSpec(0.5f, 0.60f)
+        spring.reset(2.5f)
+        spring.target(0f, release, 0.016f)
+        assertEquals(-4.38649f, spring.velocity, 0.0001f)
+        spring.advance(0.016f)
+        val position = spring.value
+        val velocity = spring.velocity
+        spring.target(0f, release, 0.016f)
+        assertEquals(velocity, spring.velocity, 0f)
+        spring.target(2.5f, tracking, 0.016f)
+        assertEquals(position, spring.value, 0f)
+        assertEquals(velocity + 70.18385f, spring.velocity, 0.001f)
+    }
+
+    @Test
     fun nonCoaxialReactionFieldKeepsItsLobesAndDetachedDotsWithoutFillingTheAllocation() {
         val pillHeight = 64.24f
         val emoji = Offset(240f, pillHeight + 14.3f)

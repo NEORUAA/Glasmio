@@ -1663,22 +1663,22 @@ private fun MenusDemo(bottomPadding: Dp, dark: Boolean, onDark: (Boolean) -> Uni
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    GlasmioTooltip(text = "Browse nested actions") {
-                        GlasmioButton(
-                            onClick = { nestedMenu = true },
-                            modifier = Modifier.glasmioMenuAnchor(nestedAnchor),
-                            size = GlasmioButtonSize.Medium,
-                        ) { Text("Cascading Menu") }
-                    }
+                    GlasmioButton(
+                        onClick = { nestedMenu = true },
+                        modifier = Modifier.glasmioMenuAnchor(nestedAnchor, onOpenMenu = { nestedMenu = true }),
+                        size = GlasmioButtonSize.Medium,
+                    ) { Text("Cascading Menu") }
                     GlasmioPopover(
                         visible = appearancePopover,
                         onDismissRequest = { appearancePopover = false },
                         adaptToSheet = false,
                         anchor = {
-                            GlasmioButton(
-                                onClick = { appearancePopover = true },
-                                size = GlasmioButtonSize.Medium,
-                            ) { Text("Popover") }
+                            GlasmioTooltip(text = "Change appearance") {
+                                GlasmioButton(
+                                    onClick = { appearancePopover = true },
+                                    size = GlasmioButtonSize.Medium,
+                                ) { Text("Popover") }
+                            }
                         },
                     ) {
                         Text(

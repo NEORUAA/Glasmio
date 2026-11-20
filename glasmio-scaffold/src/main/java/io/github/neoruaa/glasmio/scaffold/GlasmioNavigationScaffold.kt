@@ -936,7 +936,13 @@ private fun HeaderGroup(
             val hit = subcompose("hit" to action.key) {
                 GlassSurface(
                     modifier = Modifier.fillMaxSize()
-                        .then(if (ownsInteraction) action.menuAnchor?.let { Modifier.glasmioMenuAnchor(it) } ?: Modifier else Modifier)
+                        .then(
+                            if (ownsInteraction) {
+                                action.menuAnchor?.let { anchor ->
+                                    Modifier.glasmioMenuAnchor(anchor, action.onClick.takeIf { action.enabled })
+                                } ?: Modifier
+                            } else Modifier,
+                        )
                         .then(if (ownsInteraction) Modifier else Modifier.clearAndSetSemantics {}),
                     style = GlassSurfaceStyle.Navigation,
                     enabled = ownsInteraction && action.enabled,

@@ -80,6 +80,9 @@ fun LiquidMenuMorphSurface(
     sourceMaterialEffect: ((Float) -> RenderEffect)? = null,
     materialContext: GlassMaterialContext? = null,
     sourceNativeMaterial: GlassMaterialSource? = null,
+    contentModifier: Modifier = Modifier,
+    panelTransform: (GraphicsLayerScope.() -> Unit)? = null,
+    menuScaleOrigin: TransformOrigin = transformOrigin,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     val localDensity = LocalDensity.current
@@ -147,8 +150,16 @@ fun LiquidMenuMorphSurface(
     }
     val menuLayerBlock: GraphicsLayerScope.() -> Unit = {
         this.transformOrigin = transformOrigin
-        applyGlassDragScale(highlight.pressProgress, highlight.offset)
         val scale = menuScale()
+        if (panelTransform == null) {
+            applyGlassDragScale(highlight.pressProgress, highlight.offset)
+        } else {
+            panelTransform()
+        }
+        translationX = scale * translationX +
+            (1f - scale) * (menuScaleOrigin.pivotFractionX - this.transformOrigin.pivotFractionX) * size.width
+        translationY = scale * translationY +
+            (1f - scale) * (menuScaleOrigin.pivotFractionY - this.transformOrigin.pivotFractionY) * size.height
         scaleX *= scale
         scaleY *= scale
     }
@@ -184,7 +195,7 @@ fun LiquidMenuMorphSurface(
             .onGloballyPositioned { coordinates = it }
             .then(luminanceModifier)
             .graphicsLayer(menuLayerBlock)
-            .then(highlight.gestureModifier)
+            .then(if (panelTransform == null) highlight.gestureModifier else Modifier)
             .then(if (exportChildBackdrop) Modifier.layerBackdrop(childBackdrop).trackBackdropPosition(childBackdrop) else Modifier)
             .drawWithContent {
                 val host = coordinates ?: return@drawWithContent
@@ -461,7 +472,7 @@ fun LiquidMenuMorphSurface(
                     RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP)
                         .asComposeRenderEffect()
                 } else null
-            }.padding(10.dp),
+            }.padding(10.dp).then(contentModifier),
         ) {
             ProvideGlassMaterialContext(context) { content(childBackdrop) }
         }

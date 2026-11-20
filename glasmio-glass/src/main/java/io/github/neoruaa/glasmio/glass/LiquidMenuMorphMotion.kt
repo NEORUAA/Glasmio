@@ -516,6 +516,12 @@ class LiquidMenuSpring(
         this.spec = spec
     }
 
+    @androidx.annotation.RestrictTo(androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP)
+    fun target(value: Float, spec: LiquidMenuSpringSpec, retargetImpulse: Float) {
+        velocity += (value - destination) * spec.omega * spec.omega * retargetImpulse
+        target(value, spec)
+    }
+
     fun finish() {
         value = destination
         velocity = 0f
