@@ -698,7 +698,7 @@ private data class SamplePageLayout(
     val title: String,
     val padding: PaddingValues,
     val listState: LazyListState,
-    val collapseProgress: Float,
+    val collapseProgress: State<Float>,
 )
 
 @Composable
@@ -714,14 +714,14 @@ private fun SamplePinnedPage(
 ) {
     val state = listState ?: rememberLazyListState()
     // The title collapses on a breakpoint; the top bar material keeps tracking the scroll offset.
-    val animatedCollapse = rememberGlasmioHeaderCollapse(state)
-    val animatedEdge = rememberGlasmioHeaderScrollEdge(state)
-    val collapseProgress = if (alwaysCompact) 1f else animatedCollapse
-    val edgeProgress = animatedEdge
+    val collapseProgress = if (alwaysCompact) {
+        remember { mutableFloatStateOf(1f) }
+    } else {
+        rememberGlasmioHeaderCollapseState(state)
+    }
     val entry = LocalSampleHeaderEntry.current
-    val currentCollapse = rememberUpdatedState(collapseProgress)
-    val scroll = remember {
-        GlasmioHeaderScrollState({ currentCollapse.value })
+    val scroll = remember(collapseProgress) {
+        GlasmioHeaderScrollState({ collapseProgress.value })
     }
     SideEffect { entry.scroll = scroll }
     val hostPadding = LocalSampleBodyPadding.current
@@ -732,13 +732,18 @@ private fun SamplePinnedPage(
     GlasmioPageBody(
         contentPadding = bodyPadding,
         backgroundColor = backgroundColor,
-        topBarBlurProgress = edgeProgress,
+        topBarBlurProgress = rememberGlasmioHeaderScrollEdge(state),
         background = wallpaper?.let { source ->
             { Box(Modifier.fillMaxSize().drawWithContent { drawLayer(source.graphicsLayer) }) }
         },
     ) { padding ->
         content(SamplePageLayout(title, padding, state, collapseProgress))
     }
+}
+
+@Composable
+private fun SampleLargeTitle(title: String, collapse: State<Float>) {
+    SampleLargeTitle(title, collapse.value)
 }
 
 @Composable

@@ -597,7 +597,8 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
                     environment = recordingContext()
                     drawLayer(input)
                 }
-            } else if ((sparseLevels == null && regionChanged) || recordedPyramid !== atlas || pyramidContext != environment || environment?.hardware != true) {
+            } else if (recordedPyramid !== atlas || pyramidContext != environment || environment?.hardware != true ||
+                (sparseLevels == null && regions?.get(index) != pyramidSourceRegions?.get(index))) {
                 // Deeper stages contain only a fixed draw of another private RenderNode.
                 // Retaining their display lists preserves every GPU texture barrier while
                 // the freshly recorded source propagates through the live child references.
@@ -613,7 +614,8 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
                 // clipped filter draws once on a private, unfiltered node at the mip's
                 // original resolution. The next mip and final consumer share that texture.
                 val materialized = sparseTiles[index]
-                if (regionChanged || recordedPyramid !== atlas || pyramidContext != environment || environment?.hardware != true) {
+                if (recordedPyramid !== atlas || pyramidContext != environment || environment?.hardware != true ||
+                    regions?.get(index + 1) != pyramidSourceRegions?.get(index + 1)) {
                     val level = atlas.rects[index + 1]
                     val (first, second) = sparseLevels[index]
                     val active = regions?.get(index + 1)
