@@ -9,6 +9,8 @@
 
 package io.github.neoruaa.glasmio.glass.render
 
+import androidx.compose.ui.unit.IntRect
+import io.github.neoruaa.glasmio.glass.boundedSampleRegion
 import io.github.neoruaa.glasmio.glass.NativeGlassAtlasBackingCopy
 import io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses
 import androidx.compose.runtime.getValue
@@ -62,6 +64,7 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.recordingSignature
 import io.github.neoruaa.glasmio.glass.render.highlight.Highlight
 import io.github.neoruaa.glasmio.glass.render.highlight.HighlightElement
 import io.github.neoruaa.glasmio.glass.render.internal.ShapeProvider
+import io.github.neoruaa.glasmio.glass.render.internal.withFullHardwareBacking
 import io.github.neoruaa.glasmio.glass.render.internal.recordLayer
 import io.github.neoruaa.glasmio.glass.render.shadow.InnerShadow
 import io.github.neoruaa.glasmio.glass.render.shadow.InnerShadowElement
@@ -75,6 +78,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.ceil
+import kotlin.math.floor
 
 private val DefaultHighlight = { Highlight.Default }
 private val DefaultShadow = { Shadow.Default }
@@ -541,6 +545,8 @@ private class DrawBackdropNode(
     }
     private val recordAtlasConsumerBlock: DrawScope.() -> Unit = { atlasBackingLayer?.let { drawLayer(it) } }
 
+    private var recordedConsumerSize = IntSize.Zero
+
     private fun DrawScope.drawRecordedBackdrop() {
         val layer = graphicsLayer ?: return
         val scale = effectScope.samplingScale
@@ -552,7 +558,7 @@ private class DrawBackdropNode(
                 canvas.translate(-origin.x, -origin.y)
                 // Runtime image filters report unbounded output. Bound the final draw to
                 // its complete recorded consumer, including the atlas sampled by the effect.
-                canvas.clipRect(0f, 0f, layer.size.width.toFloat(), layer.size.height.toFloat())
+                canvas.clipRect(0f, 0f, recordedConsumerSize.width.toFloat(), recordedConsumerSize.height.toFloat())
             } else {
                 if (scale != 1f) canvas.scale(1f / scale, 1f / scale)
                 if (padding != 0f) canvas.translate(-padding, -padding)
@@ -561,6 +567,19 @@ private class DrawBackdropNode(
         } finally {
             canvas.restore()
         }
+    }
+
+    private fun boundedSourcePixels(size: IntSize): IntRect? {
+        if (!effectScope.nativeGlassHardwareRendering || onDrawBackdrop !== DefaultOnDrawBackdrop ||
+            effectScope.auxiliaryBackdrop != null || size.width > 16384 || size.height > 16384) return null
+        val consumer = layoutCoordinates?.takeIf { it.isAttached } ?: return null
+        val region = backdrop.boundedSampleRegion(consumer, effectScope.fullSize) ?: return null
+        val scale = effectScope.samplingScale
+        if (scale !in .125f..4f || !region.isFinite || padding !in 0f..16384f) return null
+        fun first(edge: Float, limit: Int) = floor(edge.toDouble() * scale + padding - 2.0).toInt().coerceIn(0, limit)
+        fun last(edge: Float, limit: Int) = ceil(edge.toDouble() * scale + padding + 2.0).toInt().coerceIn(0, limit)
+        return IntRect(first(region.left, size.width), first(region.top, size.height),
+            last(region.right, size.width), last(region.bottom, size.height))
     }
 
     private val drawBackdropLayer: DrawScope.() -> Unit = {
@@ -574,6 +593,7 @@ private class DrawBackdropNode(
             val outputSize = effectScope.materialOutputSize
             val consumerSize = if (outputSize == null) recordingSize else IntSize(
                 maxOf(recordingSize.width, outputSize.width), maxOf(recordingSize.height, outputSize.height))
+            recordedConsumerSize = consumerSize
             val source = if (luminanceState != null) {
                 luminanceSourceLayer ?: requireGraphicsContext().createGraphicsLayer().also {
                     luminanceSourceLayer = it
@@ -598,6 +618,7 @@ private class DrawBackdropNode(
                 } else if (mipAtlas != null) passes.recordPyramid(
                     mipAtlas,
                     inputEffects = producerEffects,
+                    sourceSupport = if (mipAtlas.canPropagateSourceBounds && producerEffects.isEmpty()) boundedSourcePixels(baseSize) else null,
                     record = { target, targetSize, block ->
                         recordLayer(this@DrawBackdropNode, target, targetSize, block)
                     },
@@ -616,14 +637,21 @@ private class DrawBackdropNode(
                 atlasProducerLayer = previous
                 // The final layer's raw repaint evaluates the producer over the complete
                 // atlas before the final effect is composed into the visible shape.
+                // Material and control consumers sample only their original packed tile rectangles.
+                // Extending its private input subset to the real backing lets Skia use hardware edges.
+                val finalInputSize = if (effectScope.nativeGlassHardwareRendering && effectScope.nativeMaterialCompleted &&
+                    mipAtlas != null && (mipAtlas.textureStages.isNotEmpty() || mipAtlas.hasControlPlanes) &&
+                    android.os.Build.VERSION.SDK_INT >= 36) {
+                    consumerSize.withFullHardwareBacking()
+                } else consumerSize
                 if (NativeGlassAtlasBackingCopy) {
                     val backing = atlasBackingLayer ?: context.createGraphicsLayer().also { atlasBackingLayer = it }
                     backing.clip = true
                     backing.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
                     backing.renderEffect = null
                     recordLayer(this@DrawBackdropNode, backing, recordingSize, recordAtlasBackingBlock)
-                    recordLayer(this@DrawBackdropNode, layer, consumerSize, recordAtlasConsumerBlock)
-                } else recordLayer(this@DrawBackdropNode, layer, consumerSize, recordAtlasBackingBlock)
+                    recordLayer(this@DrawBackdropNode, layer, finalInputSize, recordAtlasConsumerBlock)
+                } else recordLayer(this@DrawBackdropNode, layer, finalInputSize, recordAtlasBackingBlock)
             } else if (source != null) {
                 recordLayer(this@DrawBackdropNode, layer, consumerSize, recordBackdropFromLuminanceBlock)
             } else {

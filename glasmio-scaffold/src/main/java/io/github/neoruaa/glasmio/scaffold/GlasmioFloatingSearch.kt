@@ -68,7 +68,10 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.zIndex
@@ -366,7 +369,7 @@ fun <T> GlasmioNavigationBarWithTrailingItem(
     val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
     var hostOrigin by remember { mutableStateOf(Offset.Zero) }
     var sourceIconBounds by remember { mutableStateOf<Rect?>(null) }
-    val sourceIconCenter = rememberUpdatedState(sourceIconBounds?.center?.minus(hostOrigin))
+    val sourceIconCenter = remember { derivedStateOf { sourceIconBounds?.center?.minus(hostOrigin) } }
     BottomNavigationContact(
         backdrop = backdrop,
         modifier = modifier,
@@ -409,7 +412,7 @@ fun <T> GlasmioNavigationBarWithTrailingItem(
                         itemActive = auxiliaryActive.value,
                         itemContentDescription = trailingItem.contentDescription,
                         onBoundsChanged = { bounds -> onItemBoundsChanged?.invoke(trailingItem.key, bounds) },
-                    ) { progress ->
+                    ) {
                         SfIcon(
                             trailingItem.symbol,
                             contentDescription = trailingItem.contentDescription,
@@ -422,7 +425,7 @@ fun <T> GlasmioNavigationBarWithTrailingItem(
                             modifier = Modifier.graphicsLayer {
                                 if (!detachTrailingItem) {
                                     translationY = ((sourceIconCenter.value?.y ?: size.height / 2f) -
-                                        NavigationBarSurfaceHeight.toPx() / 2f) * (1f - progress)
+                                        NavigationBarSurfaceHeight.toPx() / 2f) * (1f - compactProgress.value)
                                 }
                             },
                         )
@@ -437,18 +440,23 @@ fun <T> GlasmioNavigationBarWithTrailingItem(
             val mainWidth = if (detachTrailingItem) (width - auxiliaryWidth - gap).coerceAtLeast(1) else width
             val main = measurables[0].measure(Constraints.fixed(mainWidth, height))
             val auxiliary = measurables[1].measure(Constraints.fixed(auxiliaryWidth, height))
-            val progress = compactProgress.value.coerceIn(0f, 1f)
-            val expandedCenter = sourceIconCenter.value?.x ?: if (isLtr) {
-                width * (mainItems.lastIndex + .5f) / mainItems.size
-            } else width * .5f / mainItems.size
-            val sourceX = expandedCenter - auxiliaryWidth / 2f
-            val targetX = if (isLtr) width - auxiliaryWidth.toFloat() else 0f
-            val auxiliaryX = if (detachTrailingItem) targetX else sourceX + (targetX - sourceX) * progress
             layout(width, height) {
                 main.place(if (isLtr) 0 else width - mainWidth, 0)
                 // An alpha-zero selectable would still intercept input. Keep the node
                 // alive, but do not place the merged expanded dummy in the hit tree.
-                if (detachTrailingItem || progress > 0f) auxiliary.place(auxiliaryX.roundToInt(), 0)
+                val targetX = if (isLtr) width - auxiliaryWidth else 0
+                if (detachTrailingItem) {
+                    auxiliary.place(targetX, 0)
+                } else {
+                    val progress = compactProgress.value.coerceIn(0f, 1f)
+                    if (progress > 0f) {
+                        val center = sourceIconCenter.value?.x ?: if (isLtr) {
+                            width * (mainItems.lastIndex + .5f) / mainItems.size
+                        } else width * .5f / mainItems.size
+                        val sourceX = center - auxiliaryWidth / 2f
+                        auxiliary.place((sourceX + (targetX - sourceX) * progress).roundToInt(), 0)
+                    }
+                }
             }
         }
     }
@@ -463,7 +471,7 @@ fun GlasmioFloatingSearchButton(
     modifier: Modifier = Modifier,
     backdrop: Backdrop = LocalGlassBackdrop.current,
 ) {
-    FloatingNavigationControl(compactProgress, onClick, modifier, backdrop) { _ ->
+    FloatingNavigationControl(compactProgress, onClick, modifier, backdrop) {
         SfIcon(
             SfSymbol.Search,
             contentDescription = contentDescription,
@@ -488,7 +496,7 @@ private fun FloatingNavigationControl(
     itemActive: Boolean = true,
     itemContentDescription: String? = null,
     onBoundsChanged: ((Rect) -> Unit)? = null,
-    content: @Composable (Float) -> Unit,
+    content: @Composable () -> Unit,
 ) {
     val contact = LocalBottomControlContact.current
     Box(
@@ -502,23 +510,28 @@ private fun FloatingNavigationControl(
             } else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        val progress = compactProgress.value
-        val controlSize = NavigationBarSurfaceHeight -
-            (NavigationBarSurfaceHeight - compactSize) * progress
         GlasmioIconButton(
             onClick = onClick,
             enabled = itemActive,
             backdrop = backdrop,
             style = GlassSurfaceStyle.Navigation,
             nativeNavigationFlex = true,
-            modifier = Modifier.size(controlSize)
+            modifier = Modifier.layout { measurable, constraints ->
+                val side = NavigationBarSurfaceHeight - (NavigationBarSurfaceHeight - compactSize) * compactProgress.value
+                val pixels = if (side.isSpecified) side.roundToPx().coerceAtLeast(0) else Constraints.Infinity
+                val childConstraints = if (pixels == Constraints.Infinity) constraints else Constraints.fixed(
+                    constraints.constrainWidth(pixels), constraints.constrainHeight(pixels),
+                )
+                val child = measurable.measure(childConstraints)
+                layout(child.width, child.height) { child.placeRelative(0, 0) }
+            }
                 .onGloballyPositioned { coordinates ->
                     if (itemActive) onBoundsChanged?.invoke(coordinates.boundsInWindow())
                 },
             morphProgress = compactProgress,
             morphCaptureWidth = NavigationBarSurfaceHeight,
         ) {
-            content(progress)
+            content()
         }
     }
 }

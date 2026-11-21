@@ -36,29 +36,19 @@ internal fun glassCornerRadii(shape: Shape, size: Size, direction: LayoutDirecti
 }
 
 /** iOS 27 AIR supercircle_sdf and its separate boundary/oval normal blend. */
-internal const val NativeGlassSdfFunctions = """
+private const val NativeGlassSafeNormal = """
 float2 nativeGlassSafeNormal(float2 v) {
     return v / max(length(v), 0.000001);
 }
-float3 nativeGlassRoundedField(float2 point, float2 halfExtent, float2 radii, float normalMix) {
-    if (min(abs(radii.x), abs(radii.y)) <= 0.000001) {
-        float2 edge = abs(point) - halfExtent;
-        float2 signs = float2(point.x < 0.0 ? -1.0 : 1.0, point.y < 0.0 ? -1.0 : 1.0);
-        float2 normal = signs * (edge.x > edge.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
-        float2 oval = nativeGlassSafeNormal(float2(point.x, point.y * halfExtent.x / max(halfExtent.y, 0.000001)));
-        return float3(max(edge.x, edge.y), nativeGlassSafeNormal(mix(normal, oval, normalMix)));
-    }
-    float2 r = max(abs(radii), float2(0.001));
-    float radius = min(r.x, r.y);
-    float2 inverseAxis = radius / r;
-    float2 local = point * inverseAxis;
-    float2 extent = halfExtent * inverseAxis;
+"""
+
+private const val NativeGlassRoundedDistance = """
     float expandedRadius = radius * 1.5286649465560913;
     float2 curvature = clamp(2.8915570351735034 -
         1.4457785175867517 * (extent * 2.0) / expandedRadius, 0.0, 1.0);
     float baseRadius = mix(expandedRadius, radius, max(curvature.x, curvature.y));
     float2 edge = abs(local) - extent;
-    float2 circle = edge + baseRadius;
+    circle = edge + baseRadius;
     float interior = min(max(circle.x, circle.y), 0.0);
     float2 z = max((edge + expandedRadius) / expandedRadius, 0.0);
     float largest = max(z.x, z.y);
@@ -72,14 +62,48 @@ float3 nativeGlassRoundedField(float2 point, float2 halfExtent, float2 radii, fl
     float weight = clamp((z.y > z.x ? 1.0 : -1.0) * (t - 1.0) + 0.5, 0.0, 1.0);
     float corrected = mix(mix(raw, alternate, curvature.x), mix(raw, alternate, curvature.y), weight);
     float distance = interior + expandedRadius * float(half(corrected - 1.0));
+"""
+
+private const val NativeGlassRoundedNormal = """
     float2 positiveNormal = nativeGlassSafeNormal(max(circle, 0.0));
     if (positiveNormal.x + positiveNormal.y <= 0.0)
         positiveNormal = circle.x > circle.y ? float2(1.0, 0.0) : float2(0.0, 1.0);
     float2 normal = positiveNormal * float2(local.x < 0.0 ? -1.0 : 1.0, local.y < 0.0 ? -1.0 : 1.0);
-    float2 oval = nativeGlassSafeNormal(float2(local.x, local.y * extent.x / max(extent.y, 0.000001)));
+"""
+
+private const val NativeGlassSquareNormal = """        float2 edge = abs(point) - halfExtent;
+        float2 signs = float2(point.x < 0.0 ? -1.0 : 1.0, point.y < 0.0 ? -1.0 : 1.0);
+        float2 normal = signs * (edge.x > edge.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
+"""
+
+private const val NativeGlassRoundedAxes = """    float2 r = max(abs(radii), float2(0.001));
+    float radius = min(r.x, r.y);
+    float2 inverseAxis = radius / r;
+    float2 local = point * inverseAxis;
+    float2 extent = halfExtent * inverseAxis;
+    float2 circle;
+"""
+
+internal const val NativeGlassSdfFunctions = NativeGlassSafeNormal + """
+float3 nativeGlassRoundedField(float2 point, float2 halfExtent, float2 radii, float normalMix) {
+    if (min(abs(radii.x), abs(radii.y)) <= 0.000001) {
+""" + NativeGlassSquareNormal + """        float2 oval = nativeGlassSafeNormal(float2(point.x, point.y * halfExtent.x / max(halfExtent.y, 0.000001)));
+        return float3(max(edge.x, edge.y), nativeGlassSafeNormal(mix(normal, oval, normalMix)));
+    }
+""" + NativeGlassRoundedAxes + NativeGlassRoundedDistance + NativeGlassRoundedNormal + """    float2 oval = nativeGlassSafeNormal(float2(local.x, local.y * extent.x / max(extent.y, 0.000001)));
     normal = nativeGlassSafeNormal(mix(normal, oval, normalMix));
     // The native field transforms this normalized gradient without a second normalization.
     return float3(distance, normal * inverseAxis);
+}
+"""
+
+/** A CASDF union uses the continuous boundary normal for every element. */
+internal const val NativeGlassUnionSdfFunctions = NativeGlassSdfFunctions + """
+float3 nativeGlassUnionBoundaryField(float2 point, float2 halfExtent, float2 radii) {
+    if (min(abs(radii.x), abs(radii.y)) <= 0.000001) {
+""" + NativeGlassSquareNormal + """        return float3(max(edge.x, edge.y), nativeGlassSafeNormal(normal));
+    }
+""" + NativeGlassRoundedAxes + NativeGlassRoundedDistance + NativeGlassRoundedNormal + """    return float3(distance, nativeGlassSafeNormal(normal) * inverseAxis);
 }
 """
 
@@ -98,4 +122,25 @@ float3 glassField(float2 p, float normalMix) {
 float glassDistance(float2 p) { return glassField(p, 0.0).x; }
 float2 glassNormal(float2 p) { return glassField(p, 0.0).yz; }
 float2 glassDepthNormal(float2 p, float normalMix) { return glassField(p, normalMix).yz; }
+"""
+
+/** The active Tab asks for the boundary normal only. Every sampled corner uses one positive scalar radius. */
+internal const val NativeControlUniformRoundedField = NativeGlassSafeNormal + """
+uniform float2 size;
+uniform float4 cornerRadii;
+float nativeControlUniformRoundedDistance(float2 local, out float2 circle) {
+    float2 extent = size * 0.5;
+    float radius = max(cornerRadii.x, 0.001);
+""" + NativeGlassRoundedDistance + """    return distance;
+}
+float glassDistance(float2 p) {
+    float2 circle;
+    return nativeControlUniformRoundedDistance(p - size * 0.5, circle);
+}
+float3 glassField(float2 p, float normalMix) {
+    float2 local = p - size * 0.5;
+    float2 circle;
+    float distance = nativeControlUniformRoundedDistance(local, circle);
+""" + NativeGlassRoundedNormal + """    return float3(distance, nativeGlassSafeNormal(normal));
+}
 """

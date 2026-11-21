@@ -7,6 +7,7 @@ package io.github.neoruaa.glasmio.glass
 
 import androidx.annotation.RequiresApi
 import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
+import io.github.neoruaa.glasmio.glass.render.internal.withFullHardwareBacking
 import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.icons.*
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSdfFunctions
@@ -68,6 +69,7 @@ import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -200,6 +202,17 @@ class GlassMorphRenderer(
     private var atlasProducer: GraphicsLayer? = null
     private var atlasBacking: GraphicsLayer? = null
     private var atlasInputActive = false
+    private data class PackedMaterialRecording(
+        val target: GraphicsLayer,
+        val opticalLayer: GraphicsLayer,
+        val base: IntSize,
+        val packedSize: IntSize,
+        val opticalOutput: Rect,
+        val density: Float,
+        val fontScale: Float,
+        val direction: LayoutDirection,
+    )
+    private var packedMaterialRecording: PackedMaterialRecording? = null
     private var atlasColorManagement: () -> Boolean = { false }
     private var atlasHeadroom: () -> Float = { 1f }
 
@@ -263,6 +276,7 @@ class GlassMorphRenderer(
 
     fun invalidateRecording() {
         recordedViewport = null
+        packedMaterialRecording = null
     }
 
     fun release() {
@@ -275,6 +289,7 @@ class GlassMorphRenderer(
         nativeFilterScope.reset()
         atlasPasses?.release()
         atlasPasses = null
+        packedMaterialRecording = null
     }
 
     fun draw(
@@ -435,6 +450,8 @@ class GlassMorphRenderer(
             nativeFilterScope.configure(this, shape,
                 Size(bounds.width * sampleScale.x * renderScale, bounds.height * sampleScale.y * renderScale),
                 scope.density * transformScale * renderScale)
+            nativeFilterScope.supportsRetainedOpticalStage = completeNativeMaterial && !customOptics &&
+                drawContext.canvas.nativeCanvas.isHardwareAccelerated
             nativeFilterScope.colorManagedNativeGlass = atlasColorManagement()
             nativeFilterScope.nativeGlassHeadroom = atlasHeadroom()
             nativeFilterScope.apply {
@@ -486,8 +503,16 @@ class GlassMorphRenderer(
                     layoutDirection = recordedLayoutDirection, size = atlasSize) { drawLayer(producer) }
                 refracted.record(density = this@GlassMorphRenderer.density,
                     layoutDirection = recordedLayoutDirection, size = atlasSize) { drawLayer(backing) }
-            } else refracted.record(density = this@GlassMorphRenderer.density,
-                layoutDirection = recordedLayoutDirection, size = atlasSize) { drawLayer(producer) }
+            } else {
+                // The plain SDR optical pass reads only its own mip rectangles, also when its
+                // private backing extends past the logical atlas. Keep subsequent draw clips.
+                val opticalInput = if (Build.VERSION.SDK_INT >= 36 && filterField == null &&
+                    !customOptics && !nativeFilterScope.colorManagedNativeGlass && mipAtlas != null &&
+                    completeNativeMaterial && drawContext.canvas.nativeCanvas.isHardwareAccelerated)
+                    atlasSize.withFullHardwareBacking() else atlasSize
+                refracted.record(density = this@GlassMorphRenderer.density,
+                    layoutDirection = recordedLayoutDirection, size = opticalInput) { drawLayer(producer) }
+            }
             atlasInputActive = true
         } else if (atlasInputActive) {
             refracted.record(density = this@GlassMorphRenderer.density,
@@ -667,7 +692,8 @@ class GlassMorphRenderer(
                 sourceRecipe = sourceRecipe, sourceAlpha = if (sourceRecipe != null) 1f - progress else 0f,
                 outputSize = Size(bounds.width * sampleScale.x, bounds.height * sampleScale.y),
                 outputDensity = scope.density * minOf(sampleScale.x, sampleScale.y),
-                textureScale = renderScale, highlightAlpha = highlightOpacity, sourceShadow = sourceShadow)
+                textureScale = renderScale, highlightAlpha = highlightOpacity, sourceShadow = sourceShadow,
+                specializeMenuTint = menuField != null)
             val completedEffect = if (transitionRefraction != null) {
                 nativeFilterScope.completeNativeMenuFilteredGlass(base, effectOrigin, requireNotNull(filterField),
                     completion, transitionRefraction)
@@ -697,15 +723,27 @@ class GlassMorphRenderer(
                     sourceBounds, scope.density * minOf(sampleScale.x, sampleScale.y), glowDark, glowTint, glowClear,
                     glow.dissipationProgress), completedEffect)
             } else completedEffect).asComposeRenderEffect()
-            completed.record(this@GlassMorphRenderer.density, recordedLayoutDirection, packedSize) {
-                clipRect(0f, 0f, base.width.toFloat(), base.height.toFloat()) { drawLayer(source) }
-                withTransform({ translate(0f, base.height.toFloat()) }) {
-                    // The filtered layer already owns A's texture barrier. Pack it on the
-                    // same integer grid without another viewport-sized copy target.
-                    clipRect(opticalOutput.left, opticalOutput.top, opticalOutput.right, opticalOutput.bottom) {
-                        drawLayer(packedOptical)
+            // This private packing layer records two live RenderNode references. Its effect and
+            // both source layers still update independently when their content or uniforms change.
+            val recording = if (drawContext.canvas.nativeCanvas.isHardwareAccelerated) PackedMaterialRecording(
+                completed, packedOptical, base, packedSize, opticalOutput,
+                this@GlassMorphRenderer.density.density, this@GlassMorphRenderer.density.fontScale, recordedLayoutDirection,
+            ) else null
+            if (recording == null || recording != packedMaterialRecording) {
+                val finalInputSize = if (recording != null && Build.VERSION.SDK_INT >= 36) {
+                    packedSize.withFullHardwareBacking()
+                } else packedSize
+                completed.record(this@GlassMorphRenderer.density, recordedLayoutDirection, finalInputSize) {
+                    clipRect(0f, 0f, base.width.toFloat(), base.height.toFloat()) { drawLayer(source) }
+                    withTransform({ translate(0f, base.height.toFloat()) }) {
+                        // The filtered layer already owns A's texture barrier. Pack it on the
+                        // same integer grid without another viewport-sized copy target.
+                        clipRect(opticalOutput.left, opticalOutput.top, opticalOutput.right, opticalOutput.bottom) {
+                            drawLayer(packedOptical)
+                        }
                     }
                 }
+                packedMaterialRecording = recording
             }
             withTransform({
                 translate(bounds.left - outputOrigin.x / sampleScale.x, bounds.top - outputOrigin.y / sampleScale.y)
@@ -868,6 +906,7 @@ class GlassMorphRenderer(
 
 /** Reuse the standard native material graph over a morph's viewport-coordinate source. */
 private class MorphNativeFilterScope : BackdropEffectScopeImpl() {
+    override var supportsRetainedOpticalStage: Boolean = false
     override val supportsNativeGlassHardwareLinearSampling: Boolean get() = true
     override var shape: Shape = RectangleShape
 

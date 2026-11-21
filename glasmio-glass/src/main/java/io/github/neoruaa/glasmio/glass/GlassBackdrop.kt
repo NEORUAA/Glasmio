@@ -40,6 +40,9 @@ import androidx.compose.ui.unit.dp
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.hasBuiltInLayerBlockIndependentSource
+import io.github.neoruaa.glasmio.glass.render.backdrops.isLocalColorFill
+import io.github.neoruaa.glasmio.glass.render.backdrops.isUnitTranslation
+import io.github.neoruaa.glasmio.glass.render.backdrops.rememberBoundedLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import java.lang.ref.WeakReference
@@ -76,7 +79,16 @@ fun GlasmioBackdropHost(
     modifier: Modifier = Modifier,
     sampledContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
     overlayContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
-) = BackdropHost(modifier, uniformFill = false, sampledContent, overlayContent)
+) = BackdropHost(modifier, uniformFill = false, bounded = false, sampledContent, overlayContent)
+
+/** When requested, each material samples within the source bounds, including after later layer changes. */
+@Composable
+fun GlasmioBackdropHost(
+    sampledContentClipped: Boolean,
+    modifier: Modifier = Modifier,
+    sampledContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
+    overlayContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
+) = BackdropHost(modifier, uniformFill = false, bounded = sampledContentClipped, sampledContent, overlayContent)
 
 /**
  * A [GlasmioBackdropHost] whose sampled content is [sampledColor] filling the host.
@@ -90,16 +102,17 @@ fun GlasmioBackdropHost(
     sampledColor: Color,
     modifier: Modifier = Modifier,
     overlayContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
-) = BackdropHost(modifier, uniformFill = true, { Box(Modifier.fillMaxSize().background(sampledColor)) }, overlayContent)
+) = BackdropHost(modifier, uniformFill = true, bounded = false, { Box(Modifier.fillMaxSize().background(sampledColor)) }, overlayContent)
 
 @Composable
 private fun BackdropHost(
     modifier: Modifier,
     uniformFill: Boolean,
+    bounded: Boolean,
     sampledContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
     overlayContent: @Composable BoxScope.(LayerBackdrop) -> Unit,
 ) {
-    val backdrop = rememberLayerBackdrop()
+    val backdrop = if (bounded) rememberBoundedLayerBackdrop() else rememberLayerBackdrop()
     // The fill draws nothing else and covers the layer bounds exactly.
     backdrop.fillsBoundsUniformly = uniformFill
     CompositionLocalProvider(
@@ -357,6 +370,28 @@ private class SharedGlassBackdrop(
         return { baseObservation(); sourceObservation() }
     }
 
+    internal fun boundedSamples(coordinates: LayoutCoordinates, logicalSize: Size): Rect? {
+        val lower = base.boundedSampleRegion(coordinates, logicalSize) ?: return null
+        val recorded = backdropSourcePositions[source]?.get()?.takeIf { it.isAttached } ?: return null
+        if (!coordinates.isAttached || recorded.findRootCoordinates() !== coordinates.findRootCoordinates() ||
+            recorded.size != source.graphicsLayer.size) return null
+        // Both private rasterized sources are clipped to their physical buffer. The bottom band
+        // never extends above the full source. Ceil and linear filtering can reach its outer texel.
+        sampleToConsumer.reset()
+        recorded.transformToScreen(sampleToConsumer)
+        screenToConsumerBounds.reset()
+        coordinates.transformToScreen(screenToConsumerBounds)
+        screenToConsumerBounds.invert()
+        sampleToConsumer *= screenToConsumerBounds
+        if (!sampleToConsumer.isUnitTranslation()) return null
+        val upper = sampleToConsumer.map(Rect(-4f, -4f, recorded.size.width + 4f, recorded.size.height + 4f))
+        return Rect(minOf(lower.left, upper.left), minOf(lower.top, upper.top),
+            maxOf(lower.right, upper.right), maxOf(lower.bottom, upper.bottom))
+    }
+
+    private val sampleToConsumer = Matrix()
+    private val screenToConsumerBounds = Matrix()
+
     private fun sample(density: Density, coordinates: LayoutCoordinates?, top: Float): Backdrop {
         val recorded = backdropSourcePositions[source]?.get()
         if (coordinates?.isAttached != true || recorded?.isAttached != true) return full
@@ -384,4 +419,11 @@ private class SharedGlassBackdrop(
         with(base) { drawBackdrop(density, coordinates, null) }
         with(sample(density, coordinates, viewport.top)) { drawBackdrop(density, coordinates, null) }
     }
+}
+
+internal fun Backdrop.boundedSampleRegion(coordinates: LayoutCoordinates, logicalSize: Size): Rect? = when {
+    this is LayerBackdrop -> boundedSamples(coordinates)
+    this is SharedGlassBackdrop -> boundedSamples(coordinates, logicalSize)
+    isLocalColorFill() -> Rect(Offset.Zero, logicalSize)
+    else -> null
 }

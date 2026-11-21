@@ -34,6 +34,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import io.github.neoruaa.glasmio.glass.render.backdrops.LayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.conditionalLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
 import io.github.neoruaa.glasmio.core.*
@@ -487,7 +488,7 @@ fun GlasmioPageBody(
     backgroundColor: androidx.compose.ui.graphics.Color = LocalGlassColors.current.groupedBackground,
     backgroundBrush: androidx.compose.ui.graphics.Brush? = null,
     topBarBlurProgress: Float = 0f,
-    backdrop: LayerBackdrop = rememberLayerBackdrop(),
+    backdrop: LayerBackdrop? = null,
     background: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable BoxScope.(PaddingValues) -> Unit,
 ) {
@@ -495,9 +496,12 @@ fun GlasmioPageBody(
     val headerTop = WindowInsets.glasmioPageHeaderInsets.asPaddingValues().calculateTopPadding()
     val headerHeight = headerTop + 62.dp
     val progress = topBarBlurProgress.coerceIn(0f, 1f)
+    val pageBackdrop = backdrop ?: rememberLayerBackdrop()
+    // Only the page-owned capture is private to the scroll-edge blur.
+    val captureEnabled = backdrop != null || (appearance.usesBackdrop && progress != 0f)
     Box(modifier.fillMaxSize()) {
         Box(
-            Modifier.fillMaxSize().glassBackdropSource(backdrop).trackBackdropPosition(backdrop),
+            Modifier.fillMaxSize().conditionalLayerBackdrop(pageBackdrop, captureEnabled).trackBackdropPosition(pageBackdrop),
         ) {
             Box(
                 Modifier.matchParentSize()
@@ -516,7 +520,7 @@ fun GlasmioPageBody(
         Box(
             Modifier.fillMaxWidth().glasmioAdaptiveContent().height(headerHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
                 .then(if (appearance.usesBackdrop) {
-                    Modifier.progressiveBlurBackdrop(backdrop, progress)
+                    Modifier.progressiveBlurBackdrop(pageBackdrop, progress)
                 } else {
                     Modifier.graphicsLayer { alpha = progress }.background(backgroundColor.copy(alpha = 1f))
                 }),

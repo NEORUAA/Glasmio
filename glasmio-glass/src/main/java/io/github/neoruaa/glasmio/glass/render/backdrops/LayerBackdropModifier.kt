@@ -9,6 +9,7 @@
 
 package io.github.neoruaa.glasmio.glass.render.backdrops
 
+import androidx.annotation.RestrictTo
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
@@ -37,20 +38,27 @@ fun Modifier.layerBackdrop(backdrop: LayerBackdrop): Modifier =
  * content draws identically in the visible and capture scopes, including graphicsLayer reads.
  */
 fun Modifier.layerBackdrop(backdrop: LayerBackdrop, reuseContent: Boolean): Modifier =
-    this then LayerBackdropElement(backdrop, reuseContent)
+    this then LayerBackdropElement(backdrop, reuseContent, captureEnabled = true)
+
+/** Keep source coordinates attached while its owner has no visible or external consumer. */
+@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+fun Modifier.conditionalLayerBackdrop(backdrop: LayerBackdrop, captureEnabled: Boolean): Modifier =
+    this then LayerBackdropElement(backdrop, reuseContent = false, captureEnabled = captureEnabled)
 
 private class LayerBackdropElement(
     val backdrop: LayerBackdrop,
     val reuseContent: Boolean,
+    val captureEnabled: Boolean,
 ) : ModifierNodeElement<LayerBackdropNode>() {
 
     override fun create(): LayerBackdropNode {
-        return LayerBackdropNode(backdrop, reuseContent)
+        return LayerBackdropNode(backdrop, reuseContent, captureEnabled)
     }
 
     override fun update(node: LayerBackdropNode) {
         node.updateBackdrop(backdrop)
         node.reuseContent = reuseContent
+        node.captureEnabled = captureEnabled
         node.invalidateDraw()
     }
 
@@ -58,6 +66,7 @@ private class LayerBackdropElement(
         name = "layerBackdrop"
         properties["backdrop"] = backdrop
         properties["reuseContent"] = reuseContent
+        properties["captureEnabled"] = captureEnabled
     }
 
     override fun equals(other: Any?): Boolean {
@@ -65,7 +74,7 @@ private class LayerBackdropElement(
         if (other !is LayerBackdropElement) return false
 
         if (backdrop != other.backdrop) return false
-        if (reuseContent != other.reuseContent) return false
+        if (reuseContent != other.reuseContent || captureEnabled != other.captureEnabled) return false
 
         return true
     }
@@ -78,6 +87,7 @@ private class LayerBackdropElement(
 private class LayerBackdropNode(
     var backdrop: LayerBackdrop,
     var reuseContent: Boolean,
+    var captureEnabled: Boolean,
 ) : DrawModifierNode, GlobalPositionAwareModifierNode, Modifier.Node() {
 
     private var registeredLayer: GraphicsLayer? = null
@@ -112,6 +122,10 @@ private class LayerBackdropNode(
     }
 
     override fun ContentDrawScope.draw() {
+        if (!captureEnabled) {
+            drawContent()
+            return
+        }
         val layer = backdrop.graphicsLayer
         if (reuseContent && backdrop.recordsContent && CaptureOwners[layer]?.size == 1 && layer.preservesContent()) {
             // Record once, then replay the same live display list on screen. Calling

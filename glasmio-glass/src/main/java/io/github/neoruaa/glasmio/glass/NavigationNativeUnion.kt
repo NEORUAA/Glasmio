@@ -7,7 +7,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asAndroidPath
-import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassSdfFunctions
+import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassUnionSdfFunctions
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -25,6 +25,16 @@ internal class NavigationNativeUnion private constructor(
         val radii = Offset(radius * bounds.width / capsule.size.width,
             radius * bounds.height / capsule.size.height)
         val field = RoundedMenuField(bounds, radii, normalMix = 0f)
+
+        fun hasBoundedNormal(localCoordinateBound: Float): Boolean {
+            val center = bounds.center
+            val radius = min(radii.x, radii.y)
+            // The native SDF narrows its distance correction to half. Keep it finite even
+            // at the most distant legal output coordinate before using its mixed gradient.
+            return radius > 0f && max(radii.x, radii.y) <= 16384f &&
+                bounds.width in 0f..32768f && bounds.height in 0f..32768f &&
+                (localCoordinateBound + max(abs(center.x), abs(center.y))) / radius < 30000f
+        }
     }
 
     private val a = Element(first)
@@ -109,28 +119,36 @@ internal class NavigationNativeUnion private constructor(
     private fun distance(x: Float, y: Float): Float =
         if (b == null) a.field.distance(x, y) else field(x, y, sample)[0]
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    fun shaderField(scale: Offset, translation: Offset): NativeGlassFilterField =
-        if (multipleElements.isNotEmpty()) multipleShaderField(scale, translation)
-        else NativeGlassFilterField(NavigationNativeUnionShader) { shader ->
-            fun element(prefix: String, value: Element) {
-                shader.setFloatUniform(prefix + "Center", value.bounds.center.x, value.bounds.center.y)
-                shader.setFloatUniform(prefix + "Extent", value.bounds.width * .5f, value.bounds.height * .5f)
-                shader.setFloatUniform(prefix + "Radii", value.radii.x, value.radii.y)
-            }
-            element("unionFirst", a)
-            element("unionSecond", b ?: a)
-            shader.setFloatUniform("unionCount", if (b == null) 1f else 2f)
-            shader.setFloatUniform("unionSmoothness", smoothness)
-            shader.setFloatUniform("unionScale", scale.x, scale.y)
-            shader.setFloatUniform("unionTranslation", translation.x, translation.y)
+    private fun mipFaceRegions(scale: Offset, translation: Offset): Pair<Rect, Rect>? {
+        val other = b ?: return null
+        if (multipleElements.isNotEmpty() || scale != Offset(1f, 1f) || translation != Offset.Zero) return null
+        fun bounds(element: Element): Rect? {
+            val radius = min(element.radii.x, element.radii.y)
+            val longest = max(element.radii.x, element.radii.y)
+            if (radius < 1f || longest > 2f * radius) return null
+            // The SDF polynomial's degree-six Bernstein coefficients lie in [0, .126].
+            // Its outward correction is at most .145 expanded radii. Include half
+            // rounding, the maximal smooth-union offset k/4 and the coverage footprint.
+            val guard = .16f * 1.528665f * longest + (smoothness * .25f + 2f) * longest / radius
+            return element.bounds.inflate(guard)
         }
+        return (bounds(a) ?: return null) to (bounds(other) ?: return null)
+    }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private fun multipleShaderField(scale: Offset, translation: Offset): NativeGlassFilterField {
+    private fun hasBoundedOpticalNormal(scale: Offset, translation: Offset): Boolean {
+        val minimumScale = min(scale.x, scale.y)
+        val offset = max(abs(translation.x), abs(translation.y))
+        if (minimumScale !in .015625f..64f || max(scale.x, scale.y) > 64f ||
+            offset !in 0f..16384f || smoothness !in 0f..16384f) return false
+        val localBound = (16384f + offset) / minimumScale
+        return a.hasBoundedNormal(localBound) && b?.hasBoundedNormal(localBound) != false
+    }
+
+    private val shaderElementUniforms by lazy(LazyThreadSafetyMode.NONE) {
         val elements = FloatArray(MaximumUnionElements * 4)
         val radii = FloatArray(MaximumUnionElements * 2)
-        multipleElements.forEachIndexed { i, element ->
+        val nodes = multipleElements.ifEmpty { listOfNotNull(a, b) }
+        nodes.forEachIndexed { i, element ->
             elements[i * 4] = element.bounds.center.x
             elements[i * 4 + 1] = element.bounds.center.y
             elements[i * 4 + 2] = element.bounds.width * .5f
@@ -138,15 +156,23 @@ internal class NavigationNativeUnion private constructor(
             radii[i * 2] = element.radii.x
             radii[i * 2 + 1] = element.radii.y
         }
-        return NativeGlassFilterField(NavigationNativeMultipleUnionShader) { shader ->
+        elements to radii
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    fun shaderField(scale: Offset, translation: Offset): NativeGlassFilterField =
+        NativeGlassFilterField(NavigationNativeUnionShader,
+            hasBoundedOpticalNormal = multipleElements.isEmpty() && hasBoundedOpticalNormal(scale, translation),
+            mipFaceRegions = mipFaceRegions(scale, translation)) { shader ->
+            val (elements, radii) = shaderElementUniforms
             shader.setFloatUniform("unionElements", elements)
             shader.setFloatUniform("unionRadii", radii)
-            shader.setFloatUniform("unionCount", multipleElements.size.toFloat())
+            val count = if (multipleElements.isNotEmpty()) multipleElements.size else if (b == null) 1 else 2
+            shader.setFloatUniform("unionCount", count.toFloat())
             shader.setFloatUniform("unionSmoothness", smoothness)
             shader.setFloatUniform("unionScale", scale.x, scale.y)
             shader.setFloatUniform("unionTranslation", translation.x, translation.y)
         }
-    }
 
     private fun rootX(outside: Float, inside: Float): Float {
         var lo = outside
@@ -298,35 +324,7 @@ internal class NavigationNativeUnion private constructor(
     }
 }
 
-private const val NavigationNativeUnionShader = NativeGlassSdfFunctions + """
-uniform float2 unionFirstCenter;
-uniform float2 unionFirstExtent;
-uniform float2 unionFirstRadii;
-uniform float2 unionSecondCenter;
-uniform float2 unionSecondExtent;
-uniform float2 unionSecondRadii;
-uniform float unionCount;
-uniform float unionSmoothness;
-uniform float2 unionScale;
-uniform float2 unionTranslation;
-float3 navigationGlassShapeField(float2 point) {
-    point = (point - unionTranslation) / unionScale;
-    float3 a = nativeGlassRoundedField(point - unionFirstCenter, unionFirstExtent, unionFirstRadii, 0.0);
-    if (unionCount > 1.5) {
-        float3 b = nativeGlassRoundedField(point - unionSecondCenter, unionSecondExtent, unionSecondRadii, 0.0);
-        float radius = unionSmoothness * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
-        float h = radius <= 0.000001 ? (a.x < b.x ? 1.0 : 0.0)
-            : clamp(0.5 + 0.5 * (b.x - a.x) / radius, 0.0, 1.0);
-        a = float3(mix(b.x, a.x, h) - radius * h * (1.0 - h), mix(b.yz, a.yz, h));
-    }
-    float smallest = min(unionScale.x, unionScale.y);
-    return float3(a.x * smallest, a.yz * smallest / unionScale);
-}
-float3 navigationGlassField(float2 point) { return navigationGlassShapeField(point); }
-float3 navigationGlassOpticalFieldFromShape(float2 point, float3 rawShapeField) { return rawShapeField; }
-"""
-
-private const val NavigationNativeMultipleUnionShader = NativeGlassSdfFunctions + """
+private const val NavigationNativeUnionShader = NativeGlassUnionSdfFunctions + """
 uniform float4 unionElements[16];
 uniform float2 unionRadii[16];
 uniform float unionCount;
@@ -336,15 +334,25 @@ uniform float2 unionTranslation;
 float3 navigationGlassShapeField(float2 point) {
     point = (point - unionTranslation) / unionScale;
     float4 first = unionElements[0];
-    float3 a = nativeGlassRoundedField(point - first.xy, first.zw, unionRadii[0], 0.0);
-    for (int i = 1; i < 16; ++i) {
-        if (float(i) < unionCount) {
-            float4 element = unionElements[i];
-            float3 b = nativeGlassRoundedField(point - element.xy, element.zw, unionRadii[i], 0.0);
-            float radius = unionSmoothness * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
-            float h = radius <= 0.000001 ? (a.x < b.x ? 1.0 : 0.0)
-                : clamp(0.5 + 0.5 * (b.x - a.x) / radius, 0.0, 1.0);
-            a = float3(mix(b.x, a.x, h) - radius * h * (1.0 - h), mix(b.yz, a.yz, h));
+    float3 a = nativeGlassUnionBoundaryField(point - first.xy, first.zw, unionRadii[0]);
+    if (unionCount > 1.5) {
+        float4 element = unionElements[1];
+        float3 b = nativeGlassUnionBoundaryField(point - element.xy, element.zw, unionRadii[1]);
+        float radius = unionSmoothness * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
+        float h = radius <= 0.000001 ? (a.x < b.x ? 1.0 : 0.0)
+            : clamp(0.5 + 0.5 * (b.x - a.x) / radius, 0.0, 1.0);
+        a = float3(mix(b.x, a.x, h) - radius * h * (1.0 - h), mix(b.yz, a.yz, h));
+    }
+    if (unionCount > 2.5) {
+        for (int i = 2; i < 16; ++i) {
+            if (float(i) < unionCount) {
+                float4 element = unionElements[i];
+                float3 b = nativeGlassUnionBoundaryField(point - element.xy, element.zw, unionRadii[i]);
+                float radius = unionSmoothness * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
+                float h = radius <= 0.000001 ? (a.x < b.x ? 1.0 : 0.0)
+                    : clamp(0.5 + 0.5 * (b.x - a.x) / radius, 0.0, 1.0);
+                a = float3(mix(b.x, a.x, h) - radius * h * (1.0 - h), mix(b.yz, a.yz, h));
+            }
         }
     }
     float smallest = min(unionScale.x, unionScale.y);

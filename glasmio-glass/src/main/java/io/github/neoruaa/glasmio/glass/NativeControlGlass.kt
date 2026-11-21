@@ -127,6 +127,9 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
     val atlas = NativeGlassMipAtlas(base, IntSize(base.width, base.height * 2), listOf(
         IntRect(0, 0, base.width, base.height), IntRect(0, base.height, base.width, base.height * 2)),
         producer, storage.colorManagedNativeGlass)
+    val retainedPair = Build.VERSION.SDK_INT >= 36 && storage.supportsRetainedOpticalStage &&
+        storage.supportsNativeGlassHardwareLinearSampling && !atlas.colorManaged && filteredIsNativeRaw &&
+        field == null && topology == OrdinaryAtlasCompletion
     val functions = field?.shaderFunctions ?: NativeDefaultFieldShader
     val sources = storage.cachedResource("Glasmio.NativeControl.complete.sources") {
         object : LinkedHashMap<NativeControlCompletionSourceKey, String>(8, .75f, true) {
@@ -134,7 +137,8 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
                 size > 8
         }
     }
-    val source = sources.getOrPut(NativeControlCompletionSourceKey(functions, atlas.colorManaged, filteredIsNativeRaw, topology,
+    val source = if (retainedPair) NativeRetainedCompletionProgram else sources.getOrPut(
+        NativeControlCompletionSourceKey(functions, atlas.colorManaged, filteredIsNativeRaw, topology,
         samplingLayoutKey = atlas.samplingLayoutKey)) {
         nativeGlassCompletionFieldFunctions(functions) +
             (if (!functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") + atlas.samplingFunctions +
@@ -142,9 +146,10 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
             (if (filteredIsNativeRaw) NativeControlFilteredRawFunctions else NativeControlFilteredFunctions) +
             nativeGlassCompletionShader(topology)
     }
-    val shader = obtainRuntimeShader("Glasmio.NativeControl.complete.${atlas.colorManaged}.$filteredIsNativeRaw.${topology.cacheKey}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
+    val shader = obtainRuntimeShader("Glasmio.NativeControl.complete.${atlas.colorManaged}.$filteredIsNativeRaw.$retainedPair.${topology.cacheKey}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
         source).asAndroidRuntimeShader()
     atlas.configure(shader)
+    if (retainedPair) shader.setFloatUniform("nativeAtlasLastLevel", -1f)
     if (field == null) {
         shader.setFloatUniform("size", size.width, size.height)
         shader.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, layoutDirection, this))

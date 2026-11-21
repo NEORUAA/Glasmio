@@ -1006,6 +1006,8 @@ fun <T> GlasmioPopUpButton(
         modifier = modifier,
         backdrop = backdrop,
         anchorEnabled = enabled,
+        // These text/checkmark rows never sample the menu itself.
+        exportChildBackdrop = false,
         anchor = { openMenu ->
             Row(
                 Modifier

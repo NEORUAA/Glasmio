@@ -38,6 +38,7 @@ internal data class NativeGlassCompletion(
     val sourceShadow: NativeGlassSourceShadow? = null,
     val darkFraction: Float = if (isDark) 1f else 0f,
     val pressGlow: NativeGlassPressGlow? = null,
+    val specializeMenuTint: Boolean = false,
 )
 
 /** A present capability keeps its shader topology even when no member is pressed. */
@@ -52,13 +53,19 @@ internal data class NativeGlassCompletionTopology(
     val hasTargetFills: Boolean = true,
     val hasSourceFills: Boolean = true,
     val hasPressGlow: Boolean = false,
+    val hasTargetTintMatrix: Boolean = true,
+    val hasSourceTintMatrix: Boolean = true,
 ) {
     val cacheKey: Int
         get() = (if (hasSourceRecipe) 4 else 0) or (if (hasTargetAppearance) 2 else 0) or
             (if (hasSourceAppearance) 1 else 0) or (if (hasSourceShadow) 8 else 0) or
             (if (hasTargetFills) 16 else 0) or (if (hasSourceFills) 32 else 0) or
-            (if (hasPressGlow) 64 else 0)
+            (if (hasPressGlow) 64 else 0) or (if (hasTargetTintMatrix) 128 else 0) or
+            (if (hasSourceTintMatrix) 256 else 0)
 }
+
+private fun NavigationMaterialRecipe.hasTintMatrix(): Boolean =
+    tintMatrix != null || appearanceAlternate?.tintMatrix != null
 
 internal fun NativeGlassCompletion.programTopology(): NativeGlassCompletionTopology =
     NativeGlassCompletionTopology(
@@ -69,6 +76,9 @@ internal fun NativeGlassCompletion.programTopology(): NativeGlassCompletionTopol
         hasTargetFills = recipe.hasFillLayers(),
         hasSourceFills = sourceRecipe?.hasFillLayers() == true,
         hasPressGlow = pressGlow != null,
+        // Ordinary surfaces can change tint in the same scrolling content. Keep one material program.
+        hasTargetTintMatrix = !specializeMenuTint || recipe.hasTintMatrix(),
+        hasSourceTintMatrix = sourceRecipe != null && (!specializeMenuTint || sourceRecipe.hasTintMatrix()),
     )
 
 internal data class NativeGlassSourceShadow(
@@ -125,11 +135,16 @@ internal fun configureNativeGlassCompletion(
     color("nativeIdleColor", completion.idleColor)
     color("nativeOverlayColor", completion.overlayColor)
     val minimumDimension = output.minDimension / density
-    updateNavigationMaterialUniforms(completion.recipe.forMinimumDimension(minimumDimension), completion.materialAlpha) { name, value ->
+    // Each retained program has a fixed recipe topology. Upload only endpoints it can read.
+    fun setRecipe(recipe: NavigationMaterialRecipe, alpha: Float, set: (String, FloatArray) -> Unit) {
+        if (recipe.appearanceAlternate != null) updateNavigationMaterialUniforms(recipe, alpha, set)
+        else updateNavigationMaterialEndpointUniforms(recipe, alpha, set)
+    }
+    setRecipe(completion.recipe.forMinimumDimension(minimumDimension), completion.materialAlpha) { name, value ->
         shader.setFloatUniform(name, value)
     }
-    updateNavigationMaterialUniforms(completion.sourceRecipe, completion.sourceAlpha) { name, value ->
-        shader.setFloatUniform("source_$name", value)
+    completion.sourceRecipe?.let { source ->
+        setRecipe(source, completion.sourceAlpha) { name, value -> shader.setFloatUniform("source_$name", value) }
     }
     completion.pressGlow?.let { glow ->
         val sample = glow.sample
@@ -188,13 +203,6 @@ uniform float4 nativeSourceShadowBounds;
 uniform float2 nativeSourceShadowRadii;
 uniform float4 nativeIdleColor;
 uniform float4 nativeOverlayColor;
-float3 nativeCompletionField(float2 point) {
-    float3 field = navigationGlassShapeField(point * nativeOutputScale);
-    return float3(field.x / nativeOutputScale, field.yz);
-}
-float nativeCompletionShadowDistance(float2 point) {
-    return navigationGlassShadowDistance(point * nativeOutputScale) / nativeOutputScale;
-}
 """
 
 private const val NativeGlassCompletionTintMask = """
@@ -233,7 +241,9 @@ float4 nativeCompletionAppearance(float4 filtered, float3 original, float4 shado
     float4 covered = mix(shadowResult, faceResult, coverage);
     covered.rgb *= 1.0 - ring;
     covered.a = covered.a * (1.0 - ring) + ring;
-    float3 originalFace = nativeCompletionFaceForAppearance(float4(original, 1.0), targetAlternate, sourceAlternate).rgb;
+    float3 originalFace = float3(0.0);
+    if (key > .000001 && covered.a < 1.0)
+        originalFace = nativeCompletionFaceForAppearance(float4(original, 1.0), targetAlternate, sourceAlternate).rgb;
     float4 completed = nativeGlassBackgroundCompletion(covered, original, originalFace, key, 1.0, -.3);
     // The tint layer sees the actual reconstructed backdrop, not signed relative RGB.
     completed = nativeCompletionTint(nativeCompletionTint(completed, original, tintMask, coverage, true, sourceAlternate),
@@ -246,18 +256,27 @@ float4 nativeCompletionAppearance(float4 filtered, float3 original, float4 shado
     return completed;
 }
 half4 main(float2 coordinate) {
-    if (coordinate.x < 0.0 || coordinate.y < 0.0 ||
+"""
+
+private const val NativeGlassCompletionShapeAndShadow = """    if (coordinate.x < 0.0 || coordinate.y < 0.0 ||
         coordinate.x >= nativeOutputSize.x + nativeOutputOrigin.x * 2.0 ||
         coordinate.y >= nativeOutputSize.y + nativeOutputOrigin.y * 2.0) return half4(0.0);
     float2 p = coordinate - nativeOutputOrigin;
     float3 rawShapeField = navigationGlassShapeField(p * nativeOutputScale);
     float3 field = float3(rawShapeField.x / nativeOutputScale, rawShapeField.yz);
     float coverage = nativeGlassShapeCoverage(field, 1.0);
-    float key = nativeGlassStrokeKeyFill(field, nativeOutputDensity, 1.0, nativeKeyThreshold) * nativeEdgeAlpha;
-    float shifted = nativeCompletionField(p - float2(0.0, 8.0 * nativeOutputDensity)).x;
-    float ring = nativeGlassRingCoverage(shifted, coverage, nativeOutputDensity, nativeClearFraction) * nativeEdgeAlpha;
-    float shadow = nativeShadow.x > 0.0
-        ? nativeGaussianTail(nativeCompletionShadowDistance(p - float2(0.0, nativeShadow.z)) / nativeShadow.x) * nativeShadow.y : 0.0;
+    float key = coverage < 1.0 && nativeEdgeAlpha > 0.0
+        ? nativeGlassStrokeKeyFill(field, nativeOutputDensity, 1.0, nativeKeyThreshold) * nativeEdgeAlpha : 0.0;
+    bool needsRing = coverage > 0.0 && nativeClearFraction < 1.0 && nativeEdgeAlpha > 0.0;
+    bool needsShadow = nativeShadow.x > 0.0 && nativeShadow.y > 0.0;
+    float ring = 0.0, shadow = 0.0;
+    if (needsRing || needsShadow) {
+        // configureNativeGlassCompletion uses the native eight-point offset for both passes.
+        float2 shiftedPoint = (p - float2(0.0, nativeShadow.z)) * nativeOutputScale;
+        float2 distances = navigationGlassOffsetDistances(shiftedPoint, needsRing, needsShadow) / nativeOutputScale;
+        if (needsRing) ring = nativeGlassRingCoverage(distances.x, coverage, nativeOutputDensity, nativeClearFraction) * nativeEdgeAlpha;
+        if (needsShadow) shadow = nativeGaussianTail(distances.y / nativeShadow.x) * nativeShadow.y;
+    }
 """
 
 private const val NativeGlassCompletionSourceShadowBlock = """
@@ -272,10 +291,27 @@ private const val NativeGlassCompletionSourceShadowBlock = """
 private const val NativeGlassCompletionShaderBodySuffix = """
     if (coverage <= 0.0 && key <= .000001 && shadow <= .000001 && ring <= .000001) return half4(0.0);
     float2 samplePoint = nativeTextureOrigin + p * nativeOutputScale;
-    float4 originalRaw = nativeAtlasBilinear(samplePoint, 0);
-    float3 original = nativeAtlasFlush(originalRaw.rgb / max(originalRaw.a, .000001));
-    float4 filtered = coverage > 0.0 ? nativeAtlasFiltered(samplePoint,
-        navigationGlassOpticalFieldFromShape(p * nativeOutputScale, rawShapeField)) : float4(original, 1.0);
+    float4 filtered = float4(0.0);
+    if (coverage > 0.0) filtered = """
+
+private const val NativeGlassCompletionFilteredArguments = """(samplePoint,
+        navigationGlassOpticalFieldFromShape(p * nativeOutputScale, rawShapeField));
+"""
+
+private const val NativeGlassCompletionAfterTintMask = """
+    float highlightMask = nativeTopHighlight.x > 0.0 && -field.x < 8.0 * nativeOutputDensity + 1.0
+        ? nativeCasdfHighlightCoverage(field.x, field.yz, nativeOutputDensity,
+            nativeTopHighlight.y, .75) * nativeTopHighlight.x : 0.0;
+    float4 originalRaw = float4(0.0);
+    float3 original = float3(0.0);
+    // With a live shadow, even mix(shadowResult, faceResult, 1) can round against its RGB.
+    if (coverage != 1.0 || filtered.a != 1.0 || shadow != 0.0 || highlightMask > 0.0) {
+        originalRaw = """
+
+private const val NativeGlassCompletionOriginalSuffix = """;
+        original = nativeAtlasFlush(originalRaw.rgb / max(originalRaw.a, .000001));
+    }
+    if (coverage <= 0.0) filtered = float4(original, 1.0);
     float4 shadowResult = float4(original * (1.0 - nativeShadow.w) * shadow, shadow);
     if (originalRaw.a < 1.0) {
         // A caller may deliberately provide no captured backdrop (emptyBackdrop). Keep
@@ -285,10 +321,6 @@ private const val NativeGlassCompletionShaderBodySuffix = """
         shadowResult = float4(originalRaw.rgb * (1.0 - nativeShadow.w) * shadow,
             (nativeShadow.w + (1.0 - nativeShadow.w) * capturedAlpha) * shadow);
     }
-    float tintMask = nativeCompletionTintMask(field);
-    float highlightMask = nativeTopHighlight.x > 0.0
-        ? nativeCasdfHighlightCoverage(field.x, field.yz, nativeOutputDensity,
-            nativeTopHighlight.y, .75) * nativeTopHighlight.x : 0.0;
 """
 
 private const val NativeGlassCompletionShaderSuffix = """
@@ -312,40 +344,62 @@ private const val NativeGlassCompletionPressGlowSuffix = """
 }
 """
 
-/** Keep the full uniform layout while bounding the reachable material graph to its recipes. */
-internal fun nativeGlassCompletionShader(topology: NativeGlassCompletionTopology): String {
-    val sourceFace = when {
-        !topology.hasSourceRecipe -> "sampled"
-        topology.hasSourceAppearance -> "source_navigationMaterialFaceRawForAppearance(sampled, sourceAlternate)"
-        else -> "source_endpoint_navigationMaterialFaceRaw(sampled)"
-    }
+/** An overlay-only endpoint uses the shape coverage directly. The exterior tint ramp belongs to a matrix. */
+private fun nativeCompletionTintExpression(prefix: String, hasMatrix: Boolean, hasAppearance: Boolean): String {
+    val alternate = if (hasAppearance) "alternate" else "false"
+    if (hasMatrix) return "${prefix}navigationMaterialTintForAppearance(destination, original, mask, coverage, $alternate)"
+    fun endpoint(name: String): String = if (hasAppearance) {
+        "(alternate ? ${prefix}appearance_$name : $prefix$name)"
+    } else "$prefix$name"
+    return "nativeCompletionOverlay(destination, coverage, ${endpoint("overlay")}, ${endpoint("materialOpacity")})"
+}
+
+/** Assemble only material recipes that can contribute to this program. */
+internal fun nativeGlassCompletionShader(topology: NativeGlassCompletionTopology,
+    opticalStage: String = "",
+    retainedPair: Boolean = false,
+): String {
+    val sourceFace = if (topology.hasSourceRecipe) {
+        val face = if (topology.hasSourceAppearance) "source_navigationMaterialFaceRawForAppearance(sampled, sourceAlternate)"
+            else "source_endpoint_navigationMaterialFaceRaw(sampled)"
+        "if (source_materialOpacity > 0.0) result = mix(sampled, $face, source_materialOpacity);"
+    } else ""
     val targetFace = if (topology.hasTargetAppearance)
         "navigationMaterialFaceRawForAppearance(result, targetAlternate)" else "endpoint_navigationMaterialFaceRaw(result)"
     val sourceTint = if (topology.hasSourceRecipe) {
-        val alternate = if (topology.hasSourceAppearance) "alternate" else "false"
-        "source_navigationMaterialTintForAppearance(destination, original, mask, coverage, $alternate)"
+        nativeCompletionTintExpression("source_", topology.hasSourceTintMatrix, topology.hasSourceAppearance)
     } else {
-        // A missing recipe writes source_materialOpacity=0; retain the original zero-alpha over.
-        "float4(0.0) + destination * (1.0 - source_materialOpacity)"
+        // The original zero-opacity source performs this over, including its signed-zero behavior.
+        "float4(0.0) + destination * 1.0"
     }
-    val targetAlternate = if (topology.hasTargetAppearance) "alternate" else "false"
-    return navigationMaterialNativeShaderFunctions(topology.hasTargetFills) +
-        navigationMaterialSourceShaderFunctions(topology.hasSourceFills) + NativeGlassCompletionShaderPrefix +
+    val targetTint = nativeCompletionTintExpression("", topology.hasTargetTintMatrix, topology.hasTargetAppearance)
+    val needsTintMask = topology.hasTargetTintMatrix || (topology.hasSourceRecipe && topology.hasSourceTintMatrix)
+    val sourceFunctions = if (topology.hasSourceRecipe) navigationMaterialSourceShaderFunctions(topology.hasSourceFills) else ""
+    return navigationMaterialNativeShaderFunctions(topology.hasTargetFills) + sourceFunctions + NativeGlassCompletionShaderPrefix +
         (if (topology.hasPressGlow) NativePressGlowApplyFunctions + NativePressGlowMaskFunctions else "") + """
 float4 nativeCompletionFaceForAppearance(float4 sampled, bool targetAlternate, bool sourceAlternate) {
     float4 result = sampled;
-    if (source_materialOpacity > 0.0) result = mix(sampled, $sourceFace, source_materialOpacity);
+    $sourceFace
     if (materialOpacity > 0.0) result = mix(result, $targetFace, materialOpacity);
     return result;
 }
+float4 nativeCompletionOverlay(float4 destination, float coverage, float4 overlayColor, float opacity) {
+    float alpha = coverage * overlayColor.a * opacity;
+    return float4(overlayColor.rgb * alpha, alpha) + destination * (1.0 - alpha);
+}
 float4 nativeCompletionTint(float4 destination, float3 original, float mask, float coverage, bool source, bool alternate) {
     return source ? $sourceTint
-        : navigationMaterialTintForAppearance(destination, original, mask, coverage, $targetAlternate);
+        : $targetTint;
 }
-""" + NativeGlassCompletionTintMask +
-        NativeGlassCompletionShaderBodyPrefix +
+""" + (if (needsTintMask) NativeGlassCompletionTintMask else "") +
+        NativeGlassCompletionShaderBodyPrefix + opticalStage + NativeGlassCompletionShapeAndShadow +
         (if (topology.hasSourceShadow) NativeGlassCompletionSourceShadowBlock else "") +
-        NativeGlassCompletionShaderBodySuffix + buildString {
+        NativeGlassCompletionShaderBodySuffix + (if (retainedPair) "nativeStoredOrOptical" else "nativeAtlasFiltered") +
+        NativeGlassCompletionFilteredArguments + (if (needsTintMask)
+            "    float tintMask = coverage == 1.0 ? 1.0 : nativeCompletionTintMask(field);\n"
+        else "    float tintMask = 0.0;\n") + NativeGlassCompletionAfterTintMask +
+        (if (retainedPair) "nativeStoredOrOriginal(samplePoint)" else "nativeAtlasBilinear(samplePoint, 0)") +
+        NativeGlassCompletionOriginalSuffix + buildString {
         if (topology.hasTargetAppearance) append("""
     float targetMix = materialOpacity > 0.0 ? materialAppearanceMix : 0.0;
 """)

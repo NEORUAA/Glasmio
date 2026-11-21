@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.GraphicsLayer
@@ -23,6 +24,7 @@ import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
 import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import kotlin.math.ceil
+import kotlin.math.floor
 
 /** Recovered VariableBlurDownsample profiles; their rounded sums are deliberately retained. */
 internal data class NativeGlassMipKernel(
@@ -87,6 +89,93 @@ internal class NativeGlassMipLevel(
 
 internal class NativeGlassMipProducer(val effect: RenderEffect?, val stages: List<RenderEffect>)
 
+internal data class NativeMipSampleIslands(
+    val first: Rect,
+    val second: Rect,
+    val rayGuard: Float,
+    val fillGuard: Float,
+    val lastRayLevel: Int,
+)
+
+/** Materialize only when the disjoint 13-tap support saves at least a fifth of the texels. */
+private fun sparseNativeMipLevels(levels: List<IntRect>, islands: NativeMipSampleIslands): List<Pair<IntRect, IntRect>>? {
+    // Overlap on every direct level makes two disjoint producer scissors impossible.
+    val directGuard = minOf(islands.rayGuard, islands.fillGuard)
+    if (islands.first.right + directGuard >= islands.second.left - directGuard) return null
+    fun project(left: Double, top: Double, right: Double, bottom: Double, src: IntRect, dst: IntRect): IntRect {
+        // Includes both bilinear neighbors and 0.005 texel for the managed shader's float
+        // projection for extents <= 16384. Keep rectangle end points exclusive.
+        fun low(value: Double, from: Int, to: Int) = (floor(value * to / from - .505).toInt()).coerceIn(0, to - 1)
+        fun high(value: Double, from: Int, to: Int) = (floor(value * to / from - .495).toInt() + 2).coerceIn(1, to)
+        return IntRect(low(left, src.width, dst.width), low(top, src.height, dst.height),
+            high(right, src.width, dst.width), high(bottom, src.height, dst.height))
+    }
+    fun support(body: Rect): List<IntRect> {
+        val result = levels.mapIndexed { index, level ->
+            val bounds = body.inflate(if (index <= islands.lastRayLevel) maxOf(islands.rayGuard, islands.fillGuard) else islands.fillGuard)
+            project(bounds.left.toDouble(), bounds.top.toDouble(), bounds.right.toDouble(), bounds.bottom.toDouble(), levels.first(), level)
+        }.toMutableList()
+        for (i in levels.lastIndex downTo 2) {
+            val r = result[i]
+            // Compute13Tap uses ±2 output-grid offsets from the preceding level's midpoint.
+            val dependency = project(r.left - 1.5, r.top - 1.5, r.right + 1.5, r.bottom + 1.5, levels[i], levels[i - 1])
+            val own = result[i - 1]
+            result[i - 1] = IntRect(minOf(own.left, dependency.left), minOf(own.top, dependency.top),
+                maxOf(own.right, dependency.right), maxOf(own.bottom, dependency.bottom))
+        }
+        return result
+    }
+    val first = support(islands.first)
+    val second = support(islands.second)
+    val result = (1 until levels.size).map { index -> first[index] to second[index] }
+    // Avoid a double-filtered overlapping rectangle, or a crossing layout whose clips
+    // cannot be issued in the original left-to-right order.
+    if (result.isEmpty() || result.any { (a, b) -> a.right >= b.left }) return null
+    fun area(r: IntRect) = r.width.toLong() * r.height
+    val full = levels.drop(1).sumOf(::area)
+    val used = result.sumOf { (a, b) -> area(a) + area(b) }
+    return result.takeIf { used * 5 <= full * 4 }
+}
+
+private fun nativeMipConsumerRegions(levels: List<IntRect>, region: IntRect): List<IntRect> {
+    val base = levels.first()
+    return levels.map { level ->
+        // These are the consumer's original source-to-mip coordinates, expanded through
+        // both bilinear neighbors and a guard for the shader's floating-point projection.
+        val left = (floor(region.left.toDouble() / base.width * level.width - .5).toInt() - 1).coerceIn(0, level.width - 1)
+        val top = (floor(region.top.toDouble() / base.height * level.height - .5).toInt() - 1).coerceIn(0, level.height - 1)
+        val right = (ceil(region.right.toDouble() / base.width * level.width - .5).toInt() + 2).coerceIn(left + 1, level.width)
+        val bottom = (ceil(region.bottom.toDouble() / base.height * level.height - .5).toInt() + 2).coerceIn(top + 1, level.height)
+        IntRect(left, top, right, bottom)
+    }
+}
+
+/** Propagate nontransparent input bounds forward through the unchanged Compute13Tap kernel. */
+private fun nativeMipSourceRegions(levels: List<IntRect>, source: IntRect): List<IntRect>? {
+    val base = levels.first()
+    if (base.width > 16384 || base.height > 16384 || levels.size < 2) return null
+    val full = IntRect(0, 0, base.width, base.height)
+    if (source == full) return null
+    val regions = ArrayList<IntRect>(levels.size)
+    regions += source
+    fun first(index: Int, input: Int, output: Int) =
+        if (index == 0) 0 else (floor((index - 1.0) * output / input).toInt() - 3).coerceAtLeast(0)
+    fun last(index: Int, input: Int, output: Int) =
+        if (index == input) output else (ceil((index + 1.0) * output / input).toInt() + 3).coerceAtMost(output)
+    for (index in 1 until levels.size) {
+        val from = levels[index - 1]
+        val to = levels[index]
+        val rect = regions.last()
+        // A tap reaches two output spacings, both bilinear neighbors and one rounding guard.
+        // Input-edge texels may be repeated by the recovered clamp-to-edge sampler.
+        regions += if (rect.isEmpty) IntRect.Zero else IntRect(
+            first(rect.left, from.width, to.width), first(rect.top, from.height, to.height),
+            last(rect.right, from.width, to.width), last(rect.bottom, from.height, to.height),
+        )
+    }
+    return regions
+}
+
 /** Packed real-resolution mip texels. The producer must render over [size] before sampling it. */
 internal class NativeGlassMipAtlas(
     val baseSize: IntSize,
@@ -112,6 +201,9 @@ internal class NativeGlassMipAtlas(
     /** Only the owned regular pyramid uses an analytically addressed row or column strip. */
     private val regularMipRow: Boolean? = null,
     allowHardwareLinearSampling: Boolean = false,
+    val consumerRegions: List<IntRect>? = null,
+    val sparseLevels: List<Pair<IntRect, IntRect>>? = null,
+    val canPropagateSourceBounds: Boolean = false,
     compatibilityProducer: (() -> NativeGlassMipProducer)? = null,
 ) {
     var controlSceneEffect: RenderEffect? = null
@@ -140,12 +232,18 @@ internal class NativeGlassMipAtlas(
         rects.size <= 16 -> 16
         else -> 32
     }
+    internal val hasRegularMipLayout: Boolean get() = regularMipRow != null
     private val hardwareLinearSampling = allowHardwareLinearSampling && (nativeGammaStorage || !colorManaged)
+    private val sharedControlDecode = controlScenePlane != null && colorManaged && !nativeGammaStorage
     val samplingLayoutKey: String = (if (regularMipRow == null) "packed$lookupCapacity" else "mip") +
-        ".linear=$hardwareLinearSampling"
+        ".linear=$hardwareLinearSampling" + if (sharedControlDecode) ".control" else ""
     val samplingFunctions: String = (if (regularMipRow == null)
         NativeAtlasSamplingFunctionBuckets.getValue(lookupCapacity).value
-    else NativeAtlasRegularSamplingFunctions)[if (hardwareLinearSampling) 1 else 0][when {
+    else NativeAtlasRegularSamplingFunctions)[when {
+        sharedControlDecode -> 2
+        hardwareLinearSampling -> 1
+        else -> 0
+    }][when {
         nativeGammaStorage -> 2
         colorManaged -> 1
         else -> 0
@@ -203,6 +301,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
     private var base: GraphicsLayer? = null
     private var assembled: GraphicsLayer? = null
     private val tiles = ArrayList<GraphicsLayer>()
+    private val sparseTiles = ArrayList<GraphicsLayer>()
     private data class RecordingContext(
         val densityBits: Int,
         val fontScaleBits: Int,
@@ -215,6 +314,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
     )
     private var recordedPyramid: NativeGlassMipAtlas? = null
     private var pyramidContext: RecordingContext? = null
+    private var pyramidSourceRegions: List<IntRect>? = null
     private var pyramidSource: GraphicsLayer? = null
     private var pyramidSourceSize = IntSize.Zero
     private var pyramidSourceEffect: androidx.compose.ui.graphics.RenderEffect? = null
@@ -440,11 +540,15 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         // Arbitrary backdrop callbacks still run on every call.
         sourceLayer: GraphicsLayer? = null,
         recordingScope: DrawScope? = null,
+        sourceSupport: IntRect? = null,
     ): GraphicsLayer {
         recordedControl = null
         val directSource = sourceLayer?.takeIf { inputEffects.isEmpty() }
         val directContext = recordingScope?.recordingContext().takeIf { directSource != null }
-        if (directSource != null && directContext?.hardware == true &&
+        val regions = if (sourceSupport != null && atlas.canPropagateSourceBounds && inputEffects.isEmpty())
+            nativeMipSourceRegions(atlas.rects, sourceSupport) else null
+        val regionChanged = regions != pyramidSourceRegions
+        if (!regionChanged && directSource != null && directContext?.hardware == true &&
             recordedPyramid === atlas && pyramidContext == directContext &&
             pyramidSource === directSource && pyramidSourceSize == directSource.size &&
             pyramidSourceEffect === directSource.renderEffect
@@ -468,6 +572,14 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         record(original, atlas.baseSize, if (input == null) sourceBlock else { { drawLayer(input) } })
         while (tiles.size > atlas.textureStages.size) context.releaseGraphicsLayer(tiles.removeAt(tiles.lastIndex))
         while (tiles.size < atlas.textureStages.size) tiles += context.createGraphicsLayer()
+        val sparseLevels = atlas.sparseLevels
+        val sparseCount = sparseLevels?.size ?: 0
+        // Keep the small owner pool across repeated compact/expanded transitions. Idle nodes
+        // are absent from the active graph and release() drops every owner on detach.
+        while (sparseTiles.size < sparseCount) sparseTiles += context.createGraphicsLayer().apply {
+            clip = true
+            compositingStrategy = CompositingStrategy.Offscreen
+        }
         var previous = original
         var environment: RecordingContext? = null
         tiles.forEachIndexed { index, tile ->
@@ -485,13 +597,38 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
                     environment = recordingContext()
                     drawLayer(input)
                 }
-            } else if (recordedPyramid !== atlas || pyramidContext != environment || environment?.hardware != true) {
+            } else if ((sparseLevels == null && regionChanged) || recordedPyramid !== atlas || pyramidContext != environment || environment?.hardware != true) {
                 // Deeper stages contain only a fixed draw of another private RenderNode.
                 // Retaining their display lists preserves every GPU texture barrier while
                 // the freshly recorded source propagates through the live child references.
-                record(tile, IntSize(support.width, support.height)) { drawLayer(input) }
+                val crop = if (sparseLevels == null) regions?.get(index) else null
+                record(tile, IntSize(support.width, support.height)) {
+                    if (crop == null) drawLayer(input)
+                    else if (!crop.isEmpty) clipRect(crop.left.toFloat(), crop.top.toFloat(),
+                        crop.right.toFloat(), crop.bottom.toFloat()) { drawLayer(input) }
+                }
             }
-            previous = tile
+            if (sparseLevels == null) previous = tile else {
+                // The filter owner still records the entire preceding image. Issue the two
+                // clipped filter draws once on a private, unfiltered node at the mip's
+                // original resolution. The next mip and final consumer share that texture.
+                val materialized = sparseTiles[index]
+                if (regionChanged || recordedPyramid !== atlas || pyramidContext != environment || environment?.hardware != true) {
+                    val level = atlas.rects[index + 1]
+                    val (first, second) = sparseLevels[index]
+                    val active = regions?.get(index + 1)
+                    record(materialized, IntSize(level.width, level.height)) {
+                        fun DrawScope.drawRegion(r: IntRect) {
+                            val crop = active?.intersect(r) ?: r
+                            if (!crop.isEmpty) clipRect(crop.left.toFloat(), crop.top.toFloat(),
+                                crop.right.toFloat(), crop.bottom.toFloat()) { drawLayer(tile) }
+                        }
+                        drawRegion(first)
+                        drawRegion(second)
+                    }
+                }
+                previous = materialized
+            }
         }
         val output = assembled ?: context.createGraphicsLayer().also { assembled = it }
         output.clip = true
@@ -499,6 +636,28 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         output.compositingStrategy = CompositingStrategy.Auto
         output.renderEffect = null
         record(output, atlas.size) {
+            val consumerCrops = atlas.consumerRegions
+            if (consumerCrops != null || regions != null) {
+                // HWUI evaluates the filter on the original atlas extent and grid. Limit
+                // only the completed texture quads that are copied into the consumer.
+                atlas.rects.forEachIndexed { index, rect ->
+                    val consumer = consumerCrops?.get(index)
+                    val producer = regions?.get(index)
+                    val crop = when {
+                        consumer == null -> requireNotNull(producer)
+                        producer == null -> consumer
+                        else -> consumer.intersect(producer)
+                    }
+                    if (crop.isEmpty) return@forEachIndexed
+                    val layer = if (index == 0) original else (if (sparseLevels == null) tiles else sparseTiles)[index - 1]
+                    translate(rect.left.toFloat(), rect.top.toFloat()) {
+                        clipRect(crop.left.toFloat(), crop.top.toFloat(), crop.right.toFloat(), crop.bottom.toFloat()) {
+                            drawLayer(layer)
+                        }
+                    }
+                }
+                return@record
+            }
             drawLayer(original)
             tiles.forEachIndexed { index, tile ->
                 val rect = atlas.rects[index + 1]
@@ -508,6 +667,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
             }
         }
         recordedPyramid = atlas
+        pyramidSourceRegions = regions
         pyramidContext = environment
         pyramidSource = directSource.takeIf { directContext?.hardware == true && directContext == environment }
         pyramidSourceSize = directSource?.size ?: IntSize.Zero
@@ -520,6 +680,8 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         retained.clear()
         tiles.forEach(context::releaseGraphicsLayer)
         tiles.clear()
+        sparseTiles.forEach(context::releaseGraphicsLayer)
+        sparseTiles.clear()
         base?.let(context::releaseGraphicsLayer)
         assembled?.let(context::releaseGraphicsLayer)
         controlSource?.let(context::releaseGraphicsLayer)
@@ -536,6 +698,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         recordedPyramid = null
         pyramidContext = null
         pyramidSource = null
+        pyramidSourceRegions = null
         pyramidSourceSize = IntSize.Zero
         pyramidSourceEffect = null
         recordedControl = null
@@ -564,6 +727,8 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
     private var atlasColorManaged = false
     private var atlasNativeGammaStorage = false
     private var atlasAllowHardwareLinearSampling = false
+    private var atlasFinalSampleRegion: IntRect? = null
+    private var atlasSampleIslands: NativeMipSampleIslands? = null
     private var cachedAtlas: NativeGlassMipAtlas? = null
     private val texturePrograms = mutableMapOf<String, String>()
 
@@ -577,6 +742,8 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
         colorManaged: Boolean = false,
         nativeGammaStorage: Boolean = colorManaged,
         allowHardwareLinearSampling: Boolean = false,
+        finalSampleRegion: IntRect? = null,
+        sampleIslands: NativeMipSampleIslands? = null,
     ): NativeGlassMipAtlas {
         val extent = IntSize(sourceSize.width.coerceAtLeast(1), sourceSize.height.coerceAtLeast(1))
         val requested = ceil(maxLod.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f).toInt()
@@ -589,9 +756,19 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
         // A single-level source keeps its existing capture path and does not add a conversion pass.
         val storeNativeGamma = colorManaged && nativeGammaStorage && count > 1
         val retained = cachedAtlas
+        fun requestedSparseLevels(rects: List<IntRect>) =
+            if (finalSampleRegion != null && sampleIslands != null && kernel == NativeGlassMipKernel.Compute13Tap)
+                sparseNativeMipLevels(rects, sampleIslands) else null
         if (retained != null && atlasSource === source && atlasKernel == kernel && atlasColorManaged == colorManaged &&
             atlasNativeGammaStorage == storeNativeGamma && atlasAllowHardwareLinearSampling == allowHardwareLinearSampling &&
-            retained.baseSize == extent && retained.rects.size == count) return retained
+            atlasFinalSampleRegion == finalSampleRegion && retained.baseSize == extent && retained.rects.size == count) {
+            // Fractional shape motion may leave every actual raster scissor unchanged. Keep
+            // the producer and its private RenderNodes while the final geometry advances.
+            if (atlasSampleIslands == sampleIslands || requestedSparseLevels(retained.rects) == retained.sparseLevels) {
+                atlasSampleIslands = sampleIslands
+                return retained
+            }
+        }
         val continuousRects = ArrayList<IntRect>()
         continuousRects += IntRect(0, 0, extent.width, extent.height)
         var previous = extent
@@ -641,6 +818,9 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
             }
         }
         val rects = selectedRects
+        val consumerRegions = if (finalSampleRegion != null && rects.size > 1)
+            nativeMipConsumerRegions(rects, finalSampleRegion) else null
+        val sparseLevels = requestedSparseLevels(rects)
         val textureSource = if (storeNativeGamma) {
             val program = shaders.obtainRuntimeShader("Glasmio.NativeMip.nativeGammaStorage", NativeAtlasEncodeStorageShader)
                 .asAndroidRuntimeShader()
@@ -715,10 +895,14 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
         atlasColorManaged = colorManaged
         atlasNativeGammaStorage = storeNativeGamma
         atlasAllowHardwareLinearSampling = allowHardwareLinearSampling
+        atlasFinalSampleRegion = finalSampleRegion
+        atlasSampleIslands = sampleIslands
         return NativeGlassMipAtlas(extent, atlasSize, rects, null, colorManaged, emptyList(),
             textureStages, textureSource, nativeGammaStorage = storeNativeGamma,
             regularMipRow = regularMipRow,
             allowHardwareLinearSampling = allowHardwareLinearSampling,
+            consumerRegions = consumerRegions, sparseLevels = sparseLevels,
+            canPropagateSourceBounds = kernel == NativeGlassMipKernel.Compute13Tap && textureSource == null,
             compatibilityProducer = compatibilityProducer).also { cachedAtlas = it }
     }
 
@@ -839,23 +1023,49 @@ uniform float4 nativeMipKernelWeights;
 uniform float3 nativeMipKernelMode;
 """
 
+/** The native kernels use the same 13 positions with different accumulation orders and precision. */
+private const val NativeMipTapLoop = """
+    for (int tap = 0; tap < 13; ++tap) {
+        float2 address = center;
+        if (tap == 1) address.x -= inner.x;
+        else if (tap == 2) address.x += inner.x;
+        else if (tap == 3) address.y -= inner.y;
+        else if (tap == 4) address.y += inner.y;
+        else if (tap == 5) address -= inner;
+        else if (tap == 6) address += inner;
+        else if (tap == 7) address += float2(-inner.x, inner.y);
+        else if (tap == 8) address += float2(inner.x, -inner.y);
+        else if (tap == 9) address.x -= outer.x;
+        else if (tap == 10) address.x += outer.x;
+        else if (tap == 11) address.y -= outer.y;
+        else if (tap == 12) address.y += outer.y;
+"""
+
+private const val NativeMipHalfTapLoop = NativeMipTapLoop + """
+        taps[tap] = half4(nativeMipBilinear(address));
+    }
+"""
+
+private const val NativeMipFloatTapLoop = NativeMipTapLoop + """
+        taps[tap] = nativeMipBilinear(address);
+    }
+"""
+
 private const val NativeMipHalfKernelBody = """
-        half4 centerValue = half4(nativeMipBilinear(center));
-        half4 axisInner = half4(nativeMipBilinear(center + float2(0.0, -inner.y)))
-            + half4(nativeMipBilinear(center + float2(-inner.x, 0.0)));
-        axisInner = axisInner + half4(nativeMipBilinear(center + float2(0.0, inner.y)));
-        axisInner = axisInner + half4(nativeMipBilinear(center + float2(inner.x, 0.0)));
-        half4 diagonal = half4(nativeMipBilinear(center + float2(-inner.x, -inner.y)))
-            + half4(nativeMipBilinear(center + float2(-inner.x, inner.y)));
-        diagonal = diagonal + half4(nativeMipBilinear(center + float2(inner.x, -inner.y)));
-        diagonal = diagonal + half4(nativeMipBilinear(center + inner));
-        half4 axisOuter = half4(nativeMipBilinear(center + float2(-outer.x, 0.0)))
-            + half4(nativeMipBilinear(center + float2(0.0, -outer.y)));
-        axisOuter = axisOuter + half4(nativeMipBilinear(center + float2(0.0, outer.y)));
-        axisOuter = axisOuter + half4(nativeMipBilinear(center + float2(outer.x, 0.0)));
-        half4 value = axisInner * half(nativeMipKernelWeights.y) + centerValue * half(nativeMipKernelWeights.x);
-        value = value + diagonal * half(nativeMipKernelWeights.z);
-        value = value + axisOuter * half(nativeMipKernelWeights.w);
+    half4 taps[13];
+""" + NativeMipHalfTapLoop + """
+    half4 axisInner = taps[3] + taps[1];
+    axisInner = axisInner + taps[4];
+    axisInner = axisInner + taps[2];
+    half4 diagonal = taps[5] + taps[7];
+    diagonal = diagonal + taps[8];
+    diagonal = diagonal + taps[6];
+    half4 axisOuter = taps[9] + taps[11];
+    axisOuter = axisOuter + taps[12];
+    axisOuter = axisOuter + taps[10];
+    half4 value = axisInner * half(nativeMipKernelWeights.y) + taps[0] * half(nativeMipKernelWeights.x);
+    value = value + diagonal * half(nativeMipKernelWeights.z);
+    value = value + axisOuter * half(nativeMipKernelWeights.w);
 """
 
 private const val NativeMipHalfKernelFlush = """
@@ -865,18 +1075,12 @@ private const val NativeMipHalfKernelFlush = """
 """
 
 private const val NativeMipFloatKernelBody = """
-    float4 axisInner = nativeMipBilinear(center + float2(-inner.x, 0.0))
-        + nativeMipBilinear(center + float2(inner.x, 0.0))
-        + nativeMipBilinear(center + float2(0.0, -inner.y))
-        + nativeMipBilinear(center + float2(0.0, inner.y));
-    float4 diagonal = nativeMipBilinear(center - inner) + nativeMipBilinear(center + inner)
-        + nativeMipBilinear(center + float2(-inner.x, inner.y))
-        + nativeMipBilinear(center + float2(inner.x, -inner.y));
-    float4 axisOuter = nativeMipBilinear(center + float2(-outer.x, 0.0))
-        + nativeMipBilinear(center + float2(outer.x, 0.0))
-        + nativeMipBilinear(center + float2(0.0, -outer.y))
-        + nativeMipBilinear(center + float2(0.0, outer.y));
-    return half4(nativeMipBilinear(center) * nativeMipKernelWeights.x
+    float4 taps[13];
+""" + NativeMipFloatTapLoop + """
+    float4 axisInner = taps[1] + taps[2] + taps[3] + taps[4];
+    float4 diagonal = taps[5] + taps[6] + taps[7] + taps[8];
+    float4 axisOuter = taps[9] + taps[10] + taps[11] + taps[12];
+    return half4(taps[0] * nativeMipKernelWeights.x
         + axisInner * nativeMipKernelWeights.y + diagonal * nativeMipKernelWeights.z
         + axisOuter * nativeMipKernelWeights.w);
 """
@@ -1099,16 +1303,45 @@ private const val NativeAtlasTexelFunctions = """float4 nativeAtlasTexel(float2 
 }
 """
 
-private const val NativeAtlasManualBilinear = """float4 nativeAtlasBilinear(float2 coordinate, int level) {
-    float4 rect = nativeAtlasRect(level);
-    float2 pixel = clamp(coordinate / nativeAtlasBaseSize * rect.zw - .5, float2(0.0), rect.zw - 1.0);
+private const val NativeAtlasManualCoordinates = """    float2 pixel = clamp(coordinate / nativeAtlasBaseSize * rect.zw - .5, float2(0.0), rect.zw - 1.0);
     float2 index = floor(pixel);
     float2 fraction = pixel - index;
+"""
+
+private const val NativeAtlasBilinearCoordinates = """float4 nativeAtlasBilinear(float2 coordinate, int level) {
+    float4 rect = nativeAtlasRect(level);
+""" + NativeAtlasManualCoordinates
+
+private const val NativeAtlasManualCorners = """
     float4 upper = mix(nativeAtlasTexel(index, rect), nativeAtlasTexel(index + float2(1.0, 0.0), rect), fraction.x);
     float4 lower = mix(nativeAtlasTexel(index + float2(0.0, 1.0), rect), nativeAtlasTexel(index + 1.0, rect), fraction.x);
     return mix(upper, lower, fraction.y);
 }
 """
+
+// The managed control scene and foreground share one texel decode site during compilation.
+internal const val NativeControlBilinearCorners = """
+    float4 left = float4(0.0), upper = float4(0.0), lower = float4(0.0);
+    for (int corner = 0; corner < 4; ++corner) {
+        bool right = corner == 1 || corner == 3;
+        float2 offset = float2(right ? 1.0 : 0.0, corner >= 2 ? 1.0 : 0.0);
+        float4 value = nativeAtlasTexel(index + offset, rect);
+        if (!right) left = value;
+        else if (corner == 1) upper = mix(left, value, fraction.x);
+        else lower = mix(left, value, fraction.x);
+    }
+    return mix(upper, lower, fraction.y);
+}
+"""
+
+private const val NativeAtlasManualBilinear = NativeAtlasBilinearCoordinates + NativeAtlasManualCorners
+
+internal const val NativeStoredPairBilinear = """float4 nativeStoredPairBilinear(float2 coordinate, float4 rect) {
+""" + NativeAtlasManualCoordinates + NativeAtlasManualCorners
+
+internal val nativeRegularHardwareSdrSampling: String get() = NativeAtlasRegularSamplingFunctions[1][0].value
+
+private const val NativeAtlasControlBilinear = NativeAtlasBilinearCoordinates + NativeControlBilinearCorners
 
 private const val NativeAtlasHardwareLinearBilinear = """float4 nativeAtlasBilinear(float2 coordinate, int level) {
     float4 rect = nativeAtlasRect(level);
@@ -1117,22 +1350,41 @@ private const val NativeAtlasHardwareLinearBilinear = """float4 nativeAtlasBilin
 }
 """
 
-private const val NativeAtlasSamplingLodFunctions = """float4 nativeAtlasSample(float2 coordinate, float lod) {
+private const val NativeAtlasHardwareLinearLodFunctions = """float4 nativeAtlasSample(float2 coordinate, float lod) {
     float bounded = clamp(lod, 0.0, nativeAtlasLastLevel);
     int lower = int(floor(bounded));
     int upper = int(min(float(lower + 1), nativeAtlasLastLevel));
     return mix(nativeAtlasBilinear(coordinate, lower), nativeAtlasBilinear(coordinate, upper), fract(bounded));
 }
-float nativeGlassLod(float radius) {
+"""
+
+private const val NativeAtlasManualLodFunctions = """float4 nativeAtlasSample(float2 coordinate, float lod) {
+    float bounded = clamp(lod, 0.0, nativeAtlasLastLevel);
+    int lower = int(floor(bounded));
+    float weight = fract(bounded);
+    float4 first = float4(0.0);
+    // Share the color-managed four-texel decode between levels. An integral LOD
+    // uses only its lower level, including the last level of a clamped request.
+    for (int level = 0; level < 2; ++level) {
+        float4 value = nativeAtlasBilinear(coordinate, lower + level);
+        if (level == 1) return mix(first, value, weight);
+        first = value;
+        if (weight == 0.0) break;
+    }
+    return first;
+}
+"""
+
+private const val NativeAtlasLodFromRadius = """float nativeGlassLod(float radius) {
     float packedRadius = max(radius, 0.0) * 1.6;
     return max(log2(packedRadius < 2.0 ? 1.0 + packedRadius * .5 : packedRadius), 0.0);
 }
 """
 
 private const val NativeAtlasSamplingBody =
-    NativeAtlasTexelFunctions + NativeAtlasManualBilinear + NativeAtlasSamplingLodFunctions
+    NativeAtlasTexelFunctions + NativeAtlasManualBilinear + NativeAtlasManualLodFunctions + NativeAtlasLodFromRadius
 private const val NativeAtlasHardwareLinearSamplingBody =
-    NativeAtlasTexelFunctions + NativeAtlasHardwareLinearBilinear + NativeAtlasSamplingLodFunctions
+    NativeAtlasTexelFunctions + NativeAtlasHardwareLinearBilinear + NativeAtlasHardwareLinearLodFunctions + NativeAtlasLodFromRadius
 
 private const val NativeAtlasSamplingFunctions =
     NativeAtlasSamplingUniforms + NativeAtlasRectLookup + NativeAtlasSamplingBody
@@ -1179,7 +1431,7 @@ float4 nativeAtlasRect(int level) {
 
 /** Build only the selected immutable source; shader instances remain owned by their consumer. */
 private fun nativeAtlasSamplingVariants(lookup: String): Array<Array<Lazy<String>>> =
-    Array(2) { sampling ->
+    Array(3) { sampling ->
         Array(3) { color ->
             lazy {
                 val colors = when (color) {
@@ -1187,7 +1439,12 @@ private fun nativeAtlasSamplingVariants(lookup: String): Array<Array<Lazy<String
                     1 -> NativeAtlasManagedColorFunctions
                     else -> NativeAtlasNativeGammaColorFunctions
                 }
-                val body = if (sampling == 0) NativeAtlasSamplingBody else NativeAtlasHardwareLinearSamplingBody
+                val body = when (sampling) {
+                    0 -> NativeAtlasSamplingBody
+                    1 -> NativeAtlasHardwareLinearSamplingBody
+                    else -> NativeAtlasTexelFunctions + NativeAtlasControlBilinear +
+                        NativeAtlasManualLodFunctions + NativeAtlasLodFromRadius
+                }
                 colors + NativeAtlasSamplingUniforms + lookup + body
             }
         }

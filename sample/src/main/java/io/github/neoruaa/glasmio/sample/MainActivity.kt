@@ -54,6 +54,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalContext
@@ -497,7 +498,7 @@ private fun SampleNavigation(
                                 val entryListState = rootListStates[route] ?: rememberLazyListState()
                                 CompositionLocalProvider(LocalSampleHeaderEntry provides headerEntry(entryKey)) {
                                 val wallpaper = route in wallpaperRoutes
-                                val overlay: @Composable BoxScope.(LayerBackdrop) -> Unit = {
+                                val overlay: @Composable BoxScope.(LayerBackdrop) -> Unit = { source ->
                                         val isTopLevel = route in topLevelRoutes
                                         val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                                         val bottomPadding = navigationInset + if (!topTabs && (isTopLevel || route == "Search")) NavigationBarSurfaceHeight + 8.dp else 0.dp
@@ -522,7 +523,7 @@ private fun SampleNavigation(
                                                         SamplePinnedPage(
                                                             title = title,
                                                             bottomPadding = bottomPadding,
-                                                            wallpaper = wallpaper,
+                                                            wallpaper = source.takeIf { wallpaper },
                                                             listState = entryListState,
                                                             alwaysCompact = route == "Text Editing",
                                                             topPaddingAdjustment = if (topTabs && route == "Search")
@@ -562,7 +563,7 @@ private fun SampleNavigation(
                                         }
                                     }
                                 if (route != "Adaptive Glass" && !wallpaper) {
-                                    // SampleBackdrop(false) is exactly this fill; declaring it lets moving glass keep its result.
+                                    // Declaring the uniform source lets moving glass keep its result.
                                     GlasmioBackdropHost(
                                         sampledColor = LocalGlassColors.current.groupedBackground,
                                         modifier = Modifier.fillMaxSize(),
@@ -571,8 +572,14 @@ private fun SampleNavigation(
                                 } else {
                                     GlasmioBackdropHost(
                                         modifier = Modifier.fillMaxSize(),
-                                        sampledContent = {
-                                            if (route == "Adaptive Glass") AdaptiveGlassBackdrop() else SampleBackdrop(wallpaper)
+                                        sampledContentClipped = wallpaper,
+                                        sampledContent = { source ->
+                                            if (wallpaper) {
+                                                // The page background replays this image, including in modal captures.
+                                                SampleWallpaper(Modifier.drawWithContent {
+                                                    if (drawContext.graphicsLayer === source.graphicsLayer) drawContent()
+                                                }.graphicsLayer())
+                                            } else AdaptiveGlassBackdrop()
                                         },
                                         overlayContent = overlay,
                                     )
@@ -677,18 +684,14 @@ private fun AnimatedContentTransitionScope<Scene<String>>.rootTabTransition(): C
     fadeIn() togetherWith fadeOut()
 
 @Composable
-private fun SampleBackdrop(wallpaper: Boolean) {
-    if (wallpaper) {
-        val assets = LocalSampleAssets.current
-        Image(
-            bitmap = if (LocalGlassColors.current.isDark) assets.darkWallpaper else assets.lightWallpaper,
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-        )
-    } else {
-        Box(Modifier.fillMaxSize().background(LocalGlassColors.current.groupedBackground))
-    }
+private fun SampleWallpaper(modifier: Modifier = Modifier) {
+    val assets = LocalSampleAssets.current
+    Image(
+        bitmap = if (LocalGlassColors.current.isDark) assets.darkWallpaper else assets.lightWallpaper,
+        contentDescription = null,
+        modifier = Modifier.fillMaxSize().then(modifier),
+        contentScale = ContentScale.Crop,
+    )
 }
 
 private data class SamplePageLayout(
@@ -702,7 +705,7 @@ private data class SamplePageLayout(
 private fun SamplePinnedPage(
     title: String,
     bottomPadding: Dp,
-    wallpaper: Boolean,
+    wallpaper: LayerBackdrop?,
     listState: LazyListState? = null,
     alwaysCompact: Boolean = false,
     topPaddingAdjustment: Dp = 0.dp,
@@ -730,7 +733,9 @@ private fun SamplePinnedPage(
         contentPadding = bodyPadding,
         backgroundColor = backgroundColor,
         topBarBlurProgress = edgeProgress,
-        background = if (wallpaper) ({ SampleBackdrop(true) }) else null,
+        background = wallpaper?.let { source ->
+            { Box(Modifier.fillMaxSize().drawWithContent { drawLayer(source.graphicsLayer) }) }
+        },
     ) { padding ->
         content(SamplePageLayout(title, padding, state, collapseProgress))
     }
@@ -895,7 +900,7 @@ private fun CatalogMaterialPreview(onOpen: () -> Unit) {
     GlasmioBackdropHost(
         modifier = Modifier.fillMaxWidth().height(172.dp * fontScale)
             .clip(ContinuousRoundedRectangle(28.dp)).testTag("catalog-materials-preview"),
-        sampledContent = { SampleBackdrop(true) },
+        sampledContent = { SampleWallpaper() },
         overlayContent = {
             GlassSurface(
                 modifier = Modifier.align(Alignment.Center).padding(18.dp).fillMaxWidth(),
@@ -1649,7 +1654,7 @@ private fun MenusDemo(bottomPadding: Dp, dark: Boolean, onDark: (Boolean) -> Uni
     SamplePinnedPage(
         title = "Menus",
         bottomPadding = bottomPadding,
-        wallpaper = false,
+        wallpaper = null,
     ) { layout ->
         DemoList(layout) {
             item {

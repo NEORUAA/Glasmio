@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
@@ -46,6 +47,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +62,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -72,6 +75,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -106,6 +110,7 @@ private fun resolveSheetHorizontalInsets(
     density: androidx.compose.ui.unit.Density,
     layoutDirection: LayoutDirection,
     view: android.view.View,
+    windowSize: IntSize,
 ): WindowInsets {
     // Bottom sheets live in a separate edge-to-edge Dialog window. On some Android builds that
     // window reports zero Compose safeDrawing values, so retain the display-wide metrics fallback.
@@ -116,11 +121,12 @@ private fun resolveSheetHorizontalInsets(
         android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
     )
     val cutout = rootInsets?.displayCutout
-    val metricsInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        view.context.getSystemService(android.view.WindowManager::class.java)
-            ?.currentWindowMetrics?.windowInsets
-    } else {
-        null
+    // Query the window manager when window geometry changes, including multi-window resize.
+    val metricsInsets = remember(view, windowSize, rootInsets, LocalConfiguration.current) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            view.context.getSystemService(android.view.WindowManager::class.java)
+                ?.currentWindowMetrics?.windowInsets
+        } else null
     }
     val metricsPlatformInsets = metricsInsets?.getInsetsIgnoringVisibility(
         android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout(),
@@ -310,7 +316,9 @@ fun GlasmioBottomSheet(
                 val safeBottom = navigationInsets.getBottom(density).toFloat()
                 val view = LocalView.current
                 val layoutDirection = LocalLayoutDirection.current
-                val hardwareInsets = resolveSheetHorizontalInsets(density, layoutDirection, view)
+                val hardwareInsets = resolveSheetHorizontalInsets(
+                    density, layoutDirection, view, IntSize(constraints.maxWidth, constraints.maxHeight),
+                )
                 val hardwareLeft = hardwareInsets.getLeft(density, layoutDirection).toFloat()
                 val hardwareRight = hardwareInsets.getRight(density, layoutDirection).toFloat()
                 var measuredContentHeight by remember { mutableStateOf(0) }
@@ -389,14 +397,25 @@ fun GlasmioBottomSheet(
                         ) else Modifier),
                 )
                 val controllerTop = sheetState.presentationDetent?.let { anchors.offsetOf(it) }
-                val frame = layout.frame(
-                    controllerTop ?: if (sheetState.hasAnchors) sheetState.offset else anchors.hidden,
-                    anchors.medium ?: anchors.large,
-                    fullHeightDetentAvailable = !contentSized || anchors.large <= layout.fullTop,
-                )
-                val expansion = frame.expansionProgress
+                val frame = remember(layout, sheetState, anchors, controllerTop, contentSized) {
+                    derivedStateOf {
+                        layout.frame(
+                            controllerTop ?: if (sheetState.hasAnchors) sheetState.offset else anchors.hidden,
+                            anchors.medium ?: anchors.large,
+                            fullHeightDetentAvailable = !contentSized || anchors.large <= layout.fullTop,
+                        )
+                    }
+                }
                 val glass = remember(sheetState, contentSized) { Animatable(if (contentSized || !sheetState.skipPartiallyExpanded) 1f else 0f) }
-                val largeBackground = expansion > 0.5f
+                val largeBackground by remember(frame) {
+                    derivedStateOf(structuralEqualityPolicy()) { frame.value.expansionProgress > 0.5f }
+                }
+                val surfaceHeight by remember(frame) {
+                    derivedStateOf(structuralEqualityPolicy()) {
+                        val height = if (contentSized) layout.containerHeight - layout.fullTop else frame.value.naturalHeight
+                        height.roundToInt().coerceAtLeast(1)
+                    }
+                }
                 val closing = controllerTop != null && sheetState.targetValue == GlasmioSheetValue.Hidden
                 LaunchedEffect(largeBackground, closing) {
                     glass.animateTo(
@@ -404,26 +423,31 @@ fun GlasmioBottomSheet(
                         if (controllerTop != null) IosSheetPresentationMotion else IosSheetMotion.materialSpringSpec(),
                     )
                 }
-                val surfaceHeight = if (contentSized) layout.containerHeight - layout.fullTop else frame.naturalHeight
                 val systemInsets = view.rootWindowInsets
-                val minimumBottom = with(density) { 20.dp.toPx() }
-                val bottomLeft = max(minimumBottom,
-                    (systemInsets?.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT)?.radius ?: 0) - frame.sideInset)
-                val bottomRight = max(minimumBottom,
-                    (systemInsets?.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT)?.radius ?: 0) - frame.sideInset)
-                val isLtr = layoutDirection == LayoutDirection.Ltr
-                val shape = when {
-                    fullScreen -> RectangleShape
-                    frame.capsularProgress > 0f ->
-                        ContinuousRoundedRectangle(with(density) { (frame.naturalHeight / 2f).toDp() })
-                    floating -> ContinuousRoundedRectangle(32.dp)
-                    compactEdge -> ContinuousRoundedRectangle(topStart = 38.dp, topEnd = 38.dp)
-                    else -> ContinuousRoundedRectangle(
-                        topStart = 38.dp,
-                        topEnd = 38.dp,
-                        bottomStart = with(density) { (if (isLtr) bottomLeft else bottomRight).toDp() },
-                        bottomEnd = with(density) { (if (isLtr) bottomRight else bottomLeft).toDp() },
-                    )
+                val shape by remember(frame, systemInsets, density, layoutDirection) {
+                    val minimumBottom = with(density) { 20.dp.toPx() }
+                    val leftRadius = systemInsets?.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT)?.radius ?: 0
+                    val rightRadius = systemInsets?.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT)?.radius ?: 0
+                    val isLtr = layoutDirection == LayoutDirection.Ltr
+                    derivedStateOf(structuralEqualityPolicy()) {
+                        val geometry = frame.value
+                        when {
+                            fullScreen -> RectangleShape
+                            geometry.capsularProgress > 0f ->
+                                ContinuousRoundedRectangle(with(density) { (geometry.naturalHeight / 2f).toDp() })
+                            floating -> ContinuousRoundedRectangle(32.dp)
+                            compactEdge -> ContinuousRoundedRectangle(topStart = 38.dp, topEnd = 38.dp)
+                            else -> with(density) {
+                                val left = max(minimumBottom, leftRadius - geometry.sideInset).toDp()
+                                val right = max(minimumBottom, rightRadius - geometry.sideInset).toDp()
+                                ContinuousRoundedRectangle(
+                                    topStart = 38.dp, topEnd = 38.dp,
+                                    bottomStart = if (isLtr) left else right,
+                                    bottomEnd = if (isLtr) right else left,
+                                )
+                            }
+                        }
+                    }
                 }
                 val dragInteractions = remember { SheetDragInteractions() }
                 val contentMaterial = IosSheetMaterialContext(
@@ -439,14 +463,15 @@ fun GlasmioBottomSheet(
                 GlasmioSheetSurface(
                     modifier = Modifier
                         .absoluteOffset {
-                            IntOffset(frame.visibleLeft.roundToInt(),
-                                (frame.visibleTop + if (controllerTop != null) sheetState.offset - controllerTop else 0f).roundToInt())
+                            val geometry = frame.value
+                            IntOffset(geometry.visibleLeft.roundToInt(),
+                                (geometry.visibleTop + if (controllerTop != null) sheetState.offset - controllerTop else 0f).roundToInt())
                         }
                         .width(with(density) { layout.naturalWidth.toDp() })
                         .graphicsLayer {
                             alpha = if (!sheetState.hasAnchors || contentSized && measuredContentHeight == 0) 0f else 1f
-                            scaleX = frame.scale
-                            scaleY = frame.scale
+                            scaleX = frame.value.scale
+                            scaleY = scaleX
                             transformOrigin = TransformOrigin(0f, 0f)
                         }
                         .then(modifier)
@@ -525,7 +550,7 @@ fun GlasmioBottomSheet(
                                     ) {
                                         Box(
                                             Modifier.matchParentSize()
-                                                .then(if (sheetBackplate != null) Modifier.drawPlainBackdrop(
+                                                .then(if (sheetBackplate != null && chromeColors.groupedBackground.alpha < 1f) Modifier.drawPlainBackdrop(
                                                     sheetBackplate, shape = { RectangleShape }, effects = {},
                                                 ) else Modifier)
                                                 .background(chromeColors.groupedBackground),
@@ -569,7 +594,7 @@ fun GlasmioBottomSheet(
                             }
                         },
                     ) { measurables, constraints ->
-                        val height = surfaceHeight.roundToInt().coerceAtLeast(1)
+                        val height = surfaceHeight
                         val child = measurables.single().measure(Constraints(
                             minWidth = constraints.maxWidth,
                             maxWidth = constraints.maxWidth,

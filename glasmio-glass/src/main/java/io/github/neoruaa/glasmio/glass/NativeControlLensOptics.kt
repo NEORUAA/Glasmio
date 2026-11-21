@@ -40,6 +40,60 @@ float2 nativeControlMapAddress(float2 p, float4 map, float4 matrix, float2 offse
  * This is a separate transfer from glass_background's aberrate_texture helper: all three
  * channels are premultiplied by averaged source alpha, SDF coverage and the field alpha.
  */
+private const val NativeControlStraightColor = """float3 nativeControlForegroundStraight(float4 source) {
+    return source.rgb / max(source.a, .000001);
+}
+"""
+
+private const val NativeControlSpectralSum = """    float3 red = nativeControlForegroundStraight(samples[0]);
+    float3 orange = nativeControlForegroundStraight(samples[1]);
+    float3 yellow = nativeControlForegroundStraight(samples[2]);
+    float3 green = nativeControlForegroundStraight(samples[3]);
+    float3 cyan = nativeControlForegroundStraight(samples[4]);
+    float3 blue = nativeControlForegroundStraight(samples[5]);
+    float3 violet = nativeControlForegroundStraight(samples[6]);
+    float3 color = float3((red.r + orange.r * (2.0 / 3.0) + yellow.r * (1.0 / 3.0)) * .5,
+        (orange.g * (1.0 / 3.0) + yellow.g * (2.0 / 3.0) + green.g + cyan.g * (2.0 / 3.0) + blue.g * (1.0 / 3.0)) / 3.0,
+        (cyan.b * (1.0 / 3.0) + blue.b * (2.0 / 3.0) + violet.b) * .5);
+    float alpha = (samples[0].a + samples[1].a + samples[2].a + samples[3].a + samples[4].a + samples[5].a + samples[6].a) / 7.0 * coverage;
+    return float4(color * alpha * colorGain, alpha) * attenuation;
+}
+"""
+
+internal const val NativeControlTabForegroundFunctions = NativeControlStraightColor + """
+float4 nativeControlTabForeground(float2 p, float3 field, float4 center, float height,
+    float amount, float pixelScale) {
+    float edge = -height / 5.0;
+    float opacity = mix(1.0, 0.0, clamp((field.x - edge) / (0.0 - edge), 0.0, 1.0));
+    float attenuation = 1.0 - opacity;
+    if (attenuation <= 0.0) return float4(0.0);
+    float aa = max((abs(field.y) + abs(field.z)) * pixelScale, .0001);
+    float coverage = clamp(.5 - field.x / aa, 0.0, 1.0);
+    // The spectral foreground has zero premultiplied color outside its coverage.
+    if (coverage == 0.0) return float4(0.0);
+    // Refraction is zero. A fragment with nonzero attenuation is shallower than
+    // height/5, so its zero-height aberration profile is still at full amplitude.
+    float2 delta = float2(dot(float2(-.2588190451025207, .9659258262890683), field.yz),
+        dot(float2(.9659258262890683, .2588190451025207), field.yz)) * amount;
+    bool dispersed = any(notEqual(delta, float2(0.0)));
+    float4 samples[7];
+    for (int band = 0; band < 7; ++band) {
+        float4 sampled = center;
+        if (dispersed && band != 3) {
+            float2 coordinate = p;
+            if (band == 0) coordinate += delta;
+            else if (band == 1) coordinate += delta * (2.0 / 3.0);
+            else if (band == 2) coordinate += delta * (1.0 / 3.0);
+            else if (band == 4) coordinate -= delta * (1.0 / 3.0);
+            else if (band == 5) coordinate -= delta * (2.0 / 3.0);
+            else coordinate -= delta;
+            sampled = nativeControlForegroundSource(coordinate);
+        }
+        samples[band] = sampled;
+    }
+    float colorGain = 1.0;
+""" + NativeControlSpectralSum
+
 internal const val NativeControlForegroundFunctions = """
 float2 nativeControlForegroundDirection(float2 gradient, float4 matrix, float2 direction) {
     return float2(dot(float2(dot(matrix.xy, direction), direction.x * matrix.y - direction.y * matrix.x), gradient),
@@ -51,10 +105,7 @@ float nativeControlForegroundProfile(float sd, float amount, float inverseHeight
     float u = inverseHeight < 0.0 ? step(0.0, -sd - offset) : clamp((-sd - offset) * inverseHeight, 0.0, 1.0);
     return amount * (1.0 - clamp(sqrt(u * (2.0 - u)), 0.0, 1.0));
 }
-float3 nativeControlForegroundStraight(float4 source) {
-    return source.rgb / max(source.a, .000001);
-}
-float4 nativeControlForegroundForRaster(float2 p, float4 field, float4 matrix,
+""" + NativeControlStraightColor + """float4 nativeControlForegroundForRaster(float2 p, float4 field, float4 matrix,
     float3 refraction, float2 refractionDirection, float3 aberration, float2 aberrationDirection,
     float4 edge, float colorGain, float pixelScale) {
     if (field.a < .001) return float4(0.0);
@@ -67,37 +118,25 @@ float4 nativeControlForegroundForRaster(float2 p, float4 field, float4 matrix,
         * nativeControlForegroundProfile(field.x, refraction.x, refraction.y, refraction.z);
     float2 delta = nativeControlForegroundDirection(field.yz, matrix, aberrationDirection).yx
         * nativeControlForegroundProfile(field.x, aberration.x, aberration.y, aberration.z);
-    float4 r = nativeControlForegroundSource(refracted + delta);
-    float4 o = r;
-    float4 y = r;
-    float4 g = r;
-    float4 c = r;
-    float4 b = r;
-    float4 v = r;
-    // A zero displacement addresses the same source texel seven times. Reuse only
-    // that sample; preserve the native weighted RGB and alpha arithmetic below.
-    if (delta.x != 0.0 || delta.y != 0.0) {
-        o = nativeControlForegroundSource(refracted + delta * (2.0 / 3.0));
-        y = nativeControlForegroundSource(refracted + delta * (1.0 / 3.0));
-        g = nativeControlForegroundSource(refracted);
-        c = nativeControlForegroundSource(refracted - delta * (1.0 / 3.0));
-        b = nativeControlForegroundSource(refracted - delta * (2.0 / 3.0));
-        v = nativeControlForegroundSource(refracted - delta);
+    // Sample each wavelength through the same optical path. A zero spectral shift
+    // still feeds the seven original weights and alpha additions from one read.
+    bool dispersed = any(notEqual(delta, float2(0.0)));
+    float4 samples[7];
+    float4 sampled = float4(0.0);
+    for (int band = 0; band < 7; ++band) {
+        if (band == 0 || dispersed) {
+            float2 coordinate = refracted;
+            if (band == 0) coordinate += delta;
+            else if (band == 1) coordinate += delta * (2.0 / 3.0);
+            else if (band == 2) coordinate += delta * (1.0 / 3.0);
+            else if (band == 4) coordinate -= delta * (1.0 / 3.0);
+            else if (band == 5) coordinate -= delta * (2.0 / 3.0);
+            else if (band == 6) coordinate -= delta;
+            sampled = nativeControlForegroundSource(coordinate);
+        }
+        samples[band] = sampled;
     }
-    float3 red = nativeControlForegroundStraight(r);
-    float3 orange = nativeControlForegroundStraight(o);
-    float3 yellow = nativeControlForegroundStraight(y);
-    float3 green = nativeControlForegroundStraight(g);
-    float3 cyan = nativeControlForegroundStraight(c);
-    float3 blue = nativeControlForegroundStraight(b);
-    float3 violet = nativeControlForegroundStraight(v);
-    float3 color = float3((red.r + orange.r * (2.0 / 3.0) + yellow.r * (1.0 / 3.0)) * .5,
-        (orange.g * (1.0 / 3.0) + yellow.g * (2.0 / 3.0) + green.g + cyan.g * (2.0 / 3.0) + blue.g * (1.0 / 3.0)) / 3.0,
-        (cyan.b * (1.0 / 3.0) + blue.b * (2.0 / 3.0) + violet.b) * .5);
-    float alpha = (r.a + o.a + y.a + g.a + c.a + b.a + v.a) / 7.0 * coverage;
-    return float4(color * alpha * colorGain, alpha) * attenuation;
-}
-float4 nativeControlForeground(float2 p, float4 field, float4 matrix,
+""" + NativeControlSpectralSum + """float4 nativeControlForeground(float2 p, float4 field, float4 matrix,
     float3 refraction, float2 refractionDirection, float3 aberration, float2 aberrationDirection,
     float4 edge, float colorGain) {
     return nativeControlForegroundForRaster(p, field, matrix, refraction, refractionDirection,

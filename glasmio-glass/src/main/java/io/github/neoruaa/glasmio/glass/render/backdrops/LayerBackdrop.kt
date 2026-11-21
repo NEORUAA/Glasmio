@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Matrix
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -41,10 +42,17 @@ fun rememberLayerBackdrop(
     }
 }
 
+@Composable
+internal fun rememberBoundedLayerBackdrop(): LayerBackdrop {
+    val layer = rememberGraphicsLayer()
+    return remember(layer) { LayerBackdrop(layer, DefaultOnDraw, clipSampleToBounds = true) }
+}
+
 @Stable
-class LayerBackdrop internal constructor(
+class LayerBackdrop @JvmOverloads internal constructor(
     val graphicsLayer: GraphicsLayer,
-    internal val onDraw: ContentDrawScope.() -> Unit
+    internal val onDraw: ContentDrawScope.() -> Unit,
+    private val clipSampleToBounds: Boolean = false,
 ) : Backdrop {
 
     internal val recordsContent: Boolean = onDraw === DefaultOnDraw
@@ -94,8 +102,19 @@ class LayerBackdrop internal constructor(
             // Applying its manual inverse again would double the press scale/rotation.
             transform(sourceToConsumer)
         }) {
-            drawLayer(graphicsLayer)
+            if (clipSampleToBounds) {
+                clipRect(0f, 0f, layerCoordinates.size.width.toFloat(), layerCoordinates.size.height.toFloat()) {
+                    drawLayer(graphicsLayer)
+                }
+            } else drawLayer(graphicsLayer)
         }
+    }
+
+    internal fun boundedSamples(consumer: LayoutCoordinates): Rect? {
+        if (!clipSampleToBounds || !consumer.isAttached) return null
+        val recorded = layerCoordinates?.takeIf { it.isAttached } ?: return null
+        if (!updateTransform(recorded, consumer) || !sourceToConsumer.isUnitTranslation()) return null
+        return sourceToConsumer.map(Rect(0f, 0f, recorded.size.width.toFloat(), recorded.size.height.toFloat()))
     }
 
     private fun updateTransform(source: LayoutCoordinates, consumer: LayoutCoordinates): Boolean {
@@ -144,6 +163,12 @@ class LayerBackdrop internal constructor(
         }
         return TransformSignature(source, values.copyOf())
     }
+}
+
+internal fun Matrix.isUnitTranslation(): Boolean {
+    val matrix = values
+    return matrix.all { it.isFinite() } && matrix[0] == 1f && matrix[5] == 1f &&
+        matrix[10] == 1f && matrix[14] == 0f && matrix.isAxisAligned()
 }
 
 private fun FloatArray.isAxisAligned(): Boolean =

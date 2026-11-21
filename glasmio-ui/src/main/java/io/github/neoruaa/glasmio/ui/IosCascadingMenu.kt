@@ -119,8 +119,7 @@ fun GlasmioCascadingMenu(
     itemHeight: Dp = 44.dp,
     separatorHeight: Dp = 12.dp,
 ) {
-    var open by remember { mutableStateOf(false) }
-    var started by remember { mutableStateOf(false) }
+    var open by remember { mutableStateOf(true) }
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
     var childExpanded by remember { mutableStateOf(false) }
     var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -185,7 +184,6 @@ fun GlasmioCascadingMenu(
         maxOf(280.dp, requiredWidth + 4.dp).coerceAtMost((windowWidth - 24.dp).coerceAtLeast(1.dp))
     }
 
-    LaunchedEffect(Unit) { started = true; open = true }
     LaunchedEffect(childExpanded) {
         if (!childExpanded) {
             snapshotFlow { geometry == 0f && appearance == 0f }.first { it }
@@ -227,7 +225,7 @@ fun GlasmioCascadingMenu(
         morphFromAnchor = morphFromAnchor,
         viewportBounds = viewportBounds,
         onClosed = {
-            if (started && !open) {
+            if (!open) {
                 onDismiss()
                 pendingAction?.invoke()
             }

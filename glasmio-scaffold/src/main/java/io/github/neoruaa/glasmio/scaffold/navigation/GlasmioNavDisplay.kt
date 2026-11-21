@@ -616,8 +616,8 @@ fun <T : Any> GlasmioNavDisplay(
                         myZIndex > minOf(initialZIndex, targetZIndex) &&
                         initialZIndex != targetZIndex
 
-            val roundedModifier = if (transitionEffects.enableCornerClip && isTopScene &&
-                motion.frame.value.operation != GlasmioNavigationOperation.Tab) {
+            val hasMovingPageEdge = isTopScene && motion.operation != GlasmioNavigationOperation.Tab
+            val roundedModifier = if (transitionEffects.enableCornerClip && hasMovingPageEdge) {
                 Modifier.clip(windowShape)
             } else {
                 Modifier
@@ -645,7 +645,7 @@ fun <T : Any> GlasmioNavDisplay(
                         }
                     }
                 } else Modifier
-            val shadowModifier = if (isTopScene && motion.frame.value.operation != GlasmioNavigationOperation.Tab) {
+            val shadowModifier = if (hasMovingPageEdge) {
                 Modifier.navigationGlassDropShadow(shape = { if (transitionEffects.enableCornerClip) windowShape else RectangleShape }, cacheBlurResult = true,
                     shadowRadius = 12.dp, shadowOffsetY = (-3).dp, shadowAlpha = 0.04f)
             } else Modifier

@@ -24,6 +24,7 @@ import io.github.neoruaa.glasmio.glass.render.highlight.NativeGlassEdgeFunctions
 import io.github.neoruaa.glasmio.glass.render.highlight.NativeVibrantColorMatrix
 import io.github.neoruaa.glasmio.glass.render.highlight.NativeVibrantColorMatrixFunctions
 import io.github.neoruaa.glasmio.glass.render.optics.GlassSdfShader
+import io.github.neoruaa.glasmio.glass.render.optics.NativeControlUniformRoundedField
 import io.github.neoruaa.glasmio.glass.render.optics.NativeGlassRefractionFunctions
 import io.github.neoruaa.glasmio.glass.render.optics.glassCornerRadii
 import kotlin.math.ceil
@@ -172,12 +173,14 @@ fun BackdropEffectScope.nativeControlLens(
     val builtInConsumer = scope.supportsNativeControlLensConsumerSharing
     val sampledTabConsumer = tab && separateSceneOutput && builtInConsumer
     val sampledField = fieldPlane != null
-    val lensKey = "Glasmio.ControlLens.${atlas.colorManaged}.$fullyResting.$small.$tab.$precomposedScene.layout=${atlas.samplingLayoutKey}.sampledScene=$sampledTabConsumer.field=$sampledField"
+    val uniformRoundedTab = sampledTabConsumer && !sampledField && corners[0] > .000001f &&
+        corners.all { it == corners[0] }
+    val lensKey = "Glasmio.ControlLens.${atlas.colorManaged}.$fullyResting.$small.$tab.$precomposedScene.layout=${atlas.samplingLayoutKey}.sampledScene=$sampledTabConsumer.field=$sampledField.uniformRounded=$uniformRoundedTab.restingThumb=$knownRestingThumb"
     val sourceKey = if (builtInConsumer) "$lensKey.builtin.source" else "$lensKey.source"
     val lensSource = scope.cachedResource(sourceKey) {
         if (builtInConsumer) {
-            nativeBuiltInControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene, heldTab,
-                sampledTabConsumer, sampledField)
+            nativeBuiltInControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene, heldTab, knownRestingThumb,
+                sampledTabConsumer, sampledField, uniformRoundedTab)
         } else nativeControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene)
     }
     fun configureLens(shader: android.graphics.RuntimeShader, highlight: Boolean, scenePass: Boolean = false) {
@@ -185,6 +188,14 @@ fun BackdropEffectScope.nativeControlLens(
         shader.setFloatUniform("size", size.width, size.height)
         shader.setFloatUniform("cornerRadii", corners)
         fieldPlane?.configure(shader, scenePass)
+        if (scenePass && tab && builtInConsumer && separateSceneOutput) {
+            // The consumer is bounded in physical pixels. Keep every possible color
+            // sample, including the original seven chromatic rays and bilinear neighbors.
+            val guard = ceil(25.dp.toPx() / scope.samplingScale)
+            val margin = guard * scope.samplingScale + height / 19f * opticalProgress * 2f + 4f
+            shader.setFloatUniform("lensSceneSupport", padding - margin, padding - margin,
+                padding + size.width + margin, padding + size.height + margin)
+        }
         shader.setFloatUniform("lensOrigin", padding, padding)
         shader.setFloatUniform("lensDensity", density)
         shader.setFloatUniform("lensScale", scope.samplingScale)
@@ -220,11 +231,12 @@ fun BackdropEffectScope.nativeControlLens(
         if (highlight) NativeVibrantColorMatrix.RegularHighlight.configure(shader::setFloatUniform)
     }
     if (precomposedScene) {
-        val sceneKey = if (separateSceneOutput) "Glasmio.ControlLens.scenePlane.${atlas.colorManaged}.$small.$tab.layout=${atlas.samplingLayoutKey}.field=$sampledField"
+        val sceneKey = if (separateSceneOutput) "Glasmio.ControlLens.scenePlane.${atlas.colorManaged}.$small.$tab.layout=${atlas.samplingLayoutKey}.field=$sampledField.uniformRounded=$uniformRoundedTab.bounded=${tab && builtInConsumer}"
             else "Glasmio.ControlLens.scene.${atlas.colorManaged}.layout=${atlas.samplingLayoutKey}"
         val sceneShader = obtainRuntimeShader(sceneKey,
             scope.cachedResource("$sceneKey.source") {
-                if (separateSceneOutput) nativeControlScenePlaneProgram(atlas.samplingFunctions, heldTab, style, sampledField)
+                if (separateSceneOutput) nativeControlScenePlaneProgram(atlas.samplingFunctions, heldTab, style, sampledField,
+                    tab && builtInConsumer, uniformRoundedTab)
                 else GlassSdfShader +
                     atlas.samplingFunctions + NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
                     NativeControlDisplacementFunctions +
@@ -259,6 +271,8 @@ internal fun nativeControlScenePlaneProgram(
     heldTab: Boolean = false,
     style: NativeControlLensStyle? = null,
     sampledField: Boolean = false,
+    boundedTab: Boolean = false,
+    uniformRoundedTab: Boolean = false,
 ): String {
     val sceneFunctions = if (style == null) {
         if (heldTab) NativeControlHeldTabSceneFunctions else NativeControlLensSceneFunctions
@@ -267,9 +281,10 @@ internal fun nativeControlScenePlaneProgram(
         style == NativeControlLensStyle.TabBarIndicator,
         heldTab,
     )
-    return nativeControlLensGeometryFunctions(samplingFunctions, sampledField) +
+    return nativeControlLensGeometryFunctions(samplingFunctions, sampledField, uniformRoundedTab) +
         NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
-        NativeControlDisplacementFunctions + sceneFunctions + NativeControlScenePlaneMain
+        NativeControlDisplacementFunctions + sceneFunctions +
+        (if (boundedTab) NativeControlBoundedScenePlaneMain else NativeControlScenePlaneMain)
 }
 
 /** Explicit analytic fixture; owned control renderers materialize each Gaussian stage. */
@@ -398,14 +413,21 @@ private fun nativeBuiltInControlLensProgram(
     tab: Boolean,
     precomposedScene: Boolean,
     heldTab: Boolean,
+    knownRestingThumb: Boolean,
     sampledSceneConsumer: Boolean = false,
     sampledField: Boolean = false,
+    uniformRoundedTab: Boolean = false,
 ): String {
+    if (knownRestingThumb) {
+        // A resting switch or slider without lifted content draws only its body and shadow.
+        return GlassSdfShader + samplingFunctions + NativeGlassEdgeFunctions + NativeControlLensUniforms +
+            NativeControlRestingBody + NativeControlRestingShadow + nativeControlRestingMain(tab = false)
+    }
     if (fullyResting) return nativeControlLensProgram(samplingFunctions, true, small, tab, precomposedScene)
     if (sampledSceneConsumer) {
-        return nativeControlLensGeometryFunctions(samplingFunctions, sampledField) + NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
+        return nativeControlLensGeometryFunctions(samplingFunctions, sampledField, uniformRoundedTab) + NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
             NativeVibrantColorMatrixFunctions + NativeControlSampledSceneFunctions + NativeControlPrecomposedSource +
-            NativeControlForegroundFunctions + NativeControlSampledSceneMain
+            NativeControlTabForegroundFunctions + NativeControlSampledSceneMain
     }
     val scene = NativeGlassRefractionFunctions + NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
         NativeVibrantColorMatrixFunctions + NativeControlDisplacementFunctions +
@@ -413,12 +435,14 @@ private fun nativeBuiltInControlLensProgram(
         if (small) NativeControlSmallForegroundFunctions + NativeControlBuiltInSmallLensMain
         else (if (precomposedScene) NativeControlPrecomposedSource else NativeControlAnalyticSource) +
             NativeControlForegroundFunctions + NativeControlBuiltInLensMain
-    return nativeControlLensGeometryFunctions(samplingFunctions, sampledField) + scene
+    return nativeControlLensGeometryFunctions(samplingFunctions, sampledField, uniformRoundedTab) + scene
 }
 
-private fun nativeControlLensGeometryFunctions(samplingFunctions: String, sampledField: Boolean): String =
-    if (sampledField) NativeControlLensFieldUniforms + samplingFunctions + NativeControlLensFieldSamplingFunctions
-    else GlassSdfShader + samplingFunctions
+private fun nativeControlLensGeometryFunctions(samplingFunctions: String, sampledField: Boolean, uniformRoundedTab: Boolean): String = when {
+    sampledField -> NativeControlLensFieldUniforms + samplingFunctions + NativeControlLensFieldSamplingFunctions
+    uniformRoundedTab -> NativeControlUniformRoundedField + samplingFunctions
+    else -> GlassSdfShader + samplingFunctions
+}
 
 private val NativeControlLensBlackShadow = FloatArray(3)
 
@@ -710,20 +734,15 @@ float4 nativeControlNatural(float2 p, bool blurred) {
     float4 rect = nativeAtlasRect(2);
     float2 pixel = clamp((lensOrigin + p) * lensBlurScale - .5, float2(0.0), rect.zw - 1.0);
     float2 index = floor(pixel);
-    float2 t = pixel - index;
-    return mix(mix(nativeAtlasTexel(index, rect), nativeAtlasTexel(index + float2(1.0, 0.0), rect), t.x),
-        mix(nativeAtlasTexel(index + float2(0.0, 1.0), rect), nativeAtlasTexel(index + 1.0, rect), t.x), t.y);
-}
+    float2 fraction = pixel - index;
+""" + NativeControlBilinearCorners + """
 float4 nativeControlMap(float3 field, float height) {
     return nativeControlDisplacementMapForRaster(float4(field, 1.0), max(height, .000001), 1.0,
         0.0, 0.0, float2(1.0, 0.0), lensScale);
 }
-float4 nativeControlMap(float2 p, float height) {
-    return nativeControlMap(glassField(p, 0.0), height);
-}
-float4 nativeControlPortal(float2 p) {
+float4 nativeControlPortal(float2 p, float3 field) {
     if (lensHasContent < .5) return float4(0.0);
-    float4 map = nativeControlMap(p, 11.2 * lensDensity);
+    float4 map = nativeControlMap(field, 11.2 * lensDensity);
     float2 q = p + map.rg * (-17.5 * lensDensity * lensMaterialProgress);
     return nativeAtlasBilinear(lensOrigin + q, 1) * map.b;
 }
@@ -759,43 +778,63 @@ private const val NativeControlHeldTabBelowFunctions = """float4 nativeControlBe
 }
 """
 
-private const val NativeControlLensSceneSuffix = """float4 nativeControlBelow(float2 p) {
-    float3 field = glassField(p, 0.0);
-    float4 original = nativeControlNatural(p, false);
-    return nativeControlBelow(p, field, original);
-}
-float4 nativeControlClearContent(float2 p) {
-    float coverage = nativeControlCoverage(glassField(p, 0.0));
+private const val NativeControlLensSceneSuffix = """float4 nativeControlClearContent(float2 p, float3 field) {
+    float coverage = nativeControlCoverage(field);
     // Clear content is the source of the provider's color portal. The provider wrapper
     // has zPosition -1 and hides the ordinary Clear source layer; BG must not sample it.
     float radius = 3.0 * lensDensity * lensMaterialProgress;
     float inner = 0.0;
     if (radius > 0.0) {
-        float innerD = glassField(p - float2(0.0, 7.0 * lensDensity * lensMaterialProgress), 0.0).x;
+        float innerD = glassDistance(p - float2(0.0, 7.0 * lensDensity * lensMaterialProgress));
         inner = (1.0 - nativeGaussianTail(innerD / radius)) * .06 * lensMaterialOpacity * coverage;
     }
-    return nativeControlOver(float4(0.0, 0.0, 0.0, inner), nativeControlPortal(p));
+    return nativeControlOver(float4(0.0, 0.0, 0.0, inner), nativeControlPortal(p, field));
 }
 float3 nativeControlFace(float3 color) {
     float y = dot(color, float3(.2126, .7152, .0722));
     float black = .1 * lensSmall;
     return mix(color, color + black * (1.0 - y), lensMaterialOpacity);
 }
-float4 nativeControlBackground(float2 p, float3 f, float4 originalRaw) {
+float4 nativeControlBackgroundMasks(float2 p, float3 f) {
     float aa = max((abs(f.y) + abs(f.z)) * lensScale, .0001);
     float coverage = nativeControlCoverage(f);
     float strip = nativeHighlightStrip(-(f.x - (2.0 / 3.0) * lensDensity), lensDensity, .75, aa);
     float key = strip * (nativeHighlightAngular(f.y, lensKeyThreshold) + nativeHighlightAngular(-f.y, lensKeyThreshold))
         * lensMaterialOpacity;
-    float shifted = glassField(p - float2(0.0, 8.0 * lensDensity), 0.0).x;
+    float shifted = glassDistance(p - float2(0.0, 8.0 * lensDensity));
     float ring = clamp(nativeGaussianTail(shifted / (3.0 * lensDensity) * .7071067811865476)
         - nativeGaussianTail((shifted + 4.0 * lensDensity) / (3.0 * lensDensity) * .7071067811865476), 0.0, 1.0) * lensRingOpacity;
-    float shadowD = glassField(p - float2(0.0, 7.0 * lensDensity), 0.0).x;
+    float shadowD = glassDistance(p - float2(0.0, 7.0 * lensDensity));
     float shadow = nativeGaussianTail(shadowD / (8.0 * lensDensity)) * lensShadowOpacity;
-    if (coverage <= 0.0 && key <= .000001 && ring <= .000001 && shadow <= .000001) return float4(0.0);
+    return float4(coverage, key, ring, shadow);
+}
+float4 nativeControlBackground(float2 p, out float3 field, out float4 source, out float4 originalRaw) {
+    float4 masks = float4(0.0);
+    float2 point = p;
+    float4 sampled = float4(0.0);
+    field = float3(0.0);
+    source = float4(0.0);
+    originalRaw = float4(0.0);
+    // Both points use the same SDF, material and managed atlas sampler. The
+    // inner ray needs a second evaluation only when it resolves to a different point.
+    for (int i = 0; i < 2; i++) {
+        float3 localField = glassField(point, 0.0);
+        float4 raw = nativeControlNatural(point, false);
+        sampled = nativeControlBelow(point, localField, raw);
+        if (i == 0) {
+            field = localField;
+            source = raw;
+            originalRaw = sampled;
+            masks = nativeControlBackgroundMasks(p, field);
+            if (masks.x <= 0.0 && masks.y <= .000001 && masks.z <= .000001 && masks.w <= .000001)
+                return float4(0.0);
+            float displacement = nativeGlassDisplacement(field.x, 1.0 / max(lensInner.x, .000001), lensInner.y);
+            point = p + field.yz * displacement;
+            if (all(equal(point, p))) break;
+        }
+    }
+    float coverage = masks.x, key = masks.y, ring = masks.z, shadow = masks.w;
     float3 original = originalRaw.rgb / max(originalRaw.a, .000001);
-    float displacement = nativeGlassDisplacement(f.x, 1.0 / max(lensInner.x, .000001), lensInner.y);
-    float4 sampled = nativeControlBelow(p + f.yz * displacement);
     float4 face = float4(nativeControlFace(sampled.rgb / max(sampled.a, .000001)), 1.0);
     // The style-0 shadow's tint-derived fill is supplied independently from the face.
     float4 shadowResult = float4(lensShadowColor * shadow, shadow);
@@ -810,17 +849,18 @@ float4 nativeControlAfterBackground(float2 p, float3 field, float4 background, f
     float4 scene = nativeControlOver(background, original);
     float4 map = nativeControlMap(field, lensPortal.x);
     float2 q = lensPortal.y == 0.0 ? p : p + map.rg * lensPortal.y;
-    float4 portal = nativeControlClearContent(q);
+    float3 portalField = all(equal(q, p)) ? field : glassField(q, 0.0);
+    float4 portal = nativeControlClearContent(q, portalField);
     // A nil control-displacement field is the identity endpoint. Its optional mask
     // must also become identity, rather than leaving an extra fixed AA multiplication.
     if (lensPortal.y != 0.0) portal *= mix(1.0, map.b, lensMaterialOpacity);
     return nativeControlOver(portal, scene);
 }
 float4 nativeControlBeforeForeground(float2 p) {
-    float3 field = glassField(p, 0.0);
-    float4 source = nativeControlNatural(p, false);
-    float4 original = nativeControlBelow(p, field, source);
-    return nativeControlAfterBackground(p, field, nativeControlBackground(p, field, original), original);
+    float3 field;
+    float4 source, original;
+    float4 background = nativeControlBackground(p, field, source, original);
+    return nativeControlAfterBackground(p, field, background, original);
 }
 float4 nativeControlResting(float2 p) {
     float coverage = nativeControlCoverage(glassField(p, 0.0));
@@ -838,7 +878,7 @@ float4 nativeControlResting(float2 p) {
         result = nativeControlOver(selected, result);
     }
     if (lensSliderShadow > 0.0) {
-        float d = glassField(p - float2(0.0, lensDensity), 0.0).x;
+        float d = glassDistance(p - float2(0.0, lensDensity));
         float shadow = nativeGaussianTail(d / (5.0 * lensDensity)) * lensSliderShadow;
         result = nativeControlOver(result, float4(0.0, 0.0, 0.0, shadow));
     }
@@ -879,10 +919,10 @@ float nativeControlBackgroundAlpha(float2 p, float3 f) {
     float strip = nativeHighlightStrip(-(f.x - (2.0 / 3.0) * lensDensity), lensDensity, .75, aa);
     float key = strip * (nativeHighlightAngular(f.y, lensKeyThreshold) + nativeHighlightAngular(-f.y, lensKeyThreshold))
         * lensMaterialOpacity;
-    float shifted = glassField(p - float2(0.0, 8.0 * lensDensity), 0.0).x;
+    float shifted = glassDistance(p - float2(0.0, 8.0 * lensDensity));
     float ring = clamp(nativeGaussianTail(shifted / (3.0 * lensDensity) * .7071067811865476)
         - nativeGaussianTail((shifted + 4.0 * lensDensity) / (3.0 * lensDensity) * .7071067811865476), 0.0, 1.0) * lensRingOpacity;
-    float shadowD = glassField(p - float2(0.0, 7.0 * lensDensity), 0.0).x;
+    float shadowD = glassDistance(p - float2(0.0, 7.0 * lensDensity));
     float shadow = nativeGaussianTail(shadowD / (8.0 * lensDensity)) * lensShadowOpacity;
     if (coverage <= 0.0 && key <= .000001 && ring <= .000001 && shadow <= .000001) return 0.0;
     // An opaque captured source keeps below.a=1, so identity capture leaves this
@@ -914,6 +954,18 @@ half4 main(float2 p) {
 }
 """
 
+private const val NativeControlBoundedScenePlaneMain = """
+uniform float4 lensSceneSupport;
+half4 main(float2 p) {
+    float4 rect = nativeAtlasRect(3);
+    if (p.x < 0.0 || p.y < 0.0 || p.x >= rect.z || p.y >= rect.w) return half4(0.0);
+    float2 coordinate = p * nativeAtlasBaseSize / rect.zw;
+    if (any(lessThan(coordinate, lensSceneSupport.xy)) || any(greaterThan(coordinate, lensSceneSupport.zw)))
+        return half4(0.0);
+    return half4(nativeAtlasEncode(nativeControlBeforeForeground(coordinate - lensOrigin)));
+}
+"""
+
 private const val NativeControlLensMainPrefix = """
 uniform float2 lensOutputOrigin;
 uniform float2 lensOutputSize;
@@ -922,10 +974,9 @@ half4 main(float2 coordinate) {
         || coordinate.y >= lensOutputSize.y + lensOutputOrigin.y * 2.0) return half4(0.0);
     float2 p = (coordinate - lensOutputOrigin) * lensScale;
     if (lensFullyResting > .5) return half4(nativeAtlasEncode(nativeControlResting(p)));
-    float3 f = glassField(p, 0.0);
-    float4 source = nativeControlNatural(p, false);
-    float4 original = nativeControlBelow(p, f, source);
-    float4 background = nativeControlBackground(p, f, original);
+    float3 f;
+    float4 source, original;
+    float4 background = nativeControlBackground(p, f, source, original);
     float4 actual = nativeControlAfterBackground(p, f, background, original);
 """
 
@@ -956,7 +1007,7 @@ private const val NativeControlLensMainSuffix = """
         lensDensity / lensScale, 0.0, .75) * lensHighlight;
     if (mask > 0.0) result = nativeControlOver(nativeVibrantColorMatrix(float4(0.0, 0.0, 0.0, mask), actual), result);
     if (lensSliderShadow > 0.0) {
-        float d = glassField(p - float2(0.0, lensDensity), 0.0).x;
+        float d = glassDistance(p - float2(0.0, lensDensity));
         float shadow = nativeGaussianTail(d / (5.0 * lensDensity)) * lensSliderShadow;
         result = nativeControlOver(result, float4(0.0, 0.0, 0.0, shadow));
     }
@@ -971,10 +1022,9 @@ half4 main(float2 coordinate) {
     if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= lensOutputSize.x + lensOutputOrigin.x * 2.0
         || coordinate.y >= lensOutputSize.y + lensOutputOrigin.y * 2.0) return half4(0.0);
     float2 p = (coordinate - lensOutputOrigin) * lensScale;
-    float3 f = glassField(p, 0.0);
-    float4 source = nativeControlNatural(p, false);
-    float4 original = nativeControlBelow(p, f, source);
-    float4 background = nativeControlBackground(p, f, original);
+    float3 f;
+    float4 source, original;
+    float4 background = nativeControlBackground(p, f, source, original);
     float4 actual = nativeControlAfterBackground(p, f, background, original);
 """
 
@@ -988,15 +1038,19 @@ half4 main(float2 coordinate) {
     float2 p = (coordinate - lensOutputOrigin) * lensScale;
     float3 f = glassField(p, 0.0);
     float4 source = nativeAtlasBilinear(lensOrigin + p, 0);
-    float4 actual = nativeControlForegroundSource(p);
     float backgroundAlpha = source.a >= 1.0 ? nativeControlBackgroundAlpha(p, f) : 0.0;
+    if (source.a >= 1.0 && max(backgroundAlpha, nativeControlCoverage(f)) <= .000001 && lensSliderShadow <= 0.0)
+        return half4(0.0);
+    float4 actual = nativeControlForegroundSource(p);
 """
 
 private const val NativeControlLensMain = NativeControlLensMainPrefix + NativeControlFullForegroundMain + NativeControlLensMainSuffix
 private const val NativeControlSmallLensMain = NativeControlLensMainPrefix + NativeControlSmallForegroundMain + NativeControlLensMainSuffix
 private const val NativeControlBuiltInLensMain = NativeControlBuiltInLensMainPrefix + NativeControlFullForegroundMain + NativeControlLensMainSuffix
 private const val NativeControlBuiltInSmallLensMain = NativeControlBuiltInLensMainPrefix + NativeControlSmallForegroundMain + NativeControlLensMainSuffix
-private val NativeControlSampledSceneMain = NativeControlSampledSceneMainPrefix + NativeControlFullForegroundMain +
+private val NativeControlSampledSceneMain = NativeControlSampledSceneMainPrefix + """
+    float4 foreground = nativeControlTabForeground(p, f, actual, size.y, lensAberration.x, lensScale);
+""" +
     NativeControlLensMainSuffix.replace("max(background.a, coverage)", "max(backgroundAlpha, coverage)")
 
 /** SmallVariant's zero refraction/aberration reads the already reconstructed scene once. */
@@ -1019,7 +1073,7 @@ float4 nativeControlSmallForeground(float4 source, float4 field, float4 edge, fl
 }
 """
 
-private const val NativeControlRestingFunctions = """
+private const val NativeControlRestingBody = """
 float4 nativeControlOver(float4 source, float4 destination) {
     return source + destination * (1.0 - source.a);
 }
@@ -1028,10 +1082,8 @@ float4 nativeControlRestingBlur(float2 p) {
     float4 rect = nativeAtlasRect(2);
     float2 pixel = clamp((lensOrigin + p) * lensBlurScale - .5, float2(0.0), rect.zw - 1.0);
     float2 index = floor(pixel);
-    float2 t = pixel - index;
-    return mix(mix(nativeAtlasTexel(index, rect), nativeAtlasTexel(index + float2(1.0, 0.0), rect), t.x),
-        mix(nativeAtlasTexel(index + float2(0.0, 1.0), rect), nativeAtlasTexel(index + 1.0, rect), t.x), t.y);
-}
+    float2 fraction = pixel - index;
+""" + NativeControlBilinearCorners + """
 float4 nativeControlResting(float2 p, bool tab) {
     float3 field = glassField(p, 0.0);
     float coverage = nativeGlassShapeCoverage(float3(field.x / lensScale, field.yz), 1.0);
@@ -1042,18 +1094,25 @@ float4 nativeControlResting(float2 p, bool tab) {
         body = float4(dot(lensIdleRow0, straight), dot(lensIdleRow1, straight), dot(lensIdleRow2, straight), 1.0);
     }
     float4 result = float4(body.rgb * body.a, body.a) * coverage;
-    if (lensHasContent > .5 && coverage > 0.0) {
+"""
+
+private const val NativeControlRestingSelection = """    if (lensHasContent > .5 && coverage > 0.0) {
         float4 selected = nativeAtlasBilinear(lensOrigin + p, 1) * coverage;
         result = nativeControlOver(selected, result);
     }
-    if (lensSliderShadow > 0.0) {
-        float d = glassField(p - float2(0.0, lensDensity), 0.0).x;
+"""
+
+private const val NativeControlRestingShadow = """    if (lensSliderShadow > 0.0) {
+        float d = glassDistance(p - float2(0.0, lensDensity));
         float shadow = nativeGaussianTail(d / (5.0 * lensDensity)) * lensSliderShadow;
         result = nativeControlOver(result, float4(0.0, 0.0, 0.0, shadow));
     }
     return result;
 }
 """
+
+private const val NativeControlRestingFunctions =
+    NativeControlRestingBody + NativeControlRestingSelection + NativeControlRestingShadow
 
 private fun nativeControlRestingMain(tab: Boolean): String = """
 uniform float2 lensOutputOrigin;

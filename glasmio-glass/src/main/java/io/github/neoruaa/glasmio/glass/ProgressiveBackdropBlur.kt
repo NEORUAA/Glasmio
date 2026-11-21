@@ -2,14 +2,17 @@ package io.github.neoruaa.glasmio.glass
 
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.ceil
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
@@ -18,8 +21,14 @@ import io.github.neoruaa.glasmio.glass.render.effects.blur
 import io.github.neoruaa.glasmio.glass.render.effects.runtimeShaderEffect
 import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 
-private val HorizontalProgressiveBlurShader = progressiveBlurPassShader(isVertical = false)
-private val VerticalProgressiveBlurShader = progressiveBlurPassShader(isVertical = true)
+// A normalized intensity animation keeps the same programs throughout. Only the static
+// loop bound differs between families; each pixel still uses its exact local radius.
+private enum class ProgressiveBlurKernel(val limit: Int) {
+    Short(16), Medium(32), Large(64), ExtraLarge(128), Full(150);
+
+    val horizontal by lazy { progressiveBlurPassShader(isVertical = false, limit = limit) }
+    val vertical by lazy { progressiveBlurPassShader(isVertical = true, limit = limit) }
+}
 
 /**
  * AndroidX progressive blur uses two separable Gaussian passes and evaluates the blur radius at
@@ -29,30 +38,24 @@ private val VerticalProgressiveBlurShader = progressiveBlurPassShader(isVertical
  */
 private fun progressiveBlurPassShader(
     isVertical: Boolean,
+    limit: Int,
 ): String {
     val pairedOffset =
         if (isVertical) "vec2(0.0, i + weightH / weight)"
         else "vec2(i + weightH / weight, 0.0)"
     val oddOffset = if (isVertical) "vec2(0.0, r)" else "vec2(r, 0.0)"
-    val boundsCheck =
-        if (isVertical) {
-            "return step(bounds.y, sampleCoord.y) * (1.0 - step(bounds.w, sampleCoord.y));"
-        } else {
-            "return step(bounds.x, sampleCoord.x) * (1.0 - step(bounds.z, sampleCoord.x));"
-        }
+    val axis = if (isVertical) "y" else "x"
     return """
         uniform shader content;
         uniform float blurRadius;
-        uniform float4 crop;
-        uniform float unbounded;
+        uniform float extent;
         uniform float startIntensity;
         uniform float endIntensity;
         uniform float2 startPoint;
         uniform float2 endPoint;
-        const float maxRadius = 150.0;
 
-        float inBoundsOnMovedAxis(vec2 sampleCoord, float4 bounds) {
-            $boundsCheck
+        bool inBounds(vec2 p) {
+            return p.$axis >= 0.0 && p.$axis < extent;
         }
 
         vec4 blur(vec2 coord, float radius) {
@@ -67,7 +70,7 @@ private fun progressiveBlurPassShader(
             float weightRatioStep = exp(-inverseSigmaSquared);
             float currentWeight = 1.0;
 
-            for (float i = 1.0; i < maxRadius; i += 2.0) {
+            for (float i = 1.0; i < $limit.0; i += 2.0) {
                 if (i >= r) { break; }
 
                 currentWeight *= weightRatio;
@@ -80,36 +83,32 @@ private fun progressiveBlurPassShader(
                 vec2 offset = $pairedOffset;
 
                 vec2 newCoord1 = coord - offset;
-                float mask1 = inBoundsOnMovedAxis(newCoord1, crop);
-                weightSum += weight * max(mask1, unbounded);
-                if (mask1 > 0.0) {
+                if (inBounds(newCoord1)) {
+                    weightSum += weight;
                     result += weight * content.eval(newCoord1);
                 }
 
                 vec2 newCoord2 = coord + offset;
-                float mask2 = inBoundsOnMovedAxis(newCoord2, crop);
-                weightSum += weight * max(mask2, unbounded);
-                if (mask2 > 0.0) {
+                if (inBounds(newCoord2)) {
+                    weightSum += weight;
                     result += weight * content.eval(newCoord2);
                 }
             }
 
-            float oddMask = mod(r, 2.0) * (1.0 - step(maxRadius, r));
-            float oddWeight = currentWeight * weightRatio * oddMask;
-            vec2 tailOffset = $oddOffset;
-
-            vec2 oddCoord1 = coord - tailOffset;
-            float oddBounds1 = inBoundsOnMovedAxis(oddCoord1, crop);
-            weightSum += oddWeight * max(oddBounds1, unbounded);
-            if (oddBounds1 > 0.0) {
-                result += oddWeight * content.eval(oddCoord1);
-            }
-
-            vec2 oddCoord2 = coord + tailOffset;
-            float oddBounds2 = inBoundsOnMovedAxis(oddCoord2, crop);
-            weightSum += oddWeight * max(oddBounds2, unbounded);
-            if (oddBounds2 > 0.0) {
-                result += oddWeight * content.eval(oddCoord2);
+            // Even radii include their final texel in a pair.
+            if (r < 150.0 && mod(r, 2.0) == 1.0) {
+                float oddWeight = currentWeight * weightRatio;
+                vec2 tailOffset = $oddOffset;
+                vec2 oddCoord1 = coord - tailOffset;
+                if (inBounds(oddCoord1)) {
+                    weightSum += oddWeight;
+                    result += oddWeight * content.eval(oddCoord1);
+                }
+                vec2 oddCoord2 = coord + tailOffset;
+                if (inBounds(oddCoord2)) {
+                    weightSum += oddWeight;
+                    result += oddWeight * content.eval(oddCoord2);
+                }
             }
 
             return result / weightSum;
@@ -140,11 +139,16 @@ fun BackdropEffectScope.progressiveBackdropBlur(
 
     val resolvedRadius = maxRadius.coerceAtMost(150f)
 
-    fun applyPass(key: String, shader: String) {
-        runtimeShaderEffect(key, shader, "content") {
+    // The gradient is a clamped interpolation. Leave one pixel for rounding at
+    // family boundaries. A non-finite reach retains the original full loop bound.
+    val maximumReach = resolvedRadius * maxOf(1f, startIntensity, endIntensity)
+    val kernel = ProgressiveBlurKernel.entries.firstOrNull { maximumReach + 1f <= it.limit }
+        ?: ProgressiveBlurKernel.Full
+
+    fun applyPass(key: String, shader: String, extent: Float) {
+        runtimeShaderEffect("$key.${kernel.limit}", shader, "content") {
             setFloatUniform("blurRadius", resolvedRadius)
-            setFloatUniform("crop", 0f, 0f, size.width, size.height)
-            setFloatUniform("unbounded", 0f)
+            setFloatUniform("extent", extent)
             setFloatUniform("startIntensity", startIntensity)
             setFloatUniform("endIntensity", endIntensity)
             setFloatUniform("startPoint", 0f, size.height * startYFraction)
@@ -152,11 +156,8 @@ fun BackdropEffectScope.progressiveBackdropBlur(
         }
     }
 
-    applyPass("IosTopBarProgressiveBlurHorizontal", HorizontalProgressiveBlurShader)
-    applyPass(
-        key = "IosTopBarProgressiveBlurVertical",
-        shader = VerticalProgressiveBlurShader,
-    )
+    applyPass("IosTopBarProgressiveBlurHorizontal", kernel.horizontal, size.width)
+    applyPass("IosTopBarProgressiveBlurVertical", kernel.vertical, size.height)
 }
 
 /** Compatibility entry point. A progressive blur preserves source colors and never adds tint. */
@@ -215,9 +216,13 @@ fun Modifier.scrollEdgeContentFade(
             startY = top,
             endY = header,
         )
+        // Past the gradient, DstIn multiplies every channel by one. End the mask rectangle
+        // on the next whole pixel while retaining the exact fractional gradient coordinates.
+        val maskSize = Size(size.width, minOf(size.height, ceil(header)))
         onDrawWithContent {
             drawContent()
-            drawRect(opacityMask, blendMode = BlendMode.DstIn)
+            val extent = if (drawContext.canvas.nativeCanvas.isHardwareAccelerated) maskSize else size
+            drawRect(opacityMask, size = extent, blendMode = BlendMode.DstIn)
         }
     }
 }

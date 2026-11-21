@@ -7,7 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.*
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
@@ -373,12 +373,15 @@ fun <T> GlasmioTabBar(
                         tint = if (!interactive) colors.accent else if (selected)
                             androidx.compose.ui.graphics.lerp(colors.accent, colors.content, animation.pressProgress)
                             else colors.content)
-                    else Text(item.label, style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    else BasicText(item.label,
+                        style = if (interactive) labelStyle else labelStyle.copy(fontWeight = FontWeight.Bold),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(horizontal = 8.dp),
-                        color = if (!interactive) colors.accent else if (selected)
-                            androidx.compose.ui.graphics.lerp(colors.accent, colors.content, animation.pressProgress)
-                            else colors.content,
-                        fontWeight = if (interactive) FontWeight.SemiBold else FontWeight.Bold)
+                        color = {
+                            if (!interactive) colors.accent else if (selected)
+                                androidx.compose.ui.graphics.lerp(colors.accent, colors.content, animation.pressProgress)
+                            else colors.content
+                        })
                 }
             }
         }

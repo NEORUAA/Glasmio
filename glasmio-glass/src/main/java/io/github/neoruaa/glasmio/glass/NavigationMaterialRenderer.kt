@@ -201,7 +201,7 @@ internal fun updateNavigationMaterialUniforms(
     }
 }
 
-private fun updateNavigationMaterialEndpointUniforms(
+internal fun updateNavigationMaterialEndpointUniforms(
     recipe: NavigationMaterialRecipe?,
     opacity: Float,
     set: (String, FloatArray) -> Unit,

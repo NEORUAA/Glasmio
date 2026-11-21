@@ -5,8 +5,10 @@ import android.graphics.RenderEffect
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
@@ -23,6 +25,7 @@ import io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions
 import io.github.neoruaa.glasmio.glass.render.highlight.NativeGlassEdgeFunctions
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.log2
 import kotlin.math.max
 import kotlin.math.pow
@@ -30,6 +33,8 @@ import kotlin.math.pow
 /** Reuses a cached GPU contour field in effect pixels. */
 internal class NativeGlassFilterField(
     val shaderFunctions: String,
+    val hasBoundedOpticalNormal: Boolean = false,
+    val mipFaceRegions: Pair<Rect, Rect>? = null,
     val configure: (android.graphics.RuntimeShader) -> Unit,
 )
 
@@ -47,8 +52,30 @@ float3 navigationGlassOpticalFieldFromShape(float2 point, float3 rawShapeField) 
     return ${if (hasShapeField) "navigationGlassField(point)" else "rawShapeField"};
 }
 """
-    return result
+    return result + if (functions == NativeDefaultFieldShader) NativeDefaultOffsetDistances else NativeCustomOffsetDistances
 }
+
+private const val NativeCustomOffsetDistances = """
+float2 navigationGlassOffsetDistances(float2 point, bool ring, bool shadow) {
+    return float2(ring ? navigationGlassShapeField(point).x : 0.0,
+        shadow ? navigationGlassShadowDistance(point) : 0.0);
+}
+"""
+
+private const val NativeDefaultOffsetDistances = """
+float2 navigationGlassOffsetDistances(float2 point, bool ring, bool shadow) {
+    float2 halfSize = size * .5;
+    float radius = radiusAt(point);
+    float expanded = radius * 1.5286649465560913;
+    float2 circle = abs(point - halfSize) - halfSize + expanded;
+    float interior = max(circle.x, circle.y);
+    // Both supercircle coordinates and curvatures vanish inside this central rectangle.
+    // Retain the original two operations around expanded to preserve floating-point rounding.
+    if (radius >= .001 && min(halfSize.x, halfSize.y) > expanded && interior <= 0.0)
+        return float2(interior - expanded);
+    return float2(navigationGlassField(point).x);
+}
+"""
 
 internal const val DefaultNativeGlassAtlas = true
 internal const val NativeGlassAtlasBackingCopy = false
@@ -179,6 +206,7 @@ private data class NativeAtlasMaterialSourceKey(
     val nativeGammaStorage: Boolean,
     val completionTopology: NativeGlassCompletionTopology?,
     val samplingLayoutKey: String,
+    val hasOpticalStage: Boolean,
 )
 
 /** The producer is materialized before this single sampled material program evaluates its ROI. */
@@ -203,25 +231,64 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     // Store managed mip intermediates as working-space colors. Native-gamma channel
     // transport through HWUI layers can darken deformed or resized surfaces.
     // Decode at each sampling boundary; SDR retains its existing fast path.
+    val origin = sourceOrigin ?: Offset(padding, padding)
+    val finalSampleRegion = if (storage.colorManagedNativeGlass && storage.nativeGlassHardwareRendering &&
+        field?.hasBoundedOpticalNormal == true && completion != null && sourceOrigin == null &&
+        storage.samplingScale == 1f && completion.textureScale == null && completion.outputSize == null &&
+        completion.outputDensity == null && completion.sourceShadow == null &&
+        sourceSize.width in 1f..16384f && sourceSize.height in 1f..16384f &&
+        padding in 0f..16384f && density in .125f..32f && maximumLod in 0f..32f &&
+        storage.fullSize == size &&
+        (!refractionEnabled || (profile.innerHeight.isFinite() && profile.outerHeight.isFinite()))) {
+        val outputDensity = storage.sourceDensity.density
+        val guard = ceil(max(.5333333333333333f * outputDensity + 1f,
+            navigationShadowSupport(completion.shadow?.radius ?: 0f, outputDensity)))
+        // The two-capsule union mixes unit gradients and only contracts their axes. Include
+        // the complete output guard, both rays, the fill offsets and rounding of the raster.
+        val ray = if (refractionEnabled) max(abs(profile.innerAmount), abs(profile.outerAmount)) * density else 0f
+        val margin = guard + max(ray * 1.125f, maximumLod * .25f) + 2f
+        if (margin in 0f..16384f && size.width > 0f && size.height > 0f &&
+            size.maxDimension + guard * 2f <= 16384f) {
+            IntRect(floor(origin.x - margin).toInt(), floor(origin.y - margin).toInt(),
+                ceil(origin.x + size.width + margin).toInt(), ceil(origin.y + size.height + margin).toInt())
+        } else null
+    } else null
+    val sparseInput = field?.mipFaceRegions?.takeIf {
+        finalSampleRegion != null && profile.mainBlurAlpha0 in 0f..1f && profile.mainBlurAlpha1 in 0f..1f &&
+            profile.mainBlurDistance0.isFinite()
+    }?.let { (first, second) ->
+        val ray = if (refractionEnabled) max(abs(profile.innerAmount), abs(profile.outerAmount)) * density else 0f
+        NativeMipSampleIslands(first.translate(origin), second.translate(origin), ray * 1.125f + 2f,
+            maximumLod * .25f + 2f, ceil(nativeNavigationGlassLod(radius) + .001f).toInt())
+    }
     val atlas = pyramid.atlas(source, IntSize(ceil(sourceSize.width).toInt(), ceil(sourceSize.height).toInt()),
         maximumLod, NativeGlassMipKernel.Compute13Tap, colorManaged = storage.colorManagedNativeGlass,
         nativeGammaStorage = false,
-        allowHardwareLinearSampling = storage.supportsNativeGlassHardwareLinearSampling)
+        allowHardwareLinearSampling = storage.supportsNativeGlassHardwareLinearSampling,
+        finalSampleRegion = finalSampleRegion, sampleIslands = sparseInput)
     val functions = field?.shaderFunctions ?: NativeDefaultFieldShader
-    val completionTopology = completion?.programTopology()
+    val requestedTopology = completion?.programTopology()
+    // A morph can bind its own size and radii to the same default field program.
+    val shareOptics = Build.VERSION.SDK_INT >= 36 && functions == NativeDefaultFieldShader && !atlas.colorManaged &&
+        storage.supportsNativeGlassHardwareLinearSampling &&
+        (if (requestedTopology == null) storage.supportsRetainedOpticalStage
+         else requestedTopology == OrdinaryAtlasCompletion && (storage.nativeGlassHardwareRendering ||
+             (atlas.hasRegularMipLayout && !atlas.nativeGammaStorage)))
+    val completionTopology = if (shareOptics) OrdinaryAtlasCompletion else requestedTopology
     // Keep the full field source in the key so hash collisions retain source validation.
     val sources = storage.cachedResource("Glasmio.NativeAtlas.material.sources") {
         mutableMapOf<NativeAtlasMaterialSourceKey, String>()
     }
-    val program = sources.getOrPut(NativeAtlasMaterialSourceKey(
-        functions, atlas.colorManaged, atlas.nativeGammaStorage, completionTopology, atlas.samplingLayoutKey,
+    val program = if (shareOptics && atlas.hasRegularMipLayout) NativeRetainedCompletionProgram
+    else sources.getOrPut(NativeAtlasMaterialSourceKey(
+        functions, atlas.colorManaged, atlas.nativeGammaStorage, completionTopology, atlas.samplingLayoutKey, shareOptics,
     )) {
-        (if (completion != null) nativeGlassCompletionFieldFunctions(functions) else functions) +
+        (if (completionTopology != null) nativeGlassCompletionFieldFunctions(functions) else functions) +
             (if (completionTopology?.hasSourceShadow == true &&
                 !functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") +
-            atlas.samplingFunctions + NativeAtlasMaterialFunctions + if (completion == null) NativeAtlasMaterialMain
+            atlas.samplingFunctions + NativeAtlasMaterialFunctions + if (completionTopology == null) NativeAtlasMaterialMain
         else (if (!atlas.colorManaged) GlassColorSpaceShaderFunctions else "") +
-            nativeGlassCompletionShader(requireNotNull(completionTopology))
+            nativeGlassCompletionShader(completionTopology, if (shareOptics) NativeAtlasOpticalStage else "")
     }
     val shader = obtainRuntimeShader("Glasmio.NativeAtlas.material.${atlas.colorManaged}.${atlas.nativeGammaStorage}.${completion != null}.${completionTopology?.cacheKey ?: 0}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
         program).asAndroidRuntimeShader()
@@ -230,7 +297,6 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
         shader.setFloatUniform("size", size.width, size.height)
         shader.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, layoutDirection, this))
     } else field.configure(shader)
-    val origin = sourceOrigin ?: Offset(padding, padding)
     shader.setFloatUniform("captureOrigin", origin.x, origin.y)
     shader.setFloatUniform("pointScale", density)
     shader.setFloatUniform("nativeAtlasRadii", radius, fillRadius)
@@ -245,6 +311,7 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     shader.setFloatUniform("nativeAtlasOuterOpacity", outerOpacity)
     storage.materializeNativeGlassAtlas(atlas)
     if (completion != null) configureNativeGlassCompletion(shader, completion, storage, origin)
+    else if (shareOptics) shader.setFloatUniform("nativeOutputScale", -1f)
     renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "content").asComposeRenderEffect()
     return true
 }
@@ -332,48 +399,86 @@ float nativeAtlasBlurOpacity(float distance) {
         clamp((d - nativeAtlasBlurParameters.x) / max(-1.0 - nativeAtlasBlurParameters.x, .00001), 0.0, 1.0))
         : (d < 0.0 ? mix(nativeAtlasBlurParameters.z, .5, d + 1.0) : 1.0);
 }
-float4 nativeAtlasRay(float2 coordinate, float3 field, bool outer) {
+float3 nativeAtlasRayAddress(float2 coordinate, float3 field, bool outer) {
     float inverseHeight = outer ? nativeAtlasLensParameters.z : nativeAtlasLensParameters.x;
     float amount = outer ? nativeAtlasLensParameters.w : nativeAtlasLensParameters.y;
     float displacement = nativeGlassDisplacement(field.x, inverseHeight, amount);
     float lod = nativeGlassLod(nativeAtlasRadii.x * nativeAtlasBlurOpacity(field.x + displacement));
-    return nativeAtlasSample(coordinate + field.yz * displacement, lod);
+    return float3(coordinate + field.yz * displacement, lod);
 }
 float4 nativeAtlasFiltered(float2 coordinate, float3 field) {
-    float4 inner = nativeAtlasRay(coordinate, field, false);
-    // AIR first combines the mip samples, then removes source alpha once for the face.
+    bool hasFill = nativeAtlasRadii.y > 0.0 && nativeAtlasFillWeights.z > 0.0;
+    float outerOpacity = nativeAtlasOuterOpacity > 0.0
+        ? nativeGlassRefractionWeight(field.x, -pointScale, 0.0, nativeAtlasOuterOpacity) : 0.0;
+    float fillLod = hasFill ? nativeGlassLod(nativeAtlasRadii.y) : 0.0;
+    float4 inner = float4(0.0), outer = float4(0.0), fillPair = float4(0.0);
+    // Keep one copy of the color-managed trilinear sampler in the optical program.
+    for (int ray = 0; ray < 4; ++ray) {
+        float3 address;
+        if (ray == 0) {
+            address = nativeAtlasRayAddress(coordinate, field, false);
+        } else if (ray == 3) {
+            if (outerOpacity <= 0.0) break;
+            address = nativeAtlasRayAddress(coordinate, field, true);
+        } else {
+            if (!hasFill) continue;
+            float offset = fillLod * .25;
+            address = float3(ray == 1 ? coordinate - offset : coordinate + offset, fillLod);
+        }
+        float4 sampleValue = nativeAtlasSample(address.xy, address.z);
+        if (ray == 0) inner = sampleValue;
+        else if (ray == 1) fillPair = sampleValue;
+        else if (ray == 2) fillPair = (fillPair + sampleValue) * .5;
+        else outer = sampleValue;
+    }
     float3 color = nativeAtlasFlush(inner.rgb / max(inner.a, .000001));
-    if (nativeAtlasRadii.y > 0.0 && nativeAtlasFillWeights.z > 0.0) {
-        float lod = nativeGlassLod(nativeAtlasRadii.y);
-        float offset = lod * .25;
-        float4 sampledFill = (nativeAtlasSample(coordinate - offset, lod)
-            + nativeAtlasSample(coordinate + offset, lod)) * .5;
-        float3 fill = nativeAtlasFlush(sampledFill.rgb / max(sampledFill.a, .000001));
+    if (hasFill) {
+        float3 fill = nativeAtlasFlush(fillPair.rgb / max(fillPair.a, .000001));
         color = nativeAtlasFillWeights.x * min(color, fill) + nativeAtlasFillWeights.y * max(color, fill)
             + (1.0 - nativeAtlasFillWeights.x - nativeAtlasFillWeights.y) * color;
         color = mix(color, fill, nativeAtlasFillWeights.z);
     }
     float4 result = float4(color, 1.0);
-    if (nativeAtlasOuterOpacity > 0.0) {
-        float opacity = nativeGlassRefractionWeight(field.x, -pointScale, 0.0, nativeAtlasOuterOpacity);
-        if (opacity > 0.0) {
-            float4 outer = nativeAtlasRay(coordinate, field, true);
-            outer.rgb = nativeAtlasFlush(outer.rgb);
-            // The recovered outer sample remains raw RGBA. This is a four-channel mix, not SrcOver.
-            result = mix(result, outer, opacity);
-        }
+    if (outerOpacity > 0.0) {
+        outer.rgb = nativeAtlasFlush(outer.rgb);
+        result = mix(result, outer, outerOpacity);
     }
-    // Native face processing consumes this mixed RGB directly and retains its raw alpha.
-    // Do not force the outer sample opaque or unpremultiply it here.
     return result;
 }
 """
 
-private const val NativeAtlasMaterialMain = """
-half4 main(float2 coordinate) {
-    if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= nativeAtlasBaseSize.x
+// The retained SDR morph and the ordinary surface share a driver program. A still finishes
+// on its original texture grid, so the final material sees the original quantized texels.
+internal val OrdinaryAtlasCompletion = NativeGlassCompletionTopology(
+    hasSourceRecipe = false, hasTargetAppearance = false, hasSourceAppearance = false,
+    hasSourceShadow = false, hasTargetFills = false, hasSourceFills = false, hasSourceTintMatrix = false,
+)
+
+// A negative last level identifies the retained pair. Each member has a full base grid.
+// Optical draws still use hardware-linear mips; the stored completion uses four manual taps.
+internal val NativeRetainedCompletionProgram: String by lazy {
+    nativeGlassCompletionFieldFunctions(NativeDefaultFieldShader) + nativeRegularHardwareSdrSampling +
+        NativeAtlasMaterialFunctions + GlassColorSpaceShaderFunctions + NativeStoredPairBilinear + """
+float4 nativeStoredOrOptical(float2 coordinate, float3 field) {
+    if (nativeAtlasLastLevel < 0.0) return nativeStoredPairBilinear(coordinate, nativeAtlasRects[1]);
+    return nativeAtlasFiltered(coordinate, field);
+}
+float4 nativeStoredOrOriginal(float2 coordinate) {
+    if (nativeAtlasLastLevel < 0.0) return nativeStoredPairBilinear(coordinate, nativeAtlasRects[0]);
+    return nativeAtlasBilinear(coordinate, 0);
+}
+""" + nativeGlassCompletionShader(OrdinaryAtlasCompletion, NativeAtlasOpticalStage, retainedPair = true)
+}
+
+private const val NativeAtlasMaterialOutput = """    if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= nativeAtlasBaseSize.x
         || coordinate.y >= nativeAtlasBaseSize.y) return half4(0.0);
     return half4(nativeAtlasEncode(nativeAtlasFiltered(coordinate,
         navigationGlassField(coordinate - captureOrigin))));
-}
 """
+
+private const val NativeAtlasMaterialMain = """
+half4 main(float2 coordinate) {
+""" + NativeAtlasMaterialOutput + "}\n"
+
+private const val NativeAtlasOpticalStage = """    if (nativeOutputScale < 0.0) {
+""" + NativeAtlasMaterialOutput + "    }\n"

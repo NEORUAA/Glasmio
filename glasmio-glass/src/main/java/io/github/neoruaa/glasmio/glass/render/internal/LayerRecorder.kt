@@ -33,3 +33,9 @@ internal fun DrawScope.recordLayer(
         }
     }
 }
+
+/** HWUI records hardware layer snapshots in 64-pixel backing tiles. */
+internal fun IntSize.withFullHardwareBacking(): IntSize {
+    fun align(value: Int): Int = if (value in 1..Int.MAX_VALUE - 63) (value + 63) and -64 else value
+    return IntSize(align(width), align(height))
+}

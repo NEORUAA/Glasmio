@@ -2,7 +2,9 @@ package io.github.neoruaa.glasmio.scaffold.navigation
 
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.structuralEqualityPolicy
 import io.github.neoruaa.glasmio.scaffold.*
 
 /** Navigation-owned motion clock shared by the body display and the scaffold header. */
@@ -17,6 +19,7 @@ class GlasmioNavHeaderMotion(
     override val frame: State<GlasmioNavigationFrame> = derivedStateOf {
         state.value.copy(playTimeNanos = clock.value?.invoke() ?: state.value.playTimeNanos)
     }
+    internal val operation by derivedStateOf(structuralEqualityPolicy()) { state.value.operation }
     var committedKey: Any = initialKey
         private set
     val interactionKey: Any get() = if (state.value.phase == GlasmioNavigationPhase.Canceling || state.value.phase == GlasmioNavigationPhase.Tracking) state.value.fromEntryKey else state.value.toEntryKey

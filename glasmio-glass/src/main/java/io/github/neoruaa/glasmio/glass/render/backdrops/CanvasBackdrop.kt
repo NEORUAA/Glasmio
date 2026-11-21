@@ -12,6 +12,7 @@ package io.github.neoruaa.glasmio.glass.render.backdrops
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -27,13 +28,20 @@ fun rememberCanvasBackdrop(
     }
 }
 
+/** Draw the same local fill as drawRect while exposing its finite support to native filters. */
+@Composable
+fun rememberCanvasBackdrop(color: Color): Backdrop = remember(color) { CanvasBackdrop({ drawRect(color) }, true) }
+
+internal fun Backdrop.isLocalColorFill(): Boolean = this is CanvasBackdrop && fillsLocalSize
+
 /** Only these private built-in implementations ignore the supplied coordinates argument. */
 internal fun Backdrop.hasBuiltInCoordinateIndependentSource(): Boolean =
     this is CanvasBackdrop || this === emptyBackdrop()
 
 @Immutable
 private class CanvasBackdrop(
-    val onDraw: DrawScope.() -> Unit
+    val onDraw: DrawScope.() -> Unit,
+    val fillsLocalSize: Boolean = false,
 ) : Backdrop {
 
     override val isCoordinatesDependent: Boolean = false
