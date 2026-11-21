@@ -106,19 +106,24 @@ def upload(path):
     req = request.Request(endpoint + '/upload?publishingType=AUTOMATIC', data=content, headers=headers)
     with request.urlopen(req, timeout=120) as response:
         deployment = response.read().decode().strip().strip('"')
-    print('Central deployment: ' + deployment)
-    for _ in range(80):
+    print('Central deployment: ' + deployment, flush=True)
+    deadline = time.monotonic() + 60 * 60
+    last_state = None
+    while time.monotonic() < deadline:
         req = request.Request(endpoint + '/status?id=' + deployment, data=b'', headers={'Authorization': 'Bearer ' + token})
         with request.urlopen(req, timeout=60) as response:
             result = json.load(response)
         state = result.get('deploymentState')
+        if state != last_state:
+            print(f'Central deployment state: {state}', flush=True)
+            last_state = state
         if state == 'PUBLISHED':
             print('Published Glasmio ' + VERSION)
             return
         if state == 'FAILED':
             raise SystemExit(json.dumps(result.get('errors', result), indent=2))
         time.sleep(15)
-    raise SystemExit('Central deployment is still pending: ' + deployment)
+    raise SystemExit(f'Timed out waiting for Central deployment {deployment} (last state: {last_state})')
 
 
 if __name__ == '__main__':
