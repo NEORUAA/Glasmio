@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- Support Android 12 and 12L with simplified glass rendering on API 31 and 32.
+- Add glass popovers, tooltips, and pull-to-refresh indicators.
+- Add press-and-drag menu selection and animated submenu transitions.
+- Refine adaptive navigation, sheet layouts, and safe-area handling.
+- Reduce cold rendering cost, redundant backdrop recording, and UI updates.
+
 ## 0.1.3
 
 - Reuse compiled glass programs across navigation, menu, and header transitions.
