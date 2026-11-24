@@ -246,7 +246,7 @@ fun LiquidMenuMorphSurface(
                 )
                 // The native lens reaches 75 pt; dispersion can sample twice its
                 // displacement. Reserve the complete optical range before the first frame.
-                val sampleGuard = 200.dp.toPx()
+                val sampleGuard = 56.dp.toPx()
                 val opticalGuard = 2f * kotlin.math.abs(frame.lensAmount) * maxOf(1f, sampleScale.x, sampleScale.y) + 50.dp.toPx()
                 val required = visualBounds.inflate(opticalGuard)
                 val previousCapture = drawCache.viewport
@@ -402,7 +402,7 @@ fun LiquidMenuMorphSurface(
                         // then the same SDF displacement map used by the glass surface.
                         // The portal has one native displacement sample (75 pt max),
                         // plus the four-sigma support of its 4 pt global blur.
-                        val initialGuard = 92.dp.toPx()
+                        val initialGuard = 48.dp.toPx()
                         val initial = Rect(
                             minOf(0f, bounds.left) - initialGuard, minOf(0f, bounds.top) - initialGuard,
                             maxOf(size.width, bounds.right) + initialGuard, maxOf(size.height, bounds.bottom) + initialGuard,
@@ -598,8 +598,7 @@ half4 main(float2 coord) {
         point.x > drawingBounds.z || point.y > drawingBounds.w) return half4(0.0);
     float3 field = liquidFieldGradient(point);
     float inside = -field.x;
-    float aa = max(abs(liquidFieldGradient(point + float2(1.0, 0.0)).x - field.x) +
-        abs(liquidFieldGradient(point + float2(0.0, 1.0)).x - field.x), 0.0001);
+    float aa = max(abs(field.y) + abs(field.z), 0.0001);
     float coverage = inside < -5.0 ? 0.0 : clamp(inside / aa + 0.5, 0.0, 1.0);
     if (coverage < 0.0039215686) return half4(0.0);
     float t = clamp(inside / max(height, 0.0001), 0.0, 1.0);

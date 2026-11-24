@@ -69,8 +69,14 @@ fun BackdropEffectScope.nativeControlLens(
     } * density
     // Source support covers the measured SmallVariant's unlift displacement (50 pt),
     // portal warp (17.5 pt) and Gaussian support. The output guard is independent.
+    // Non-small indicators (TabBarIndicator, SegmentedIndicator) use a much smaller 9 pt below
+    // warp and ~11 pt portal warp, so keeping a tight constant margin halves every plane FBO.
     // A known resting thumb only draws its body/shadow and never reads these planes.
-    if (!knownRestingThumb) padding = max(padding, 72.dp.toPx())
+    if (!knownRestingThumb) {
+        val requiredPadding = if (small) 72.dp.toPx()
+        else ceil(25.dp.toPx() + height / 19f * 1.6f * 2f + 12.dp.toPx())
+        padding = max(padding, requiredPadding)
+    }
     scope.auxiliaryBackdrop = liftedContent
     val base = IntSize(ceil(size.width + 2f * padding).toInt().coerceAtLeast(1),
         ceil(size.height + 2f * padding).toInt().coerceAtLeast(1))

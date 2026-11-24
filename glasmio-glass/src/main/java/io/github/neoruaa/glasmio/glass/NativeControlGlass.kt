@@ -117,6 +117,8 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
     field: NativeGlassFilterField? = null,
     completion: NativeGlassCompletion? = null,
     filteredIsNativeRaw: Boolean = false,
+    opticalRect: IntRect = IntRect(0, base.height, base.width, base.height * 2),
+    storageSize: IntSize = IntSize(base.width, base.height * 2),
 ): RenderEffect {
     val storage = this as BackdropEffectScopeImpl
     val resolvedCompletion = completion ?: NativeGlassCompletion(NavigationMaterialRecipe.resolve(isDark, material), isDark,
@@ -124,8 +126,8 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
         materialAlpha = alpha, edgeAlpha = alpha,
         idleColor = idleColor, overlayColor = overlayColor)
     val topology = resolvedCompletion.programTopology()
-    val atlas = NativeGlassMipAtlas(base, IntSize(base.width, base.height * 2), listOf(
-        IntRect(0, 0, base.width, base.height), IntRect(0, base.height, base.width, base.height * 2)),
+    val atlas = NativeGlassMipAtlas(base, storageSize, listOf(
+        IntRect(0, 0, base.width, base.height), opticalRect),
         producer, storage.colorManagedNativeGlass)
     val retainedPair = Build.VERSION.SDK_INT >= 36 && storage.supportsRetainedOpticalStage &&
         storage.supportsNativeGlassHardwareLinearSampling && !atlas.colorManaged && filteredIsNativeRaw &&
@@ -169,11 +171,13 @@ internal fun BackdropEffectScope.completeNativeMenuFilteredGlass(
     field: NativeGlassFilterField,
     completion: NativeGlassCompletion,
     transitionRefraction: NativeMenuTransitionRefraction,
+    opticalRect: IntRect = IntRect(0, base.height, base.width, base.height * 2),
+    storageSize: IntSize = IntSize(base.width, base.height * 2),
 ): RenderEffect {
     val storage = this as BackdropEffectScopeImpl
     val topology = completion.programTopology()
-    val atlas = NativeGlassMipAtlas(base, IntSize(base.width, base.height * 2), listOf(
-        IntRect(0, 0, base.width, base.height), IntRect(0, base.height, base.width, base.height * 2)),
+    val atlas = NativeGlassMipAtlas(base, storageSize, listOf(
+        IntRect(0, 0, base.width, base.height), opticalRect),
         null, storage.colorManagedNativeGlass)
     val functions = field.shaderFunctions
     val sources = storage.cachedResource("Glasmio.NativeControl.menuComplete.sources") {

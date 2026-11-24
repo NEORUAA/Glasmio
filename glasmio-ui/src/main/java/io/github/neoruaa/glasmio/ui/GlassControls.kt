@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -195,8 +196,17 @@ fun GlasmioSwitch(
         }
     }
 
+    val isLifted by remember(animation) { derivedStateOf { animation.pressProgress > 0.0001f } }
     val trackBackdrop = rememberLayerBackdrop()
     val thumbBackdrop = rememberCombinedBackdrop(backdrop, trackBackdrop)
+    val restingThumbModifier = remember(animation) {
+        Modifier.graphicsLayer {
+            // Velocity deformation is independent of the native lens's measured lift.
+            val velocity = animation.velocity / 50f
+            scaleX = 1f / (1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f))
+            scaleY = 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
+        }.background(Color.White, Capsule())
+    }
     val thumbGlassModifier = remember(thumbBackdrop, animation, appearance, colors.isDark, onColor) {
         Modifier.drawPlainBackdrop(
             backdrop = if (appearance.usesRefraction) thumbBackdrop else emptyBackdrop(),
@@ -241,7 +251,7 @@ fun GlasmioSwitch(
     ) {
         Box(
             Modifier
-                .then(if (appearance.usesRefraction) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
+                .then(if (appearance.usesRefraction && isLifted) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
                 .clip(Capsule())
                 .drawBehind { drawRect(colorLerp(track, onColor, animation.value)) }
                 .size(width = 63.dp, height = 28.dp),
@@ -258,7 +268,7 @@ fun GlasmioSwitch(
                     NativeControlLensStyle.SwitchThumb,
                     horizontalProgress = { if (appearance.usesRefraction) animation.pressProgress else 0f },
                 )
-                .then(thumbGlassModifier),
+                .then(if (appearance.usesRefraction && isLifted) thumbGlassModifier else restingThumbModifier),
         )
     }
 }

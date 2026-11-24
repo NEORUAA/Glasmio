@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,7 +34,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -87,6 +90,7 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
+import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
@@ -1063,6 +1067,35 @@ fun <T> GlasmioNavigationBar(
                         selected = hasSelection && compactItem == null
                     },
             )
+        }
+        if (hasSelection && appearance.usesRefraction && isRuntimeShaderSupported()) {
+            var warmed by remember { mutableStateOf(false) }
+            if (!warmed) {
+                LaunchedEffect(Unit) {
+                    withFrameNanos { }
+                    withFrameNanos { warmed = true }
+                }
+                // Compile the lifted TabBarIndicator Vulkan pipelines during initial mount so the
+                // first cold tap or drag does not stall on shader compilation.
+                Box(
+                    Modifier
+                        .size(8.dp, 8.dp)
+                        .clearAndSetSemantics { }
+                        .graphicsLayer { alpha = 0.004f }
+                        .drawPlainBackdrop(
+                            backdrop = emptyBackdrop(),
+                            shape = { Capsule() },
+                            effects = {
+                                nativeControlLens(
+                                    style = NativeControlLensStyle.TabBarIndicator,
+                                    liftProgress = 0.5f,
+                                    isDark = !isLight,
+                                    liftedContent = emptyBackdrop(),
+                                )
+                            },
+                        ),
+                )
+            }
         }
 
     }

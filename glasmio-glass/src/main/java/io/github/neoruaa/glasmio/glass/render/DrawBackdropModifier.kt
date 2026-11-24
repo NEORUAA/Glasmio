@@ -88,6 +88,85 @@ private val FullResolutionSampling: (Size, Density) -> Float = { _, _ -> 1f }
 private val DefaultOnDrawBackdrop: DrawScope.(DrawScope.() -> Unit) -> Unit = { it() }
 private val NoBackdropEffects: BackdropEffectScope.() -> Unit = {}
 
+/** Draws [backdrop] directly into the current draw pass without allocating an offscreen layer or RenderEffect. */
+fun Modifier.drawDirectBackdrop(backdrop: Backdrop): Modifier =
+    this.then(DirectBackdropElement(backdrop))
+
+private class DirectBackdropElement(
+    val backdrop: Backdrop,
+) : ModifierNodeElement<DirectBackdropNode>() {
+    override fun create(): DirectBackdropNode = DirectBackdropNode(backdrop)
+
+    override fun update(node: DirectBackdropNode) {
+        node.updateBackdrop(backdrop)
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "drawDirectBackdrop"
+        properties["backdrop"] = backdrop
+    }
+
+    override fun equals(other: Any?): Boolean =
+        this === other || (other is DirectBackdropElement && backdrop == other.backdrop)
+
+    override fun hashCode(): Int = backdrop.hashCode()
+}
+
+private class DirectBackdropNode(
+    private var backdrop: Backdrop,
+) : DrawModifierNode, GlobalPositionAwareModifierNode, Modifier.Node() {
+    private var layoutCoordinates: LayoutCoordinates? = null
+    private var sourceObservation: (() -> Unit)? = null
+
+    fun updateBackdrop(value: Backdrop) {
+        if (backdrop === value) return
+        backdrop = value
+        observeSource()
+        invalidateDraw()
+    }
+
+    private fun observeSource() {
+        sourceObservation?.invoke()
+        sourceObservation = if (isAttached) {
+            backdrop.observeSourceChanges { if (isAttached) invalidateDraw() }
+        } else null
+    }
+
+    override fun onAttach() {
+        observeSource()
+    }
+
+    override fun onDetach() {
+        sourceObservation?.invoke()
+        sourceObservation = null
+        layoutCoordinates = null
+    }
+
+    override fun onGloballyPositioned(coordinates: LayoutCoordinates) {
+        if (coordinates.isAttached && layoutCoordinates !== coordinates) {
+            layoutCoordinates = coordinates
+            if (backdrop.isCoordinatesDependent) invalidateDraw()
+        }
+    }
+
+    override fun ContentDrawScope.draw() {
+        if (backdrop.hasDeferredSharedCapture()) {
+            backdrop.observeDetachedSharedBackdrop(this@DirectBackdropNode, layoutCoordinates, drawContext.canvas)
+        }
+        val canvas = drawContext.canvas
+        canvas.save()
+        try {
+            canvas.clipRect(0f, 0f, size.width, size.height)
+            with(backdrop) {
+                drawBackdrop(density = this@draw, coordinates = layoutCoordinates)
+            }
+        } finally {
+            canvas.restore()
+        }
+        drawContent()
+    }
+}
+
 /** Observe raw local backing without adding any visible material, layout layer or clip. */
 fun Modifier.sampleBackdropLuminance(
     backdrop: Backdrop,

@@ -85,6 +85,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
+import io.github.neoruaa.glasmio.glass.render.drawDirectBackdrop
 import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
@@ -550,8 +551,8 @@ fun GlasmioBottomSheet(
                                     ) {
                                         Box(
                                             Modifier.matchParentSize()
-                                                .then(if (sheetBackplate != null && chromeColors.groupedBackground.alpha < 1f) Modifier.drawPlainBackdrop(
-                                                    sheetBackplate, shape = { RectangleShape }, effects = {},
+                                                .then(if (sheetBackplate != null && chromeColors.groupedBackground.alpha < 1f) Modifier.drawDirectBackdrop(
+                                                    sheetBackplate,
                                                 ) else Modifier)
                                                 .background(chromeColors.groupedBackground),
                                         ) { contentBackground?.invoke(this) }
@@ -567,10 +568,10 @@ fun GlasmioBottomSheet(
                                     Box(
                                         Modifier.fillMaxWidth()
                                             .height(headerHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
-                                            .then(if (appearance.usesBackdrop) Modifier.progressiveBlurBackdrop(
+                                            .then(if (appearance.usesBackdrop && topBarBlurProgress > 0.001f) Modifier.progressiveBlurBackdrop(
                                                 backdrop = chromeBackdrop,
                                                 progress = topBarBlurProgress,
-                                            ) else Modifier.graphicsLayer {
+                                            ) else if (appearance.usesBackdrop) Modifier else Modifier.graphicsLayer {
                                                 alpha = topBarBlurProgress.coerceIn(0f, 1f)
                                             }.background(chromeColors.groupedBackground.copy(alpha = 1f))),
                                     )
