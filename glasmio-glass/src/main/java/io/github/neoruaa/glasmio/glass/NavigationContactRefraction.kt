@@ -29,23 +29,27 @@ internal fun navigationContainerGlassField(
     shape: LiquidContactShape,
     opticalCenter: Offset? = null,
     minimumBand: Float = 0f,
+    samplingScale: Float = 1f,
 ): NativeGlassFilterField {
-    val scale = shape.outlineScale.let { Offset(it.x.coerceAtLeast(.0001f), it.y.coerceAtLeast(.0001f)) }
+    val rawScale = shape.outlineScale.let { Offset(it.x.coerceAtLeast(.0001f), it.y.coerceAtLeast(.0001f)) }
+    val s = samplingScale.coerceAtLeast(.0001f)
+    val scale = Offset(rawScale.x * s, rawScale.y * s)
+    val translation = Offset(shape.outlineTranslation.x * s, shape.outlineTranslation.y * s)
     // A tab platter keeps the server's native primitive union and its mixed gradient.
     // An optical center is an explicit custom contour effect, not a native union input.
-    shape.nativeUnion?.let { return it.shaderField(scale, shape.outlineTranslation) }
+    shape.nativeUnion?.let { return it.shaderField(scale, translation) }
     val contour = shape.refractionContour()
     val field = shape.refractionField()
-    val grid = field.grid(contour, maxOf(shape.refractionBand, contour.bounds.size.minDimension * .5f, minimumBand))
+    val grid = field.grid(contour, maxOf(shape.refractionBand, contour.bounds.size.minDimension * .5f, minimumBand / s))
     val input = field.input(grid)
     return NativeGlassFilterField(NavigationContainerGlassFieldShader) { shader ->
         shader.setInputBuffer("contour", input)
         shader.setFloatUniform("fieldScale", 1f / (scale.x * grid.step), 1f / (scale.y * grid.step))
         shader.setFloatUniform("fieldOffset",
-            (-shape.outlineTranslation.x / scale.x - grid.origin.x) / grid.step + .5f,
-            (-shape.outlineTranslation.y / scale.y - grid.origin.y) / grid.step + .5f)
+            (-translation.x / scale.x - grid.origin.x) / grid.step + .5f,
+            (-translation.y / scale.y - grid.origin.y) / grid.step + .5f)
         shader.setFloatUniform("normalScale", 1f / scale.x, 1f / scale.y)
-        shader.setFloatUniform("opticalCenter", opticalCenter?.x ?: 0f, opticalCenter?.y ?: 0f)
+        shader.setFloatUniform("opticalCenter", (opticalCenter?.x ?: 0f) * s, (opticalCenter?.y ?: 0f) * s)
         shader.setFloatUniform("depthCenterEnabled", if (opticalCenter == null) 0f else 1f)
     }
 }
@@ -55,11 +59,14 @@ internal fun navigationContainerGlassField(
 internal fun navigationToolbarGlassField(
     shape: ToolbarActionShape,
     minimumBand: Float,
+    samplingScale: Float = 1f,
 ): NativeGlassFilterField {
-    shape.nativeUnion?.let { return it.shaderField(Offset(1f, 1f), Offset.Zero) }
+    val s = samplingScale.coerceAtLeast(.0001f)
+    shape.nativeUnion?.let { return it.shaderField(Offset(s, s), Offset.Zero) }
     val contour = shape.refractionContour()
     val field = shape.refractionField()
-    return navigationContourGlassField(contour, minimumBand, field)
+    val grid = field.grid(contour, minimumBand / s)
+    return navigationContourGlassField(grid, field.input(grid), samplingScale = s)
 }
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -76,14 +83,16 @@ internal fun navigationContourGlassField(
 internal fun navigationContourGlassField(
     grid: NavigationContactField.Grid,
     input: BitmapShader,
+    samplingScale: Float = 1f,
 ): NativeGlassFilterField {
     val step = grid.step
     val origin = grid.origin
+    val s = samplingScale.coerceAtLeast(.0001f)
     return NativeGlassFilterField(StaticNavigationGlassFieldShader) { shader ->
         shader.setInputBuffer("contour", input)
-        shader.setFloatUniform("fieldScale", 1f / step, 1f / step)
+        shader.setFloatUniform("fieldScale", 1f / (s * step), 1f / (s * step))
         shader.setFloatUniform("fieldOffset", -origin.x / step + .5f, -origin.y / step + .5f)
-        shader.setFloatUniform("normalScale", 1f, 1f)
+        shader.setFloatUniform("normalScale", 1f / s, 1f / s)
         shader.setFloatUniform("opticalCenter", 0f, 0f)
         shader.setFloatUniform("depthCenterEnabled", 0f)
     }

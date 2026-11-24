@@ -148,6 +148,9 @@ private fun BackdropHost(
 
 fun Modifier.glassBackdropSource(backdrop: LayerBackdrop): Modifier = layerBackdrop(backdrop)
 
+fun Modifier.glassBackdropSource(backdrop: LayerBackdrop, maxCaptureHeight: Dp): Modifier =
+    layerBackdrop(backdrop, reuseContent = false, maxCaptureHeight = maxCaptureHeight)
+
 /** Weak values prevent modifier callbacks from retaining their backdrop keys and detached trees. */
 private val backdropSourcePositions = WeakHashMap<LayerBackdrop, WeakReference<LayoutCoordinates>>()
 private val backdropSourceFrames = WeakHashMap<LayerBackdrop, State<Int>>()

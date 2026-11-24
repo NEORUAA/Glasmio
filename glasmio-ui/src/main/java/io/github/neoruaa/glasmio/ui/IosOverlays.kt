@@ -128,11 +128,9 @@ fun GlasmioSheetSurface(
                     highlightAlphaMultiplier = glass,
                     innerShadowAlpha = glass,
                     materialPaintAlpha = glass,
-                    backgroundOverlay = {
-                        if (appearance.usesBackdrop && glass < 1f) {
-                            drawRect(systemBackground.copy(alpha = 1f - glass))
-                        }
-                    },
+                    overlayColor = if (appearance.usesBackdrop && glass < 1f) {
+                        systemBackground.copy(alpha = 1f - glass)
+                    } else Color.Transparent,
                     layerBlock = sheetLayerBlock,
                 )
                 .then(if (interactive) activeInteractiveHighlight.modifier else Modifier)

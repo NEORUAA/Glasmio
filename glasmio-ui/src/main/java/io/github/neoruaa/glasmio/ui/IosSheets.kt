@@ -565,7 +565,7 @@ fun GlasmioBottomSheet(
                                 Box(Modifier.fillMaxWidth()) {
                                     Box(
                                         (if (contentSized) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
-                                            .glassBackdropSource(chromeBackdrop)
+                                            .then(if (appearance.usesBackdrop) Modifier.glassBackdropSource(chromeBackdrop, maxCaptureHeight = headerHeight + 96.dp) else Modifier)
                                             .trackBackdropPosition(chromeBackdrop),
                                     ) {
                                         Box(

@@ -30,7 +30,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
@@ -51,6 +50,7 @@ import androidx.compose.ui.unit.Dp
 import com.kyant.capsule.ContinuousRoundedRectangle
 
 
+private val GroupedListShape = ContinuousRoundedRectangle(26.dp)
 private val LocalGroupedListCoordinates = staticCompositionLocalOf<State<LayoutCoordinates?>?> { null }
 
 /** Suppress only a separator placed on the framed group's actual top edge. */
@@ -64,19 +64,27 @@ fun Modifier.glasmioGroupedListSeparator(
     val group = LocalGroupedListCoordinates.current
     val inSheet = LocalIosSheetMaterialContext.current != null
     var coordinates by remember(group) { mutableStateOf<LayoutCoordinates?>(null) }
-    var position by remember(group) { mutableStateOf(Offset.Unspecified) }
+    var atTopEdgeState by remember(group) { mutableStateOf<Boolean?>(null) }
     return this
         .then(if (group != null) Modifier.onGloballyPositioned {
             coordinates = it
-            // Coordinates are reused during keyed moves; the position invalidates drawing.
-            position = it.positionInRoot()
+            val owner = group.value
+            atTopEdgeState = if (owner != null && owner.isAttached && it.isAttached &&
+                owner.findRootCoordinates() === it.findRootCoordinates()
+            ) {
+                kotlin.math.abs(owner.localPositionOf(it, Offset.Zero).y) < 0.5f
+            } else {
+                null
+            }
         } else Modifier)
         .drawBehind {
-            val owner = group?.value
-            val row = coordinates.takeIf { position.isSpecified }
-            val atTopEdge = owner != null && row != null && owner.isAttached && row.isAttached &&
-                owner.findRootCoordinates() === row.findRootCoordinates() &&
-                kotlin.math.abs(owner.localPositionOf(row, Offset.Zero).y) < 0.5f
+            val atTopEdge = atTopEdgeState ?: run {
+                val owner = group?.value
+                val row = coordinates
+                owner != null && row != null && owner.isAttached && row.isAttached &&
+                    owner.findRootCoordinates() === row.findRootCoordinates() &&
+                    kotlin.math.abs(owner.localPositionOf(row, Offset.Zero).y) < 0.5f
+            }
             if (!atTopEdge) {
                 val inset = horizontalInset.toPx()
                 // Framed groups own the shared row boundary. A virtual row clips its own
@@ -90,7 +98,7 @@ fun Modifier.glasmioGroupedListSeparator(
 /** The same grouped-cell material for virtualized rows that own their first/last corner shape. */
 @Composable
 fun Modifier.glasmioGroupedListBackground(
-    shape: Shape = ContinuousRoundedRectangle(26.dp),
+    shape: Shape = GroupedListShape,
 ): Modifier {
     val colors = LocalGlassColors.current
     val sheetMaterial = LocalIosSheetMaterialContext.current
@@ -112,7 +120,7 @@ fun GlasmioGroupedList(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalGlassColors.current
-    val shape = ContinuousRoundedRectangle(26.dp)
+    val shape = GroupedListShape
     val groupCoordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
     Column(
         modifier

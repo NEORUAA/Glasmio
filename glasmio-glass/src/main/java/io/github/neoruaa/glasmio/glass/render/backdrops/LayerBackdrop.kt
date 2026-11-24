@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 
 private val DefaultOnDraw: ContentDrawScope.() -> Unit = { drawContent() }
@@ -162,6 +163,18 @@ class LayerBackdrop @JvmOverloads internal constructor(
             return UniformFillSignature(this, left, top, right, bottom)
         }
         return TransformSignature(source, values.copyOf())
+    }
+
+    /**
+     * Copies the current source-to-[consumer] transform into [outTransform] (length >= 16) and
+     * returns the source's recorded [IntSize], or null if either coordinate is detached or non-finite.
+     */
+    fun snapshotTransformIn(consumer: LayoutCoordinates, outTransform: FloatArray): IntSize? {
+        if (!consumer.isAttached) return null
+        val source = layerCoordinates?.takeIf { it.isAttached } ?: return null
+        if (!updateTransform(source, consumer)) return null
+        sourceToConsumer.values.copyInto(outTransform, 0, 0, 16)
+        return source.size
     }
 }
 

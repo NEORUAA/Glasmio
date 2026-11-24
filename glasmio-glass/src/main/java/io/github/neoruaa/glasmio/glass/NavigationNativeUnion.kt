@@ -121,7 +121,8 @@ internal class NavigationNativeUnion private constructor(
 
     private fun mipFaceRegions(scale: Offset, translation: Offset): Pair<Rect, Rect>? {
         val other = b ?: return null
-        if (multipleElements.isNotEmpty() || scale != Offset(1f, 1f) || translation != Offset.Zero) return null
+        if (multipleElements.isNotEmpty() || scale.x != scale.y || scale.x <= 0f || translation != Offset.Zero) return null
+        val s = scale.x
         fun bounds(element: Element): Rect? {
             val radius = min(element.radii.x, element.radii.y)
             val longest = max(element.radii.x, element.radii.y)
@@ -129,8 +130,9 @@ internal class NavigationNativeUnion private constructor(
             // The SDF polynomial's degree-six Bernstein coefficients lie in [0, .126].
             // Its outward correction is at most .145 expanded radii. Include half
             // rounding, the maximal smooth-union offset k/4 and the coverage footprint.
-            val guard = .16f * 1.528665f * longest + (smoothness * .25f + 2f) * longest / radius
-            return element.bounds.inflate(guard)
+            val guard = .16f * 1.528665f * longest + (smoothness * .25f + 2f / s) * longest / radius
+            val region = element.bounds.inflate(guard)
+            return if (s == 1f) region else Rect(region.left * s, region.top * s, region.right * s, region.bottom * s)
         }
         return (bounds(a) ?: return null) to (bounds(other) ?: return null)
     }

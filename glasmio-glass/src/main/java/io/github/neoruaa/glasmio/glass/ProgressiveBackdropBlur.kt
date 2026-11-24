@@ -1,5 +1,7 @@
 package io.github.neoruaa.glasmio.glass
 
+import android.graphics.Shader
+import android.os.Build
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Size
@@ -8,6 +10,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.RenderEffect
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.Dp
@@ -158,6 +162,45 @@ fun BackdropEffectScope.progressiveBackdropBlur(
 
     applyPass("IosTopBarProgressiveBlurHorizontal", kernel.horizontal, size.width)
     applyPass("IosTopBarProgressiveBlurVertical", kernel.vertical, size.height)
+}
+
+/** Build the same two-pass separable progressive blur RenderEffect for retained local layers. */
+fun createProgressiveBackdropBlurRenderEffect(
+    size: Size,
+    maxRadius: Float,
+    startYFraction: Float = 0.42f,
+    endYFraction: Float = 1f,
+    startIntensity: Float = 1f,
+    endIntensity: Float = 0f,
+): RenderEffect? {
+    if (maxRadius <= 0f || !size.width.isFinite() || !size.height.isFinite() || size.width <= 0f || size.height <= 0f) {
+        return null
+    }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            android.graphics.RenderEffect.createBlurEffect(maxRadius, maxRadius, Shader.TileMode.CLAMP).asComposeRenderEffect()
+        } else null
+    }
+    val resolvedRadius = maxRadius.coerceAtMost(150f)
+    val maximumReach = resolvedRadius * maxOf(1f, startIntensity, endIntensity)
+    val kernel = ProgressiveBlurKernel.entries.firstOrNull { maximumReach + 1f <= it.limit }
+        ?: ProgressiveBlurKernel.Full
+
+    fun pass(source: String, extent: Float): android.graphics.RenderEffect {
+        val shader = android.graphics.RuntimeShader(source).apply {
+            setFloatUniform("blurRadius", resolvedRadius)
+            setFloatUniform("extent", extent)
+            setFloatUniform("startIntensity", startIntensity)
+            setFloatUniform("endIntensity", endIntensity)
+            setFloatUniform("startPoint", 0f, size.height * startYFraction)
+            setFloatUniform("endPoint", 0f, size.height * endYFraction)
+        }
+        return android.graphics.RenderEffect.createRuntimeShaderEffect(shader, "content")
+    }
+
+    val horizontal = pass(kernel.horizontal, size.width)
+    val vertical = pass(kernel.vertical, size.height)
+    return android.graphics.RenderEffect.createChainEffect(vertical, horizontal).asComposeRenderEffect()
 }
 
 /** Compatibility entry point. A progressive blur preserves source colors and never adds tint. */
