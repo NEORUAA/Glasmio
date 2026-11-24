@@ -4,6 +4,9 @@ import io.github.neoruaa.glasmio.core.*
 import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.icons.*
 
+import android.graphics.RenderEffect as AndroidRenderEffect
+import android.graphics.Shader
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
@@ -39,8 +42,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.BlendMode
@@ -189,13 +192,14 @@ fun GlasmioTopBar(
     subtitle: String? = null,
     style: GlasmioTopBarStyle = GlasmioTopBarStyle.Default,
     collapseProgress: Float = 1f,
+    collapseProgressProvider: (() -> Float)? = null,
     navigation: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
     navigationStyle: GlasmioToolbarActionStyle = GlasmioToolbarActionStyle.Merged,
     actionsStyle: GlasmioToolbarActionStyle = GlasmioToolbarActionStyle.Merged,
     actionsSeparationProgress: Float? = null,
 ) {
-    val progress = collapseProgress.coerceIn(0f, 1f)
+    val progressProvider = collapseProgressProvider ?: { collapseProgress }
     CompositionLocalProvider(
         LocalGlassSurfaceBrightness provides 1f,
         LocalGlassSurfaceStyle provides GlassSurfaceStyle.Navigation,
@@ -282,12 +286,20 @@ fun GlasmioTopBar(
                             .fillMaxWidth()
                             .then(if (startsAtLeading) Modifier.padding(start = leadingPad, end = trailingPad) else Modifier)
                             .graphicsLayer {
+                                val progress = progressProvider().coerceIn(0f, 1f)
                                 alpha = progress
                                 val scale = 0.92f + 0.08f * progress
                                 scaleX = scale
                                 scaleY = scale
-                            }
-                            .blur(8.dp * (1f - progress)),
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    val blurPx = 8.dp.toPx() * (1f - progress)
+                                    clip = blurPx >= 0.5f
+                                    renderEffect = if (blurPx >= 0.5f) {
+                                        AndroidRenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+                                            .asComposeRenderEffect()
+                                    } else null
+                                }
+                            },
                         horizontalAlignment = if (startsAtLeading) Alignment.Start else Alignment.CenterHorizontally,
                     ) {
                         GlasmioToolbarTitle(

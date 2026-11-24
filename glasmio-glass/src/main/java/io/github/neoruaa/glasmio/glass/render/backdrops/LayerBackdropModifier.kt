@@ -53,8 +53,16 @@ internal fun Modifier.layerBackdrop(
 
 /** Keep source coordinates attached while its owner has no visible or external consumer. */
 @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
-fun Modifier.conditionalLayerBackdrop(backdrop: LayerBackdrop, captureEnabled: Boolean): Modifier =
-    this then LayerBackdropElement(backdrop, reuseContent = false, captureEnabled = captureEnabled, maxCaptureHeight = Dp.Unspecified)
+fun Modifier.conditionalLayerBackdrop(
+    backdrop: LayerBackdrop,
+    captureEnabled: Boolean,
+    maxCaptureHeight: Dp = Dp.Unspecified,
+): Modifier = this then LayerBackdropElement(
+    backdrop,
+    reuseContent = false,
+    captureEnabled = captureEnabled,
+    maxCaptureHeight = maxCaptureHeight,
+)
 
 private class LayerBackdropElement(
     val backdrop: LayerBackdrop,

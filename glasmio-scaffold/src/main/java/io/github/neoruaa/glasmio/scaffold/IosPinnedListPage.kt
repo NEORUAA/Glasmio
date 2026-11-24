@@ -5,6 +5,9 @@ import io.github.neoruaa.glasmio.glass.*
 import io.github.neoruaa.glasmio.ui.*
 import io.github.neoruaa.glasmio.icons.*
 
+import android.graphics.RenderEffect as AndroidRenderEffect
+import android.graphics.Shader
+import android.os.Build
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -43,9 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -97,12 +100,18 @@ internal fun nextCollapsed(
 fun rememberGlasmioHeaderScrollEdge(
     state: LazyListState,
     distance: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
-): Float {
+): Float = rememberGlasmioHeaderScrollEdgeState(state, distance).value
+
+/** Read scroll-edge progress in draw/graphicsLayer scope to keep the list out of recomposition. */
+@Composable
+fun rememberGlasmioHeaderScrollEdgeState(
+    state: LazyListState,
+    distance: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
+): State<Float> {
     val distancePx = with(LocalDensity.current) { distance.toPx().coerceAtLeast(1f) }
-    val progress by remember(state, distancePx) {
+    return remember(state, distancePx) {
         derivedStateOf { scrollEdge(state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset, distancePx) }
     }
-    return progress
 }
 
 /** Grid counterpart of [rememberGlasmioHeaderScrollEdge]. */
@@ -110,12 +119,18 @@ fun rememberGlasmioHeaderScrollEdge(
 fun rememberGlasmioHeaderScrollEdge(
     state: LazyGridState,
     distance: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
-): Float {
+): Float = rememberGlasmioHeaderScrollEdgeState(state, distance).value
+
+/** Grid counterpart of [rememberGlasmioHeaderScrollEdgeState]. */
+@Composable
+fun rememberGlasmioHeaderScrollEdgeState(
+    state: LazyGridState,
+    distance: Dp = GlasmioHeaderCollapseDefaults.EnterBreakpoint,
+): State<Float> {
     val distancePx = with(LocalDensity.current) { distance.toPx().coerceAtLeast(1f) }
-    val progress by remember(state, distancePx) {
+    return remember(state, distancePx) {
         derivedStateOf { scrollEdge(state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset, distancePx) }
     }
-    return progress
 }
 
 internal fun scrollEdge(firstVisibleItemIndex: Int, firstVisibleItemScrollOffset: Int, distancePx: Float): Float =
@@ -243,14 +258,17 @@ fun GlasmioPinnedListPage(
     content: LazyListScope.() -> Unit,
 ) {
     // The title collapses on a breakpoint, while the material keeps fading with the scroll offset.
-    val animatedCollapse = rememberGlasmioHeaderCollapse(
+    val animatedCollapseState = rememberGlasmioHeaderCollapseState(
         state = listState,
         enterBreakpoint = collapseEnterBreakpoint,
         exitBreakpoint = collapseExitBreakpoint,
         animationSpec = collapseAnimationSpec,
     )
-    val collapseProgress = if (showsLargeTitle) animatedCollapse else 1f
-    val scrollEdgeProgress = rememberGlasmioHeaderScrollEdge(listState, collapseEnterBreakpoint)
+    val collapseProvider = remember(showsLargeTitle, animatedCollapseState) {
+        if (showsLargeTitle) ({ animatedCollapseState.value }) else ({ 1f })
+    }
+    val scrollEdgeState = rememberGlasmioHeaderScrollEdgeState(listState, collapseEnterBreakpoint)
+    val scrollEdgeProvider = remember(scrollEdgeState) { { scrollEdgeState.value } }
     GlasmioPinnedPage(
         title = title,
         subtitle = subtitle,
@@ -261,8 +279,8 @@ fun GlasmioPinnedListPage(
         actions = actions,
         actionsStyle = actionsStyle,
         actionsSeparationProgress = actionsSeparationProgress,
-        collapseProgress = collapseProgress,
-        topBarBlurProgress = scrollEdgeProgress,
+        collapseProgressProvider = collapseProvider,
+        topBarBlurProgressProvider = scrollEdgeProvider,
         backgroundColor = backgroundColor,
         backgroundBrush = backgroundBrush,
     ) { contentPadding ->
@@ -292,13 +310,21 @@ fun GlasmioPinnedListPage(
                             Modifier
                                 .fillMaxWidth()
                                 .graphicsLayer {
-                                    alpha = 1f - collapseProgress
-                                    val scale = 1f - 0.04f * collapseProgress
+                                    val collapse = animatedCollapseState.value.coerceIn(0f, 1f)
+                                    alpha = 1f - collapse
+                                    val scale = 1f - 0.04f * collapse
                                     scaleX = scale
                                     scaleY = scale
                                     transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                        val blurPx = 6.dp.toPx() * collapse
+                                        clip = blurPx >= 0.5f
+                                        renderEffect = if (blurPx >= 0.5f) {
+                                            AndroidRenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
+                                                .asComposeRenderEffect()
+                                        } else null
+                                    }
                                 }
-                                .blur(6.dp * collapseProgress)
                                 .offset(y = (-10).dp)
                                 .padding(horizontal = largeTitleHorizontalPadding, vertical = 6.dp),
                         ) {
@@ -343,8 +369,10 @@ fun GlasmioPinnedPage(
     actionsStyle: GlasmioToolbarActionStyle = GlasmioToolbarActionStyle.Merged,
     actionsSeparationProgress: Float? = null,
     collapseProgress: Float = 1f,
+    collapseProgressProvider: (() -> Float)? = null,
     backgroundColor: Color? = null,
     topBarBlurProgress: Float = 0f,
+    topBarBlurProgressProvider: (() -> Float)? = null,
     backgroundBrush: Brush? = null,
     background: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable BoxScope.(PaddingValues) -> Unit,
@@ -360,16 +388,17 @@ fun GlasmioPinnedPage(
         end = IosPageHorizontalPadding,
         bottom = bottomPadding + 24.dp,
     )
+    val resolvedEdgeProvider = topBarBlurProgressProvider ?: { topBarBlurProgress }
 
     CompositionLocalProvider(LocalContentColor provides colors.content) {
         Box(modifier.fillMaxSize()) {
             GlasmioPageBody(
                 contentPadding = contentPadding,
+                topBarBlurProgress = resolvedEdgeProvider,
                 modifier = Modifier.fillMaxSize(),
                 backgroundColor = pageBackground,
                 backgroundBrush = backgroundBrush,
                 background = background,
-                topBarBlurProgress = topBarBlurProgress,
                 backdrop = pageBackdrop,
                 content = content,
             )
@@ -380,6 +409,7 @@ fun GlasmioPinnedPage(
                     modifier = Modifier.fillMaxWidth()
                         .windowInsetsPadding(headerInsets).align(Alignment.TopCenter),
                     collapseProgress = collapseProgress,
+                    collapseProgressProvider = collapseProgressProvider,
                     navigation = onNavigateBack?.let { navigateBack ->
                         {
                             GlasmioIconButton(navigateBack) {

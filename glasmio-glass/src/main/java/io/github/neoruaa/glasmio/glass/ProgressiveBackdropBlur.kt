@@ -3,17 +3,20 @@ package io.github.neoruaa.glasmio.glass
 import android.graphics.Shader
 import android.os.Build
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.RenderEffect
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.node.DrawModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.invalidateDraw
+import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
@@ -226,16 +229,32 @@ fun Modifier.progressiveBlurBackdrop(
     maxRadius: Dp = 10.dp,
 ): Modifier {
     val clampedProgress = progress.coerceIn(0f, 1f)
-    return graphicsLayer {
-        alpha = clampedProgress
-    }.drawPlainBackdrop(
-        // HWUI prepares invisible child trees too. Keep the filter node and its
-        // shader cache, but detach the unused source graph at the zero endpoint.
-        backdrop = if (clampedProgress == 0f) emptyBackdrop() else backdrop,
-        shape = { RectangleShape },
-        effects = { progressiveBackdropBlur(maxRadius.toPx()) },
+    return progressiveBlurBackdrop(
+        backdrop = backdrop,
+        active = clampedProgress > 0f,
+        alpha = { clampedProgress },
+        maxRadius = maxRadius,
     )
 }
+
+/**
+ * Draw-phase progressive blur modifier: [alpha] is read only in [graphicsLayer] so continuous
+ * scroll-edge updates never recompose callers, while [active] detaches the backdrop at rest.
+ */
+fun Modifier.progressiveBlurBackdrop(
+    backdrop: Backdrop,
+    active: Boolean,
+    alpha: () -> Float,
+    maxRadius: Dp = 10.dp,
+): Modifier = graphicsLayer {
+    this.alpha = alpha().coerceIn(0f, 1f)
+}.drawPlainBackdrop(
+    // HWUI prepares invisible child trees too. Keep the filter node and its
+    // shader cache, but detach the unused source graph at the zero endpoint.
+    backdrop = if (!active) emptyBackdrop() else backdrop,
+    shape = { RectangleShape },
+    effects = { progressiveBackdropBlur(maxRadius.toPx()) },
+)
 
 /**
  * Apply to foreground content before recording the blur source, leaving its background separate.
@@ -249,23 +268,133 @@ fun Modifier.scrollEdgeContentFade(
 ): Modifier {
     val reveal = progress.coerceIn(0f, 1f)
     if (reveal == 0f) return this
-    return graphicsLayer {
-        compositingStrategy = CompositingStrategy.Offscreen
-    }.drawWithCache {
+    return scrollEdgeContentFade({ reveal }, headerHeight, headerTop)
+}
+
+/**
+ * Draw-phase scroll-edge fade. When [solidBackgroundColor] is an opaque solid color matching the
+ * backdrop behind the content, blending `(1 - m) * B + m * (F_a + (1 - a) * B)` via a bounded
+ * top-band SrcOver gradient is algebraically identical to DstIn on an offscreen layer while
+ * avoiding any full-screen offscreen render target or second content pass.
+ */
+fun Modifier.scrollEdgeContentFade(
+    progress: () -> Float,
+    headerHeight: Dp,
+    headerTop: Dp = 0.dp,
+    solidBackgroundColor: Color = Color.Unspecified,
+): Modifier = this then ScrollEdgeContentFadeElement(progress, headerHeight, headerTop, solidBackgroundColor)
+
+private class ScrollEdgeContentFadeElement(
+    val progress: () -> Float,
+    val headerHeight: Dp,
+    val headerTop: Dp,
+    val solidBackgroundColor: Color,
+) : ModifierNodeElement<ScrollEdgeContentFadeNode>() {
+    override fun create(): ScrollEdgeContentFadeNode =
+        ScrollEdgeContentFadeNode(progress, headerHeight, headerTop, solidBackgroundColor)
+
+    override fun update(node: ScrollEdgeContentFadeNode) {
+        node.progress = progress
+        node.headerHeight = headerHeight
+        node.headerTop = headerTop
+        node.solidBackgroundColor = solidBackgroundColor
+        node.invalidateDraw()
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "scrollEdgeContentFade"
+        properties["headerHeight"] = headerHeight
+        properties["headerTop"] = headerTop
+        properties["solidBackgroundColor"] = solidBackgroundColor
+    }
+
+    override fun equals(other: Any?): Boolean = this === other || (
+        other is ScrollEdgeContentFadeElement &&
+            progress == other.progress &&
+            headerHeight == other.headerHeight &&
+            headerTop == other.headerTop &&
+            solidBackgroundColor == other.solidBackgroundColor
+        )
+
+    override fun hashCode(): Int {
+        var result = progress.hashCode()
+        result = 31 * result + headerHeight.hashCode()
+        result = 31 * result + headerTop.hashCode()
+        result = 31 * result + solidBackgroundColor.hashCode()
+        return result
+    }
+}
+
+private class ScrollEdgeContentFadeNode(
+    var progress: () -> Float,
+    var headerHeight: Dp,
+    var headerTop: Dp,
+    var solidBackgroundColor: Color,
+) : DrawModifierNode, Modifier.Node() {
+    private var cachedReveal = Float.NaN
+    private var cachedTop = Float.NaN
+    private var cachedHeader = Float.NaN
+    private var cachedSolidColor = Color.Unspecified
+    private var cachedMask: Brush? = null
+
+    private fun maskBrush(reveal: Float, top: Float, header: Float, solidColor: Color): Brush {
+        val existing = cachedMask
+        if (existing != null &&
+            cachedReveal == reveal &&
+            cachedTop == top &&
+            cachedHeader == header &&
+            cachedSolidColor == solidColor
+        ) {
+            return existing
+        }
+        val brush = if (solidColor != Color.Unspecified && solidColor.alpha == 1f) {
+            Brush.verticalGradient(
+                colors = listOf(solidColor.copy(alpha = reveal * 0.75f), solidColor.copy(alpha = 0f)),
+                startY = top,
+                endY = header,
+            )
+        } else {
+            Brush.verticalGradient(
+                colors = listOf(Color.White.copy(alpha = 1f - reveal * 0.75f), Color.White),
+                startY = top,
+                endY = header,
+            )
+        }
+        cachedReveal = reveal
+        cachedTop = top
+        cachedHeader = header
+        cachedSolidColor = solidColor
+        cachedMask = brush
+        return brush
+    }
+
+    override fun ContentDrawScope.draw() {
+        val reveal = progress().coerceIn(0f, 1f)
+        if (reveal <= 0f) {
+            drawContent()
+            return
+        }
         val header = headerHeight.toPx().coerceAtLeast(1f)
         val top = headerTop.toPx().coerceIn(0f, header - 1f)
-        val opacityMask = Brush.verticalGradient(
-            colors = listOf(Color.White.copy(alpha = 1f - reveal * 0.75f), Color.White),
-            startY = top,
-            endY = header,
-        )
-        // Past the gradient, DstIn multiplies every channel by one. End the mask rectangle
-        // on the next whole pixel while retaining the exact fractional gradient coordinates.
-        val maskSize = Size(size.width, minOf(size.height, ceil(header)))
-        onDrawWithContent {
+        val maskHeight = minOf(size.height, ceil(header))
+        val solid = solidBackgroundColor
+        if (solid != Color.Unspecified && solid.alpha == 1f) {
+            // Single content pass with zero offscreen allocation: exact SrcOver equivalent of DstIn over opaque solid B.
             drawContent()
-            val extent = if (drawContext.canvas.nativeCanvas.isHardwareAccelerated) maskSize else size
-            drawRect(opacityMask, size = extent, blendMode = BlendMode.DstIn)
+            if (maskHeight > 0f) {
+                drawRect(maskBrush(reveal, top, header, solid), size = Size(size.width, maskHeight))
+            }
+            return
+        }
+        // Non-solid/wallpaper/glass background: single content pass inside offscreen saveLayer + DstIn mask.
+        val nativeCanvas = drawContext.canvas.nativeCanvas
+        val save = nativeCanvas.saveLayer(0f, 0f, size.width, size.height, null)
+        try {
+            drawContent()
+            val extent = if (nativeCanvas.isHardwareAccelerated) Size(size.width, maskHeight) else size
+            drawRect(maskBrush(reveal, top, header, Color.Unspecified), size = extent, blendMode = BlendMode.DstIn)
+        } finally {
+            nativeCanvas.restoreToCount(save)
         }
     }
 }

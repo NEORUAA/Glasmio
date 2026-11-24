@@ -492,23 +492,59 @@ fun GlasmioPageBody(
     background: (@Composable BoxScope.() -> Unit)? = null,
     content: @Composable BoxScope.(PaddingValues) -> Unit,
 ) {
+    val currentProgress = rememberUpdatedState(topBarBlurProgress)
+    val progressProvider = remember { { currentProgress.value } }
+    GlasmioPageBody(
+        contentPadding = contentPadding,
+        topBarBlurProgress = progressProvider,
+        modifier = modifier,
+        backgroundColor = backgroundColor,
+        backgroundBrush = backgroundBrush,
+        backdrop = backdrop,
+        background = background,
+        content = content,
+    )
+}
+
+/** Draw-phase overload keeping continuous scroll-edge progress out of page recomposition. */
+@Composable
+fun GlasmioPageBody(
+    contentPadding: PaddingValues,
+    topBarBlurProgress: () -> Float,
+    modifier: Modifier = Modifier,
+    backgroundColor: androidx.compose.ui.graphics.Color = LocalGlassColors.current.groupedBackground,
+    backgroundBrush: androidx.compose.ui.graphics.Brush? = null,
+    backdrop: LayerBackdrop? = null,
+    background: (@Composable BoxScope.() -> Unit)? = null,
+    content: @Composable BoxScope.(PaddingValues) -> Unit,
+) {
     val appearance = LocalGlassAppearance.current
     val headerTop = WindowInsets.glasmioPageHeaderInsets.asPaddingValues().calculateTopPadding()
     val headerHeight = headerTop + 62.dp
-    val progress = topBarBlurProgress.coerceIn(0f, 1f)
+    val blurActive by remember(topBarBlurProgress) {
+        derivedStateOf { topBarBlurProgress().coerceIn(0f, 1f) > 0f }
+    }
     val pageBackdrop = backdrop ?: rememberLayerBackdrop()
-    // Only the page-owned capture is private to the scroll-edge blur.
-    val captureEnabled = backdrop != null || (appearance.usesBackdrop && progress != 0f)
+    // Only the page-owned capture is private to the scroll-edge blur; cap its height to the blur band + support.
+    val captureEnabled = backdrop != null || (appearance.usesBackdrop && blurActive)
+    val maxCaptureHeight = if (backdrop == null) headerHeight + 34.dp + 32.dp else Dp.Unspecified
+    val solidFadeBackground = if (backgroundBrush == null && background == null && backgroundColor.alpha == 1f) {
+        backgroundColor
+    } else androidx.compose.ui.graphics.Color.Unspecified
     Box(modifier.fillMaxSize()) {
         Box(
-            Modifier.fillMaxSize().conditionalLayerBackdrop(pageBackdrop, captureEnabled).trackBackdropPosition(pageBackdrop),
+            Modifier.fillMaxSize()
+                .conditionalLayerBackdrop(pageBackdrop, captureEnabled, maxCaptureHeight)
+                .trackBackdropPosition(pageBackdrop),
         ) {
             Box(
                 Modifier.matchParentSize()
                     .then(if (backgroundBrush != null) Modifier.background(backgroundBrush) else Modifier.background(backgroundColor)),
             ) { background?.invoke(this) }
-            Box(Modifier.fillMaxSize()
-                .scrollEdgeContentFade(progress, headerHeight, headerTop = headerTop)) {
+            Box(
+                Modifier.fillMaxSize()
+                    .scrollEdgeContentFade(topBarBlurProgress, headerHeight, headerTop = headerTop, solidBackgroundColor = solidFadeBackground),
+            ) {
                 GlasmioOverscrollHost {
                     Box(Modifier.fillMaxSize()
                         .windowInsetsPadding(glasmioPageHorizontalInsets().add(LocalGlasmioSidebarInsets.current))) {
@@ -520,9 +556,9 @@ fun GlasmioPageBody(
         Box(
             Modifier.fillMaxWidth().glasmioAdaptiveContent().height(headerHeight + if (appearance.usesBackdrop) 34.dp else 0.dp)
                 .then(if (appearance.usesBackdrop) {
-                    Modifier.progressiveBlurBackdrop(pageBackdrop, progress)
+                    Modifier.progressiveBlurBackdrop(pageBackdrop, active = blurActive, alpha = topBarBlurProgress)
                 } else {
-                    Modifier.graphicsLayer { alpha = progress }.background(backgroundColor.copy(alpha = 1f))
+                    Modifier.graphicsLayer { alpha = topBarBlurProgress().coerceIn(0f, 1f) }.background(backgroundColor.copy(alpha = 1f))
                 }),
         )
     }
