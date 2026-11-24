@@ -411,7 +411,7 @@ fun GlasmioBottomSheet(
                 val largeBackground by remember(frame) {
                     derivedStateOf(structuralEqualityPolicy()) { frame.value.expansionProgress > 0.5f }
                 }
-                val surfaceHeight by remember(frame) {
+                val surfaceHeightState = remember(frame) {
                     derivedStateOf(structuralEqualityPolicy()) {
                         val height = if (contentSized) layout.containerHeight - layout.fullTop else frame.value.naturalHeight
                         height.roundToInt().coerceAtLeast(1)
@@ -425,7 +425,7 @@ fun GlasmioBottomSheet(
                     )
                 }
                 val systemInsets = view.rootWindowInsets
-                val shape by remember(frame, systemInsets, density, layoutDirection, fullScreen, floating, compactEdge) {
+                val shapeState = remember(frame, systemInsets, density, layoutDirection, fullScreen, floating, compactEdge) {
                     val floatingShape = ContinuousRoundedRectangle(32.dp)
                     val compactEdgeShape = ContinuousRoundedRectangle(topStart = 38.dp, topEnd = 38.dp)
                     val minimumBottom = with(density) { 20.dp.toPx() }
@@ -522,10 +522,10 @@ fun GlasmioBottomSheet(
                             }
                         },
                     backdrop = backdrop,
-                    shape = shape,
+                    shapeProvider = { shapeState.value },
                     applyDragScale = false,
                     interactive = false,
-                    glassFraction = glass.value,
+                    glassFractionProvider = { glass.value },
                 ) {
                     val chromeBackdrop = rememberLayerBackdrop()
                     val chromeColors = LocalGlassColors.current
@@ -615,7 +615,7 @@ fun GlasmioBottomSheet(
                             }
                         },
                     ) { measurables, constraints ->
-                        val height = surfaceHeight
+                        val height = surfaceHeightState.value
                         val child = measurables.single().measure(Constraints(
                             minWidth = constraints.maxWidth,
                             maxWidth = constraints.maxWidth,

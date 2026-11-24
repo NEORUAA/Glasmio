@@ -67,13 +67,37 @@ fun GlasmioSheetSurface(
     interactive: Boolean = true,
     glassFraction: Float = 1f,
     content: @Composable BoxScope.() -> Unit,
+) = GlasmioSheetSurface(
+    modifier = modifier,
+    backdrop = backdrop,
+    shapeProvider = { shape },
+    interactiveHighlight = interactiveHighlight,
+    applyDragScale = applyDragScale,
+    interactive = interactive,
+    glassFraction = glassFraction,
+    glassFractionProvider = null,
+    content = content,
+)
+
+@Composable
+internal fun GlasmioSheetSurface(
+    modifier: Modifier = Modifier,
+    backdrop: Backdrop = LocalBlurBackdrop.current,
+    shapeProvider: () -> Shape,
+    interactiveHighlight: InteractiveHighlight? = null,
+    applyDragScale: Boolean = true,
+    interactive: Boolean = true,
+    glassFraction: Float = 1f,
+    glassFractionProvider: (() -> Float)? = null,
+    content: @Composable BoxScope.() -> Unit,
 ) {
+    val resolvedGlassFraction = glassFractionProvider?.invoke() ?: glassFraction
     val materialContext = rememberGlassMaterialContext(inheritLuminance = false)
     val colors = materialContext.colors
     val appearance = LocalGlassAppearance.current
     val inheritedMaterial = LocalIosSheetMaterialContext.current
         ?: IosSheetMaterialContext(
-            colors.isDark, if (glassFraction >= 0.5f) 1f else 0f,
+            colors.isDark, if (resolvedGlassFraction >= 0.5f) 1f else 0f,
             LocalGlasmioSheetGroupedListStyle.current,
         )
     val resolvedMaterial = if (materialContext.adaptive) inheritedMaterial.copy(isDark = materialContext.isDark) else inheritedMaterial
@@ -82,7 +106,7 @@ fun GlasmioSheetSurface(
     val secondaryContent = if (colors.secondaryContent == semanticDefaults.secondaryContent)
         contentMaterial.secondaryLabelColor else colors.secondaryContent
     val materialBackdrop = rememberLayerBackdrop()
-    val glass = glassFraction.coerceIn(0f, 1f)
+    val glass = resolvedGlassFraction.coerceIn(0f, 1f)
     val systemBackground = if (materialContext.isDark) Color(0xFF1C1C1E) else Color.White
     val innerShadows = rememberNavigationInnerShadows(true)
     val animationScope = rememberCoroutineScope()
@@ -115,7 +139,7 @@ fun GlasmioSheetSurface(
             .fillMaxWidth()
                 .navigationGlassBackground(
                     backdrop = backdropRenderer,
-                    shape = { shape },
+                    shape = shapeProvider,
                     containerColor = if (appearance.reduceTransparency) systemBackground else colors.container,
                     navigationMaterial = true,
                     innerShadows = innerShadows,
