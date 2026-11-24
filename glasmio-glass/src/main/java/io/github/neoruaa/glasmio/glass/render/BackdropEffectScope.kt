@@ -10,6 +10,7 @@
 package io.github.neoruaa.glasmio.glass.render
 
 import io.github.neoruaa.glasmio.glass.NativeGlassMipAtlas
+import io.github.neoruaa.glasmio.glass.NativeGlassTwoRateOpticalStage
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.view.View
@@ -42,6 +43,7 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
 
     /** Only a library-owned draw node can opt into fully configured consumer snapshots. */
     internal open val supportsRetainedOpticalStage: Boolean get() = false
+    internal open val supportsTwoRateNativeOpticalStage: Boolean get() = false
     internal open val supportsNativeControlLensConsumerSharing: Boolean get() = false
     internal open val supportsNativeControlLensPlaneStages: Boolean get() = false
     // Keep this getter unmangled for renderer subclasses in consuming modules.
@@ -58,6 +60,7 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
     internal var effectTextureSize: IntSize? = null
     internal var materializedInputEffects: List<RenderEffect> = emptyList()
     internal var materializedMipAtlas: NativeGlassMipAtlas? = null
+    internal var materializedOpticalStage: NativeGlassTwoRateOpticalStage? = null
     internal var colorManagedNativeGlass: Boolean = false
     internal var nativeGlassHardwareRendering: Boolean = false
     internal var nativeGlassHeadroom: Float = 1f
@@ -126,6 +129,7 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
         effectTextureSize = null
         materializedInputEffects = emptyList()
         materializedMipAtlas = null
+        materializedOpticalStage = null
         materialOutputSize = null
         materialOutputOrigin = Offset.Zero
         nativeMaterialCompleted = false
@@ -146,6 +150,7 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
         effectTextureSize = null
         materializedInputEffects = emptyList()
         materializedMipAtlas = null
+        materializedOpticalStage = null
         materialOutputSize = null
         materialOutputOrigin = Offset.Zero
         nativeMaterialCompleted = false

@@ -531,15 +531,116 @@ half4 main(float2 position) {
 }
 """
 
-/** Reuse the same face implementation in the native optical/coverage kernel. */
+/** Reuse the same face implementation in the native optical/coverage kernel, without color-space helpers. */
+private fun String.withoutNativeWorkingColorSpaceHelpers(prefix: String = ""): String {
+    var result = this
+    for (appearance in listOf("", "appearance_")) {
+        val name = "$prefix$appearance"
+        result = result.replace(
+            """
+half4 ${name}navigationWorkingToNative(half4 value) {
+    float alpha = float(value.a);
+    return half4(glassWorkingToNativeGamma(float3(value.rgb) / max(alpha, .000001)) * alpha, alpha);
+}
+half4 ${name}navigationNativeToWorking(half4 value) {
+    float alpha = float(value.a);
+    return half4(glassNativeGammaToWorking(float3(value.rgb) / max(alpha, .000001)) * alpha, alpha);
+}""",
+            "",
+        )
+    }
+    return result
+}
+
 internal val NavigationMaterialNativeShaderFunctions =
     NavigationMaterialShaderFunctions.removePrefix(GlassColorSpaceShaderFunctions)
+        .withoutNativeWorkingColorSpaceHelpers()
+
+/** Compact single-appearance native face + tint program when no light/dark transition is active. */
+private fun buildEndpointOnlyNativeShaderFunctions(prefix: String, hasFills: Boolean, hasTint: Boolean): String = """
+uniform float ${prefix}materialOpacity;
+uniform float4 ${prefix}face;
+uniform float4 ${prefix}faceFill;
+uniform float ${prefix}luminanceRollOff;
+uniform float ${prefix}fillCount;
+uniform float4 ${prefix}fill0;
+uniform float4 ${prefix}fill1;
+uniform float4 ${prefix}fill2;
+uniform float4 ${prefix}fill3;
+uniform float4 ${prefix}fillModes;
+uniform float ${prefix}hasTint;
+uniform float4 ${prefix}tintRow0;
+uniform float4 ${prefix}tintRow1;
+uniform float4 ${prefix}tintRow2;
+uniform float4 ${prefix}overlay;
+float ${prefix}materialLum(float3 color) { return dot(color, float3(.2126, .7152, .0722)); }
+""" + (if (hasFills) """
+float3 ${prefix}materialClip(float3 color) {
+    float luminance = dot(color, float3(.3, .59, .11));
+    float lowest = min(min(color.r, color.g), color.b);
+    float highest = max(max(color.r, color.g), color.b);
+    if (lowest < 0.0) color = luminance + (color - luminance) * luminance / max(luminance - lowest, .00001);
+    if (highest > 1.0) color = luminance + (color - luminance) * (1.0 - luminance) / max(highest - luminance, .00001);
+    return color;
+}
+float3 ${prefix}materialFill(float3 color, float4 paint, float mode) {
+    if (mode < .5) return mix(color, paint.rgb, paint.a);
+    if (mode < 1.5) return min(color + paint.rgb * paint.a, 1.0);
+    if (mode < 2.5) {
+        float sourceLum = dot(paint.rgb, float3(.3, .59, .11));
+        float targetLum = dot(color, float3(.3, .59, .11));
+        return mix(color, ${prefix}materialClip(color + sourceLum - targetLum), paint.a);
+    }
+    if (mode < 3.5) return mix(color, max(color, paint.rgb), paint.a);
+    return mix(color, min(color, paint.rgb), paint.a);
+}
+""" else "") + """
+float4 ${prefix}endpoint_navigationMaterialFaceRaw(float4 sampled) {
+    if (${prefix}materialOpacity <= 0.0) return sampled;
+    float3 color = sampled.rgb;
+    if (${prefix}face.w > .5) {
+        float luminance = ${prefix}materialLum(color);
+        if (${prefix}luminanceRollOff > 0.0) {
+            float gain = clamp(1.0 - luminance * ${prefix}luminanceRollOff, 0.0, 1.0);
+            color = mix(float3(luminance * gain), color * gain, 1.0 + .3 * (1.0 - gain));
+            luminance = ${prefix}materialLum(color);
+        }
+        color = (luminance * (${prefix}face.z - ${prefix}face.y) + ${prefix}face.y) + (color - luminance) * ${prefix}face.x;
+        color = mix(color, ${prefix}faceFill.rgb, ${prefix}faceFill.a);
+    }
+""" + (if (hasFills) """
+    if (${prefix}fillCount > .5) color = ${prefix}materialFill(color, ${prefix}fill0, ${prefix}fillModes.x);
+    if (${prefix}fillCount > 1.5) color = ${prefix}materialFill(color, ${prefix}fill1, ${prefix}fillModes.y);
+    if (${prefix}fillCount > 2.5) color = ${prefix}materialFill(color, ${prefix}fill2, ${prefix}fillModes.z);
+    if (${prefix}fillCount > 3.5) color = ${prefix}materialFill(color, ${prefix}fill3, ${prefix}fillModes.w);
+""" else "") + """
+    return float4(color, sampled.a);
+}
+""" + (if (hasTint) """
+float4 ${prefix}navigationMaterialTintForAppearance(float4 destination, float3 original, float mask, float coverage, bool alternate) {
+    float3 color = destination.rgb + (1.0 - destination.a) * original;
+    float3 tinted = ${prefix}hasTint > .5 ? float3(dot(${prefix}tintRow0, float4(color, 1.0)),
+        dot(${prefix}tintRow1, float4(color, 1.0)), dot(${prefix}tintRow2, float4(color, 1.0))) : ${prefix}overlay.rgb;
+    if (${prefix}hasTint > .5) tinted = mix(tinted, ${prefix}overlay.rgb, ${prefix}overlay.a);
+    float alpha = (${prefix}hasTint > .5 ? mask : coverage * ${prefix}overlay.a) * ${prefix}materialOpacity;
+    return float4(tinted * alpha, alpha) + destination * (1.0 - alpha);
+}
+""" else "") + "\n"
+
+private val EndpointTargetNoFillNoTint by lazy { buildEndpointOnlyNativeShaderFunctions("", hasFills = false, hasTint = false) }
+private val EndpointTargetNoFillWithTint by lazy { buildEndpointOnlyNativeShaderFunctions("", hasFills = false, hasTint = true) }
+private val EndpointTargetWithFillNoTint by lazy { buildEndpointOnlyNativeShaderFunctions("", hasFills = true, hasTint = false) }
+private val EndpointTargetWithFillWithTint by lazy { buildEndpointOnlyNativeShaderFunctions("", hasFills = true, hasTint = true) }
+private val EndpointSourceNoFillNoTint by lazy { buildEndpointOnlyNativeShaderFunctions("source_", hasFills = false, hasTint = false) }
+private val EndpointSourceNoFillWithTint by lazy { buildEndpointOnlyNativeShaderFunctions("source_", hasFills = false, hasTint = true) }
+private val EndpointSourceWithFillNoTint by lazy { buildEndpointOnlyNativeShaderFunctions("source_", hasFills = true, hasTint = false) }
+private val EndpointSourceWithFillWithTint by lazy { buildEndpointOnlyNativeShaderFunctions("source_", hasFills = true, hasTint = true) }
 
 /** A second known recipe preserves retained source/target weighting without duplicated coefficients. */
 internal val NavigationMaterialSourceShaderFunctions = run {
     val endpointNames = listOf("materialOpacity", "face", "faceFill", "luminanceRollOff", "fillCount",
         "fill0", "fill1", "fill2", "fill3", "fillModes", "hasTint", "tintRow0", "tintRow1", "tintRow2", "overlay",
-        "navigationWorkingToNative", "navigationNativeToWorking", "materialLum", "materialClip", "materialFill",
+        "materialLum", "materialClip", "materialFill",
         "navigationMaterialFaceRaw", "navigationMaterialFace", "navigationMaterialFinish", "navigationMaterial")
     val names = endpointNames + endpointNames.map { "appearance_$it" } +
         listOf("navigationMaterialFaceRaw", "navigationMaterialFace", "navigationMaterialFinish", "navigationMaterial")
@@ -582,11 +683,31 @@ private val NavigationMaterialBlenderNoFillShader by lazy {
     NavigationMaterialBlenderShader.withoutNavigationMaterialFills()
 }
 
-internal fun navigationMaterialNativeShaderFunctions(hasFills: Boolean): String =
+internal fun navigationMaterialNativeShaderFunctions(
+    hasFills: Boolean,
+    hasAppearance: Boolean = true,
+    hasTint: Boolean = true,
+): String = if (hasAppearance) {
     if (hasFills) NavigationMaterialNativeShaderFunctions else NavigationMaterialNativeNoFillShaderFunctions
+} else when {
+    hasFills && hasTint -> EndpointTargetWithFillWithTint
+    hasFills -> EndpointTargetWithFillNoTint
+    hasTint -> EndpointTargetNoFillWithTint
+    else -> EndpointTargetNoFillNoTint
+}
 
-internal fun navigationMaterialSourceShaderFunctions(hasFills: Boolean): String =
+internal fun navigationMaterialSourceShaderFunctions(
+    hasFills: Boolean,
+    hasAppearance: Boolean = true,
+    hasTint: Boolean = true,
+): String = if (hasAppearance) {
     if (hasFills) NavigationMaterialSourceShaderFunctions else NavigationMaterialSourceNoFillShaderFunctions
+} else when {
+    hasFills && hasTint -> EndpointSourceWithFillWithTint
+    hasFills -> EndpointSourceWithFillNoTint
+    hasTint -> EndpointSourceNoFillWithTint
+    else -> EndpointSourceNoFillNoTint
+}
 
 private const val NavigationMaterialBlenderShader = NavigationMaterialShaderFunctions + """
 half4 main(half4 src, half4 dst) {

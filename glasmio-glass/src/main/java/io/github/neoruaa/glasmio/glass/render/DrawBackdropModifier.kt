@@ -348,6 +348,7 @@ private class DrawBackdropNode(
         object : BackdropEffectScopeImpl() {
 
             override val supportsNativeControlLensConsumerSharing: Boolean get() = true
+            override val supportsTwoRateNativeOpticalStage: Boolean get() = true
             override val supportsNativeGlassHardwareLinearSampling: Boolean get() = true
             override val supportsNativeControlLensPlaneStages: Boolean
                 get() = onDrawBackdrop === DefaultOnDrawBackdrop &&
@@ -542,7 +543,9 @@ private class DrawBackdropNode(
     }
     private val recordAtlasBackingBlock: DrawScope.() -> Unit = {
         val atlas = effectScope.materializedMipAtlas
+        val opticalStage = effectScope.materializedOpticalStage
         if (atlas?.hasControlPlanes == true) atlasPasses?.drawControlPlanes(this, atlas)
+        else if (opticalStage != null) atlasPasses?.drawTwoRateConsumerInputs(this, opticalStage)
         else atlasProducerLayer?.let { drawLayer(it) }
     }
     private val recordAtlasConsumerBlock: DrawScope.() -> Unit = { atlasBackingLayer?.let { drawLayer(it) } }
@@ -607,6 +610,7 @@ private class DrawBackdropNode(
             }
             val producerEffects = effectScope.materializedInputEffects
             val mipAtlas = effectScope.materializedMipAtlas
+            val opticalStage = effectScope.materializedOpticalStage
             if (mipAtlas != null || producerEffects.isNotEmpty()) {
                 val context = requireGraphicsContext()
                 val passes = atlasPasses ?: NativeGlassAtlasPasses(context).also { atlasPasses = it }
@@ -616,6 +620,18 @@ private class DrawBackdropNode(
                             recordLayer(this@DrawBackdropNode, target, targetSize, block)
                         },
                         sourceBlock = if (source != null) recordBackdropFromLuminanceBlock else recordBackdropBlock)
+                    null
+                } else if (mipAtlas != null && opticalStage != null) {
+                    passes.recordTwoRatePyramid(
+                        mipAtlas,
+                        opticalStage,
+                        inputEffects = producerEffects,
+                        sourceSupport = if (mipAtlas.canPropagateSourceBounds && producerEffects.isEmpty()) boundedSourcePixels(baseSize) else null,
+                        record = { target, targetSize, block ->
+                            recordLayer(this@DrawBackdropNode, target, targetSize, block)
+                        },
+                        sourceBlock = if (source != null) recordBackdropFromLuminanceBlock else recordBackdropBlock,
+                    )
                     null
                 } else if (mipAtlas != null) passes.recordPyramid(
                     mipAtlas,
@@ -642,7 +658,7 @@ private class DrawBackdropNode(
                 // Material and control consumers sample only their original packed tile rectangles.
                 // Extending its private input subset to the real backing lets Skia use hardware edges.
                 val finalInputSize = if (effectScope.nativeGlassHardwareRendering && effectScope.nativeMaterialCompleted &&
-                    mipAtlas != null && (mipAtlas.textureStages.isNotEmpty() || mipAtlas.hasControlPlanes) &&
+                    mipAtlas != null && (mipAtlas.textureStages.isNotEmpty() || mipAtlas.hasControlPlanes || opticalStage != null) &&
                     android.os.Build.VERSION.SDK_INT >= 36) {
                     consumerSize.withFullHardwareBacking()
                 } else consumerSize

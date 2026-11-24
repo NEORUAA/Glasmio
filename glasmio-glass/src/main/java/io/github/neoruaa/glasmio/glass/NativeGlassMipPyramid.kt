@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.annotation.RequiresApi
 import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.GraphicsContext
 import androidx.compose.ui.graphics.layer.CompositingStrategy
@@ -267,6 +268,18 @@ internal class NativeGlassMipAtlas(
     }
 }
 
+/** Low-rate optical pre-filter output + cropped full-rate L0 packed tightly for full-rate completion. */
+internal class NativeGlassTwoRateOpticalStage(
+    val effect: RenderEffect,
+    val opticalOrigin: Offset,
+    val opticalSize: IntSize,
+    val originalConsumerRect: IntRect,
+    val opticalConsumerRect: IntRect,
+    val packedConsumerInputSize: IntSize,
+) {
+    val composeEffect by lazy(LazyThreadSafetyMode.NONE) { effect.asComposeRenderEffect() }
+}
+
 /** Keep packed storage separate from the padded base image and its original coordinates. */
 internal fun BackdropEffectScope.materializeNativeGlassAtlas(atlas: NativeGlassMipAtlas): Boolean {
     val storage = this as? BackdropEffectScopeImpl ?: return false
@@ -318,6 +331,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
     private var pyramidSource: GraphicsLayer? = null
     private var pyramidSourceSize = IntSize.Zero
     private var pyramidSourceEffect: androidx.compose.ui.graphics.RenderEffect? = null
+    private var opticalLayer: GraphicsLayer? = null
     private var recordedControl: NativeGlassMipAtlas? = null
     private var controlContext: RecordingContext? = null
     private var controlInput: GraphicsLayer? = null
@@ -677,6 +691,53 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         return output
     }
 
+    /** Materialize Stage A optical pre-filter over the padded atlas while bounding its active writes. */
+    fun recordTwoRatePyramid(
+        atlas: NativeGlassMipAtlas,
+        stage: NativeGlassTwoRateOpticalStage,
+        record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
+        sourceBlock: DrawScope.() -> Unit,
+        inputEffects: List<androidx.compose.ui.graphics.RenderEffect> = emptyList(),
+        sourceLayer: GraphicsLayer? = null,
+        recordingScope: DrawScope? = null,
+        sourceSupport: IntRect? = null,
+    ) {
+        val assembledLayer = recordPyramid(
+            atlas = atlas,
+            record = record,
+            sourceBlock = sourceBlock,
+            inputEffects = inputEffects,
+            sourceLayer = sourceLayer,
+            recordingScope = recordingScope,
+            sourceSupport = sourceSupport,
+        )
+        val optical = opticalLayer ?: context.createGraphicsLayer().also { opticalLayer = it }
+        optical.clip = true
+        optical.compositingStrategy = CompositingStrategy.Offscreen
+        optical.renderEffect = stage.composeEffect
+        record(optical, atlas.size) { drawLayer(assembledLayer) }
+    }
+
+    /** Pack only cropped L0 and cropped Stage A optical output into the Stage B consumer layer. */
+    fun drawTwoRateConsumerInputs(scope: DrawScope, stage: NativeGlassTwoRateOpticalStage) = with(scope) {
+        val originalLayer = requireNotNull(base)
+        val filteredLayer = requireNotNull(opticalLayer)
+        val origRect = stage.originalConsumerRect
+        val optRect = stage.opticalConsumerRect
+        translate(origRect.left.toFloat(), origRect.top.toFloat()) {
+            clipRect(0f, 0f, origRect.width.toFloat(), origRect.height.toFloat()) {
+                translate(-stage.opticalOrigin.x, -stage.opticalOrigin.y) {
+                    drawLayer(originalLayer)
+                }
+            }
+        }
+        translate(optRect.left.toFloat(), optRect.top.toFloat()) {
+            clipRect(0f, 0f, optRect.width.toFloat(), optRect.height.toFloat()) {
+                drawLayer(filteredLayer)
+            }
+        }
+    }
+
     fun release() {
         retained.forEach(context::releaseGraphicsLayer)
         retained.clear()
@@ -686,6 +747,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         sparseTiles.clear()
         base?.let(context::releaseGraphicsLayer)
         assembled?.let(context::releaseGraphicsLayer)
+        opticalLayer?.let(context::releaseGraphicsLayer)
         controlSource?.let(context::releaseGraphicsLayer)
         sceneInput?.let(context::releaseGraphicsLayer)
         fieldLayer?.let(context::releaseGraphicsLayer)
@@ -697,6 +759,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         sceneInput = null
         base = null
         assembled = null
+        opticalLayer = null
         recordedPyramid = null
         pyramidContext = null
         pyramidSource = null
@@ -731,6 +794,7 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
     private var atlasAllowHardwareLinearSampling = false
     private var atlasFinalSampleRegion: IntRect? = null
     private var atlasSampleIslands: NativeMipSampleIslands? = null
+    private var atlasPreferredOutputSize: IntSize? = null
     private var cachedAtlas: NativeGlassMipAtlas? = null
     private val texturePrograms = mutableMapOf<String, String>()
 
@@ -746,6 +810,7 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
         allowHardwareLinearSampling: Boolean = false,
         finalSampleRegion: IntRect? = null,
         sampleIslands: NativeMipSampleIslands? = null,
+        preferredOutputSize: IntSize? = null,
     ): NativeGlassMipAtlas {
         val extent = IntSize(sourceSize.width.coerceAtLeast(1), sourceSize.height.coerceAtLeast(1))
         val requested = ceil(maxLod.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f).toInt()
@@ -763,7 +828,8 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
                 sparseNativeMipLevels(rects, sampleIslands) else null
         if (retained != null && atlasSource === source && atlasKernel == kernel && atlasColorManaged == colorManaged &&
             atlasNativeGammaStorage == storeNativeGamma && atlasAllowHardwareLinearSampling == allowHardwareLinearSampling &&
-            atlasFinalSampleRegion == finalSampleRegion && retained.baseSize == extent && retained.rects.size == count) {
+            atlasFinalSampleRegion == finalSampleRegion && atlasPreferredOutputSize == preferredOutputSize &&
+            retained.baseSize == extent && retained.rects.size == count) {
             // Fractional shape motion may leave every actual raster scissor unchanged. Keep
             // the producer and its private RenderNodes while the final geometry advances.
             if (atlasSampleIslands == sampleIslands || requestedSparseLevels(retained.rects) == retained.sparseLevels) {
@@ -812,10 +878,26 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
                 val candidate = analyticRects(row) ?: continue
                 val candidateSize = bounds(candidate)
                 val candidateArea = area(candidateSize)
-                if (candidateArea <= originalArea && (regularMipRow == null || candidateArea < area(atlasSize))) {
-                    selectedRects = candidate
-                    atlasSize = candidateSize
-                    regularMipRow = row
+                if (candidateArea <= originalArea) {
+                    val better = if (preferredOutputSize != null) {
+                        val candidateConsumerArea = area(IntSize(
+                            maxOf(candidateSize.width, preferredOutputSize.width),
+                            maxOf(candidateSize.height, preferredOutputSize.height),
+                        ))
+                        val currentConsumerArea = area(IntSize(
+                            maxOf(atlasSize.width, preferredOutputSize.width),
+                            maxOf(atlasSize.height, preferredOutputSize.height),
+                        ))
+                        regularMipRow == null || candidateConsumerArea < currentConsumerArea ||
+                            (candidateConsumerArea == currentConsumerArea && candidateArea < area(atlasSize))
+                    } else {
+                        regularMipRow == null || candidateArea < area(atlasSize)
+                    }
+                    if (better) {
+                        selectedRects = candidate
+                        atlasSize = candidateSize
+                        regularMipRow = row
+                    }
                 }
             }
         }
@@ -899,6 +981,7 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
         atlasAllowHardwareLinearSampling = allowHardwareLinearSampling
         atlasFinalSampleRegion = finalSampleRegion
         atlasSampleIslands = sampleIslands
+        atlasPreferredOutputSize = preferredOutputSize
         return NativeGlassMipAtlas(extent, atlasSize, rects, null, colorManaged, emptyList(),
             textureStages, textureSource, nativeGammaStorage = storeNativeGamma,
             regularMipRow = regularMipRow,

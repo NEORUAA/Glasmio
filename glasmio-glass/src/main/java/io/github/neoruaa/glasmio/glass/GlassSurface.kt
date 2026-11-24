@@ -731,6 +731,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
         NavigationMaterialRecipe.resolve(darkFraction, material, prominentTint, materialTint, containerAlphaMultiplier)
     } else null
     val completeNativeMaterial = nativeRecipe != null
+    val decoupleExteriorShadow = completeNativeMaterial && dropShadow == null && !nativeRecipe.hasTintMatrix()
     val surfaceHighlight = Highlight.Default.copy(
         alpha = (highlightAlphaMultiplier.coerceIn(0f, 1f) + opticalHighlightBoost).coerceIn(0f, 1f),
         style = HighlightStyle.Default(angle = highlightAngle, clear = material == NavigationGlassMaterial.Clear),
@@ -749,8 +750,12 @@ internal fun Modifier.navigationGlassBackgroundResolved(
     var completedPressOverlay = false
     var geometryExtent = Float.NaN
     var cachedGeometry: NavigationGlassGeometryProfile? = null
+    val drawExteriorShadow = dropShadow == null && (
+        !completeNativeMaterial ||
+            (decoupleExteriorShadow && shadowMaterial != NavigationGlassMaterial.Clear && shadowAlpha > 0f)
+        )
     return this.then(
-        if (dropShadow == null && !completeNativeMaterial) {
+        if (drawExteriorShadow) {
             Modifier.navigationGlassDropShadow(
                 shape,
                 if (shadowAlpha == 1f) layerBlock else {
@@ -759,8 +764,10 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                         alpha *= shadowAlpha.coerceIn(0f, 1f)
                     }
                 },
+                cacheBlurResult = decoupleExteriorShadow,
                 useNativeProfile = true,
                 nativeMaterial = shadowMaterial,
+                renderScale = if (decoupleExteriorShadow) 0.25f else 1f,
             )
         } else Modifier,
     )
@@ -793,11 +800,16 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                     NativeGlassCompletion(if (outlineShape == null) recipe else recipe.forMinimumDimension(extent), isDark,
                         if (material == NavigationGlassMaterial.Clear) 1f else 0f,
                         materialAlpha = materialPaintAlpha, edgeAlpha = innerShadowAlpha,
-                        shadow = if (dropShadow == null) navigationNativeShadowProfile(extent, shadowMaterial) else null,
+                        shadow = if (dropShadow == null && !decoupleExteriorShadow)
+                            navigationNativeShadowProfile(extent, shadowMaterial) else null,
                         shadowAlpha = shadowAlpha, highlightAlpha = surfaceHighlight.alpha,
                         highlightAngle = highlightAngle, darkFraction = darkFraction, pressGlow = pressGlow)
                 }
-                val completionBand = completion?.shadow?.let { (it.radius * 2f + 8f) * density + 2f } ?: 0f
+                val completionBand = completion?.let {
+                    if (it.shadow != null) (it.shadow.radius * 2f + 8f) * density + 2f
+                    else if (it.recipe.hasTintMatrix()) 10f * density + 2f
+                    else ceil(.53333333f * density + 2f)
+                } ?: 0f
                 val nativeField = if (isRuntimeShaderSupported() && (nativeOptics || completion != null)) when (surfaceShape) {
                     is LiquidContactShape -> navigationContainerGlassField(surfaceShape, opticalCenter?.invoke(), completionBand)
                     is ToolbarActionShape -> navigationToolbarGlassField(surfaceShape, completionBand)

@@ -141,8 +141,10 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
         NativeControlCompletionSourceKey(functions, atlas.colorManaged, filteredIsNativeRaw, topology,
         samplingLayoutKey = atlas.samplingLayoutKey)) {
         nativeGlassCompletionFieldFunctions(functions) +
-            (if (!functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") + atlas.samplingFunctions +
-            (if (atlas.colorManaged) "" else GlassColorSpaceShaderFunctions) +
+            (if (topology.hasSourceShadow && topology.hasShadow &&
+                !functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") +
+            atlas.samplingFunctions +
+            (if (!atlas.colorManaged && !atlas.nativeGammaStorage && topology.hasPressGlow) GlassColorSpaceShaderFunctions else "") +
             (if (filteredIsNativeRaw) NativeControlFilteredRawFunctions else NativeControlFilteredFunctions) +
             nativeGlassCompletionShader(topology)
     }
@@ -183,8 +185,11 @@ internal fun BackdropEffectScope.completeNativeMenuFilteredGlass(
     val source = sources.getOrPut(NativeControlCompletionSourceKey(functions, atlas.colorManaged,
         filteredIsNativeRaw = true, topology = topology, samplingLayoutKey = atlas.samplingLayoutKey)) {
         nativeGlassCompletionFieldFunctions(functions) +
-            (if (!functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") + atlas.samplingFunctions +
-            (if (atlas.colorManaged) "" else GlassColorSpaceShaderFunctions) + NativeMenuTransitionFilteredFunctions +
+            (if (topology.hasSourceShadow && topology.hasShadow &&
+                !functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") +
+            atlas.samplingFunctions +
+            (if (!atlas.colorManaged && !atlas.nativeGammaStorage && topology.hasPressGlow) GlassColorSpaceShaderFunctions else "") +
+            NativeMenuTransitionFilteredFunctions +
             nativeGlassCompletionShader(topology)
     }
     val shader = obtainRuntimeShader("Glasmio.NativeControl.menuComplete.${atlas.colorManaged}.${topology.cacheKey}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
