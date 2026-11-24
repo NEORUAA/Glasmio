@@ -479,6 +479,7 @@ fun GlasmioBottomSheet(
                         else -> 1f
                     },
                     groupedListStyle = LocalGlasmioSheetGroupedListStyle.current,
+                    directBackplateVisible = contentBackground == null && topBarBlurProgress <= 0.001f,
                 )
                 CompositionLocalProvider(LocalIosSheetMaterialContext provides contentMaterial) {
                 GlasmioSheetSurface(
@@ -565,7 +566,7 @@ fun GlasmioBottomSheet(
                                 Box(Modifier.fillMaxWidth()) {
                                     Box(
                                         (if (contentSized) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
-                                            .then(if (appearance.usesBackdrop) Modifier.glassBackdropSource(chromeBackdrop, maxCaptureHeight = headerHeight + 96.dp) else Modifier)
+                                            .then(if (appearance.usesBackdrop) Modifier.glassBackdropSource(chromeBackdrop, maxCaptureHeight = headerHeight + 48.dp) else Modifier)
                                             .trackBackdropPosition(chromeBackdrop),
                                     ) {
                                         Box(

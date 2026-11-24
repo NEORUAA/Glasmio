@@ -9,9 +9,11 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -41,6 +43,7 @@ private val LightPrimaryTextFilter = sheetTextFilter(-1f)
 private val DarkPrimaryTextFilter = sheetTextFilter(0.949999988f)
 private val LightSecondaryTextFilter = sheetTextFilter(-0.400000006f)
 private val DarkSecondaryTextFilter = sheetTextFilter(0.300000012f)
+private val DarkSecondaryPlusColor = Color(1f, 1f, 1f, 0.300000012f)
 
 /**
  * UIKit's material text uses the glyphs as a white mask over a transformed backdrop. Its
@@ -60,16 +63,36 @@ internal fun IosSheetText(
 ) {
     val context = LocalIosSheetMaterialContext.current
     val backdrop = LocalIosSheetBackdrop.current
-    // Subtracting one from the bounded light backdrop is identically black.
+    // Subtracting one from the bounded light backdrop is identically black; adding 0.95 to the
+    // dark sheet glass backplate (RGB floor >= 0x1A/255 = 0.102) saturates identically to white.
     val plainBlack = role == IosSheetTextRole.Primary && context?.isDark == false && color == Color.Black
-    val material = useMaterial && !plainBlack && context != null && backdrop != null && context.vibrancy > 0f
+    val plainWhite = role == IosSheetTextRole.Primary && context?.isDark == true && color == Color.White
+    val darkSecondaryDirect = useMaterial &&
+        role == IosSheetTextRole.Secondary &&
+        context?.isDark == true &&
+        context.vibrancy >= 1f &&
+        context.directBackplateVisible &&
+        backdrop != null
+    val material = useMaterial && !plainBlack && !plainWhite && !darkSecondaryDirect &&
+        context != null && backdrop != null && context.vibrancy > 0f
     Text(
         text = text,
-        modifier = if (material) modifier.sheetTextMaterial(
-            requireNotNull(context), requireNotNull(backdrop), role, color,
-        ) else modifier,
+        modifier = when {
+            darkSecondaryDirect -> modifier.graphicsLayer {
+                compositingStrategy = CompositingStrategy.Offscreen
+                blendMode = BlendMode.Plus
+            }
+            material -> modifier.sheetTextMaterial(
+                requireNotNull(context), requireNotNull(backdrop), role, color,
+            )
+            else -> modifier
+        },
         style = style,
-        color = if (material) Color.White else color,
+        color = when {
+            darkSecondaryDirect -> DarkSecondaryPlusColor
+            material -> Color.White
+            else -> color
+        },
         maxLines = maxLines,
         overflow = overflow,
         textAlign = textAlign,

@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -40,6 +41,7 @@ internal data class IosSheetMaterialContext(
     val isDark: Boolean,
     val vibrancy: Float,
     val groupedListStyle: GlasmioSheetGroupedListStyle = GlasmioSheetGroupedListStyle.Native,
+    val directBackplateVisible: Boolean = true,
 ) {
     val cellColor: Color get() = if (isDark) Color(0xFF2C2C2E) else Color.White
     val separatorColor: Color get() = if (isDark) Color(0xFF545458).copy(alpha = 0.5f)
@@ -64,6 +66,7 @@ private fun sheetCellFilter(bias: Float): ColorFilter = ColorFilter.colorMatrix(
 
 private val LightCellFilter = sheetCellFilter(-0.06f)
 private val DarkCellFilter = sheetCellFilter(0.06f)
+private val DarkCellPlusColor = Color(1f, 1f, 1f, 0.06f)
 
 /**
  * Native grouped-cell material transforms the backdrop, not the white carrier pixels.
@@ -80,6 +83,11 @@ internal fun Modifier.sheetCellBackground(
         // The opaque large carrier and its native dismissal transition remain unchanged.
         val tint = context.cellColor.copy(alpha = 1f - vibrant * (1f - SheetGroupedListBackgroundAlpha))
         return drawBehind { drawRect(tint) }
+    }
+    if (vibrant >= 1f && context.isDark && context.directBackplateVisible) {
+        // Over an opaque sheet backplate, BlendMode.Plus with premultiplied (0.06, 0.06, 0.06, 0.06)
+        // computes clamp(dst.rgb + 0.06, 0, 1) directly without saveLayer or backdrop DAG edges.
+        return drawBehind { drawRect(DarkCellPlusColor, blendMode = BlendMode.Plus) }
     }
     if (vibrant > 0f && backdrop != null) {
         return this then SheetCellBackgroundElement(context, backdrop)
