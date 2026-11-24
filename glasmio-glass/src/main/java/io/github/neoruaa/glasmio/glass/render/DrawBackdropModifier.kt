@@ -480,6 +480,12 @@ private class DrawBackdropNode(
     }
     private val foregroundClipPath = Path()
     private var foregroundClipRoundRect: RoundRect? = null
+    private var cachedOutlineShape: Shape? = null
+    private var cachedOutlineSize = Size.Unspecified
+    private var cachedOutlineDensity = Float.NaN
+    private var cachedOutlineFontScale = Float.NaN
+    private var cachedOutlineDirection: LayoutDirection? = null
+    private var cachedOutline: Outline? = null
     private var completedLayout by mutableStateOf(false)
     private var effectsDirty = true
 
@@ -810,7 +816,7 @@ private class DrawBackdropNode(
                 this@draw.drawContent()
                 onDrawFront?.invoke(this)
             }
-        } else if (shapeProvider.shape.createOutline(size, layoutDirection, this).needsConcaveClip()) {
+        } else if (resolveOutline(shapeProvider.shape, size, layoutDirection, this).needsConcaveClip()) {
             // The hardware outline clip can omit protrusions from concave shapes.
             withForegroundClip {
                 onDrawBehind?.invoke(this)
@@ -849,13 +855,39 @@ private class DrawBackdropNode(
         }
     }
 
+    private fun resolveOutline(
+        shape: Shape,
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density,
+    ): Outline {
+        val existing = cachedOutline
+        if (existing != null &&
+            cachedOutlineShape == shape &&
+            cachedOutlineSize == size &&
+            cachedOutlineDensity == density.density &&
+            cachedOutlineFontScale == density.fontScale &&
+            cachedOutlineDirection == layoutDirection
+        ) {
+            return existing
+        }
+        return shape.createOutline(size, layoutDirection, density).also {
+            cachedOutlineShape = shape
+            cachedOutlineSize = size
+            cachedOutlineDensity = density.density
+            cachedOutlineFontScale = density.fontScale
+            cachedOutlineDirection = layoutDirection
+            cachedOutline = it
+        }
+    }
+
     private fun Outline.needsConcaveClip(): Boolean = this is Outline.Generic && !path.isConvex
 
     private inline fun DrawScope.withForegroundClip(block: DrawScope.() -> Unit) {
         val canvas = drawContext.canvas
         canvas.save()
         try {
-            when (val outline = shapeProvider.shape.createOutline(size, layoutDirection, this)) {
+            when (val outline = resolveOutline(shapeProvider.shape, size, layoutDirection, this)) {
                 is Outline.Rectangle -> canvas.clipRect(outline.rect)
                 is Outline.Rounded -> {
                     // Preserve stable geometry's path generation so HWUI can reuse its

@@ -107,7 +107,7 @@ fun Modifier.glasmioGroupedListBackground(
         if (sheetMaterial != null) Modifier.sheetCellBackground(sheetMaterial, sheetBackdrop, shape)
         else Modifier.background(colors.elevatedBackground.copy(
             alpha = LocalGroupedListBackgroundAlpha.current.coerceIn(0f, 1f),
-        ), shape),
+        )),
     )
 }
 
