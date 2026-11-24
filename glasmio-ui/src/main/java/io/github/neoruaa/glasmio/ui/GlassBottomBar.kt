@@ -92,6 +92,7 @@ import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
 import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
+import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 import kotlinx.coroutines.launch
@@ -1093,6 +1094,18 @@ fun <T> GlasmioNavigationBar(
                                     liftedContent = emptyBackdrop(),
                                 )
                             },
+                        ),
+                )
+                Box(
+                    Modifier
+                        .size(24.dp, 24.dp)
+                        .clearAndSetSemantics { }
+                        .graphicsLayer { alpha = 0.004f }
+                        .drawPlainBackdrop(
+                            backdrop = emptyBackdrop(),
+                            shape = { ContinuousRoundedRectangle(8.dp) },
+                            samplingScale = { _, _ -> 0.5f },
+                            effects = { warmupNativeSheetGlass(!isLight) },
                         ),
                 )
             }

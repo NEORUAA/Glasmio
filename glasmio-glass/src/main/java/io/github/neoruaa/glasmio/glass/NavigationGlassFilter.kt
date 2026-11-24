@@ -211,6 +211,23 @@ internal fun BackdropEffectScope.nativeNavigationGlassFilter(
     renderEffect = result.asComposeRenderEffect()
 }
 
+/** Pre-warms the Two-Rate sheet material pipelines during initial chrome mount. */
+fun BackdropEffectScope.warmupNativeSheetGlass(isDark: Boolean) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val fraction = if (isDark) 1f else 0f
+    val recipe = NavigationMaterialRecipe.resolve(fraction, NavigationGlassMaterial.RegularLarge)
+    nativeNavigationGlassFilter(
+        profile = navigationGlassGeometryProfile(160f, NavigationGlassMaterial.RegularLarge),
+        isDark = isDark,
+        blurRadius = 5f * density,
+        refractionEnabled = true,
+        clear = false,
+        field = null,
+        completion = NativeGlassCompletion(recipe, isDark, 0f, shadow = null, darkFraction = fraction),
+        darkFraction = fraction,
+    )
+}
+
 private data class NativeAtlasMaterialSourceKey(
     val functions: String,
     val colorManaged: Boolean,
@@ -287,16 +304,18 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
             maximumLod * .25f + 2f, ceil(nativeNavigationGlassLod(radius) + .001f).toInt())
     }
     val preferredOutputSize = if (completion != null && storage.supportsTwoRateNativeOpticalStage &&
-        !storage.colorManagedNativeGlass && completion.outputSize == null && completion.outputDensity == null &&
-        storage.fullSize.width.isFinite() && storage.fullSize.height.isFinite() && density in .125f..32f
+        !storage.colorManagedNativeGlass && density in .125f..32f
     ) {
-        val outputDensity = storage.sourceDensity.density
+        val scale = completion.textureScale ?: storage.samplingScale
+        val outputDensity = completion.outputDensity ?: storage.sourceDensity.density
+        val outputLogical = completion.outputSize ?: storage.fullSize.takeIf { it.width.isFinite() }
+            ?: Size(size.width / scale, size.height / scale)
         val tintGuard = if (completion.recipe.hasTintMatrix() || completion.sourceRecipe?.hasTintMatrix() == true)
             10f * outputDensity + 1.5f else 0f
         val shadowRadius = max(completion.shadow?.radius ?: 0f, completion.sourceShadow?.profile?.radius ?: 0f)
         val guard = ceil(max(max(.5333333333333333f * outputDensity + 1f, tintGuard),
             navigationShadowSupport(shadowRadius, outputDensity)))
-        IntSize(ceil(storage.fullSize.width + guard * 2f).toInt(), ceil(storage.fullSize.height + guard * 2f).toInt())
+        IntSize(ceil(outputLogical.width + guard * 2f).toInt(), ceil(outputLogical.height + guard * 2f).toInt())
     } else null
     val atlas = pyramid.atlas(source, IntSize(ceil(sourceSize.width).toInt(), ceil(sourceSize.height).toInt()),
         maximumLod, NativeGlassMipKernel.Compute13Tap, colorManaged = storage.colorManagedNativeGlass,
@@ -308,8 +327,8 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     val twoRateEligible = Build.VERSION.SDK_INT >= 36 && completion != null &&
         storage.supportsTwoRateNativeOpticalStage && storage.nativeGlassHardwareRendering &&
         !atlas.colorManaged && !atlas.nativeGammaStorage && atlas.textureStages.isNotEmpty() &&
-        completion.clearFraction < .001f && storage.samplingScale <= .5f && radius > 0f &&
-        profile.mainBlurAlpha1 >= .2f
+        completion.clearFraction < .001f && (completion.textureScale ?: storage.samplingScale) <= .5f &&
+        radius > 0f && profile.mainBlurAlpha1 >= .2f
     if (twoRateEligible) {
         val resolvedCompletion = requireNotNull(completion)
         val scale = resolvedCompletion.textureScale ?: storage.samplingScale

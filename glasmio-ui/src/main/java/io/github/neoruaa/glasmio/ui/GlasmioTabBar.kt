@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toIntSize
+import com.kyant.capsule.ContinuousRoundedRectangle
 import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.core.IosTypography
 import io.github.neoruaa.glasmio.core.LocalGlassAppearance
@@ -57,6 +58,7 @@ import io.github.neoruaa.glasmio.glass.rememberNavigationInnerShadows
 import io.github.neoruaa.glasmio.glass.render.Backdrop
 import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.nativeControlLens
+import io.github.neoruaa.glasmio.glass.warmupNativeSheetGlass
 import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.layerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberCombinedBackdrop
@@ -468,6 +470,18 @@ fun <T> GlasmioTabBar(
                                     liftedContent = emptyBackdrop(),
                                 )
                             },
+                        ),
+                )
+                Box(
+                    Modifier
+                        .size(24.dp, 24.dp)
+                        .clearAndSetSemantics { }
+                        .graphicsLayer { alpha = 0.004f }
+                        .drawPlainBackdrop(
+                            backdrop = emptyBackdrop(),
+                            shape = { ContinuousRoundedRectangle(8.dp) },
+                            samplingScale = { _, _ -> 0.5f },
+                            effects = { warmupNativeSheetGlass(colors.isDark) },
                         ),
                 )
             }

@@ -43,7 +43,8 @@ internal abstract class BackdropEffectScopeImpl : BackdropEffectScope, RuntimeSh
 
     /** Only a library-owned draw node can opt into fully configured consumer snapshots. */
     internal open val supportsRetainedOpticalStage: Boolean get() = false
-    internal open val supportsTwoRateNativeOpticalStage: Boolean get() = false
+    // Keep this getter unmangled for renderer subclasses in consuming modules.
+    open val supportsTwoRateNativeOpticalStage: Boolean get() = false
     internal open val supportsNativeControlLensConsumerSharing: Boolean get() = false
     internal open val supportsNativeControlLensPlaneStages: Boolean get() = false
     // Keep this getter unmangled for renderer subclasses in consuming modules.
