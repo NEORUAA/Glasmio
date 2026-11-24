@@ -833,9 +833,11 @@ private class DrawBackdropNode(
                 // Exports retain full logical dimensions and full-resolution coatings/foreground.
                 if (effectScope.nativeMaterialCompleted) {
                     drawRecordedBackdrop()
-                    withForegroundClip {
-                        onDrawSurface?.invoke(this)
-                        onDrawFront?.invoke(this)
+                    if (onDrawSurface != null || onDrawFront != null) {
+                        withForegroundClip {
+                            onDrawSurface?.invoke(this)
+                            onDrawFront?.invoke(this)
+                        }
                     }
                 } else {
                     drawRecordedBackdrop()

@@ -1108,48 +1108,19 @@ uniform float4 nativeMipKernelWeights;
 uniform float3 nativeMipKernelMode;
 """
 
-/** The native kernels use the same 13 positions with different accumulation orders and precision. */
-private const val NativeMipTapLoop = """
-    for (int tap = 0; tap < 13; ++tap) {
-        float2 address = center;
-        if (tap == 1) address.x -= inner.x;
-        else if (tap == 2) address.x += inner.x;
-        else if (tap == 3) address.y -= inner.y;
-        else if (tap == 4) address.y += inner.y;
-        else if (tap == 5) address -= inner;
-        else if (tap == 6) address += inner;
-        else if (tap == 7) address += float2(-inner.x, inner.y);
-        else if (tap == 8) address += float2(inner.x, -inner.y);
-        else if (tap == 9) address.x -= outer.x;
-        else if (tap == 10) address.x += outer.x;
-        else if (tap == 11) address.y -= outer.y;
-        else if (tap == 12) address.y += outer.y;
-"""
-
-private const val NativeMipHalfTapLoop = NativeMipTapLoop + """
-        taps[tap] = half4(nativeMipBilinear(address));
-    }
-"""
-
-private const val NativeMipFloatTapLoop = NativeMipTapLoop + """
-        taps[tap] = nativeMipBilinear(address);
-    }
-"""
-
+/** The native kernels use unrolled 13-tap sampling with preserved accumulation orders and precision. */
 private const val NativeMipHalfKernelBody = """
-    half4 taps[13];
-""" + NativeMipHalfTapLoop + """
-    half4 axisInner = taps[3] + taps[1];
-    axisInner = axisInner + taps[4];
-    axisInner = axisInner + taps[2];
-    half4 diagonal = taps[5] + taps[7];
-    diagonal = diagonal + taps[8];
-    diagonal = diagonal + taps[6];
-    half4 axisOuter = taps[9] + taps[11];
-    axisOuter = axisOuter + taps[12];
-    axisOuter = axisOuter + taps[10];
-    half4 value = axisInner * half(nativeMipKernelWeights.y) + taps[0] * half(nativeMipKernelWeights.x);
+    half4 axisInner = half4(nativeMipBilinear(center + float2(0.0, -inner.y))) + half4(nativeMipBilinear(center + float2(-inner.x, 0.0)));
+    axisInner = axisInner + half4(nativeMipBilinear(center + float2(0.0, inner.y)));
+    axisInner = axisInner + half4(nativeMipBilinear(center + float2(inner.x, 0.0)));
+    half4 value = axisInner * half(nativeMipKernelWeights.y) + half4(nativeMipBilinear(center)) * half(nativeMipKernelWeights.x);
+    half4 diagonal = half4(nativeMipBilinear(center - inner)) + half4(nativeMipBilinear(center + float2(-inner.x, inner.y)));
+    diagonal = diagonal + half4(nativeMipBilinear(center + float2(inner.x, -inner.y)));
+    diagonal = diagonal + half4(nativeMipBilinear(center + inner));
     value = value + diagonal * half(nativeMipKernelWeights.z);
+    half4 axisOuter = half4(nativeMipBilinear(center + float2(-outer.x, 0.0))) + half4(nativeMipBilinear(center + float2(0.0, -outer.y)));
+    axisOuter = axisOuter + half4(nativeMipBilinear(center + float2(0.0, outer.y)));
+    axisOuter = axisOuter + half4(nativeMipBilinear(center + float2(outer.x, 0.0)));
     value = value + axisOuter * half(nativeMipKernelWeights.w);
 """
 
@@ -1160,14 +1131,16 @@ private const val NativeMipHalfKernelFlush = """
 """
 
 private const val NativeMipFloatKernelBody = """
-    float4 taps[13];
-""" + NativeMipFloatTapLoop + """
-    float4 axisInner = taps[1] + taps[2] + taps[3] + taps[4];
-    float4 diagonal = taps[5] + taps[6] + taps[7] + taps[8];
-    float4 axisOuter = taps[9] + taps[10] + taps[11] + taps[12];
-    return half4(taps[0] * nativeMipKernelWeights.x
-        + axisInner * nativeMipKernelWeights.y + diagonal * nativeMipKernelWeights.z
-        + axisOuter * nativeMipKernelWeights.w);
+    float4 value = nativeMipBilinear(center) * nativeMipKernelWeights.x;
+    float4 axisInner = nativeMipBilinear(center + float2(-inner.x, 0.0)) + nativeMipBilinear(center + float2(inner.x, 0.0))
+        + nativeMipBilinear(center + float2(0.0, -inner.y)) + nativeMipBilinear(center + float2(0.0, inner.y));
+    value = value + axisInner * nativeMipKernelWeights.y;
+    float4 diagonal = nativeMipBilinear(center - inner) + nativeMipBilinear(center + inner)
+        + nativeMipBilinear(center + float2(-inner.x, inner.y)) + nativeMipBilinear(center + float2(inner.x, -inner.y));
+    value = value + diagonal * nativeMipKernelWeights.z;
+    float4 axisOuter = nativeMipBilinear(center + float2(-outer.x, 0.0)) + nativeMipBilinear(center + float2(outer.x, 0.0))
+        + nativeMipBilinear(center + float2(0.0, -outer.y)) + nativeMipBilinear(center + float2(0.0, outer.y));
+    return half4(value + axisOuter * nativeMipKernelWeights.w);
 """
 
 private const val NativeMipKernelFunctions = NativeMipKernelUniforms + """

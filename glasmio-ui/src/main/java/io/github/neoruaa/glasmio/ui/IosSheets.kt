@@ -51,10 +51,10 @@ import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -425,27 +425,47 @@ fun GlasmioBottomSheet(
                     )
                 }
                 val systemInsets = view.rootWindowInsets
-                val shape by remember(frame, systemInsets, density, layoutDirection) {
+                val shape by remember(frame, systemInsets, density, layoutDirection, fullScreen, floating, compactEdge) {
+                    val floatingShape = ContinuousRoundedRectangle(32.dp)
+                    val compactEdgeShape = ContinuousRoundedRectangle(topStart = 38.dp, topEnd = 38.dp)
                     val minimumBottom = with(density) { 20.dp.toPx() }
                     val leftRadius = systemInsets?.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT)?.radius ?: 0
                     val rightRadius = systemInsets?.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT)?.radius ?: 0
                     val isLtr = layoutDirection == LayoutDirection.Ltr
+                    var cachedKey = Long.MIN_VALUE
+                    var cachedShape: Shape = compactEdgeShape
                     derivedStateOf(structuralEqualityPolicy()) {
                         val geometry = frame.value
                         when {
                             fullScreen -> RectangleShape
-                            geometry.capsularProgress > 0f ->
-                                ContinuousRoundedRectangle(with(density) { (geometry.naturalHeight / 2f).toDp() })
-                            floating -> ContinuousRoundedRectangle(32.dp)
-                            compactEdge -> ContinuousRoundedRectangle(topStart = 38.dp, topEnd = 38.dp)
-                            else -> with(density) {
-                                val left = max(minimumBottom, leftRadius - geometry.sideInset).toDp()
-                                val right = max(minimumBottom, rightRadius - geometry.sideInset).toDp()
-                                ContinuousRoundedRectangle(
-                                    topStart = 38.dp, topEnd = 38.dp,
-                                    bottomStart = if (isLtr) left else right,
-                                    bottomEnd = if (isLtr) right else left,
-                                )
+                            geometry.capsularProgress > 0f -> {
+                                val halfPx = geometry.naturalHeight.roundToInt().coerceAtLeast(0)
+                                val key = -(halfPx.toLong() + 1L)
+                                if (key != cachedKey) {
+                                    cachedKey = key
+                                    cachedShape = ContinuousRoundedRectangle(with(density) { (halfPx * 0.5f).toDp() })
+                                }
+                                cachedShape
+                            }
+                            floating -> floatingShape
+                            compactEdge -> compactEdgeShape
+                            else -> {
+                                val leftHalfPx = (max(minimumBottom, leftRadius - geometry.sideInset) * 2f).roundToInt().coerceAtLeast(0)
+                                val rightHalfPx = (max(minimumBottom, rightRadius - geometry.sideInset) * 2f).roundToInt().coerceAtLeast(0)
+                                val key = (leftHalfPx.toLong() shl 32) or (rightHalfPx.toLong() and 0xFFFF_FFFFL)
+                                if (key != cachedKey) {
+                                    cachedKey = key
+                                    cachedShape = with(density) {
+                                        val left = (leftHalfPx * 0.5f).toDp()
+                                        val right = (rightHalfPx * 0.5f).toDp()
+                                        ContinuousRoundedRectangle(
+                                            topStart = 38.dp, topEnd = 38.dp,
+                                            bottomStart = if (isLtr) left else right,
+                                            bottomEnd = if (isLtr) right else left,
+                                        )
+                                    }
+                                }
+                                cachedShape
                             }
                         }
                     }
@@ -528,7 +548,6 @@ fun GlasmioBottomSheet(
                     val sheetVerticalInsets = if (floating) WindowInsets(0, 0, 0, 0)
                         else navigationInsets.only(WindowInsetsSides.Vertical)
                     Layout(
-                        modifier = Modifier.clip(shape),
                         content = {
                             if (topBar == null) {
                                 Column(Modifier.fillMaxWidth().windowInsetsPadding(sheetVerticalInsets)) {

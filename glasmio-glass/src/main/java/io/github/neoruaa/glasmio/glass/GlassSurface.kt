@@ -767,7 +767,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                 cacheBlurResult = decoupleExteriorShadow,
                 useNativeProfile = true,
                 nativeMaterial = shadowMaterial,
-                renderScale = if (decoupleExteriorShadow) 0.25f else 1f,
+                renderScale = if (decoupleExteriorShadow) 0.5f else 1f,
             )
         } else Modifier,
     )
