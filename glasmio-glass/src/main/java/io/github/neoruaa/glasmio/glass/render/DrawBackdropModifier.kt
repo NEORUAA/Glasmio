@@ -13,6 +13,8 @@ import androidx.compose.ui.unit.IntRect
 import io.github.neoruaa.glasmio.glass.boundedSampleRegion
 import io.github.neoruaa.glasmio.glass.NativeGlassAtlasBackingCopy
 import io.github.neoruaa.glasmio.glass.NativeGlassAtlasPasses
+import io.github.neoruaa.glasmio.glass.hasDeferredSharedCapture
+import io.github.neoruaa.glasmio.glass.observeDetachedSharedBackdrop
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -676,6 +678,9 @@ private class DrawBackdropNode(
     }
 
     override fun ContentDrawScope.draw() {
+        if (backdrop.hasDeferredSharedCapture()) {
+            backdrop.observeDetachedSharedBackdrop(this@DrawBackdropNode, layoutCoordinates, drawContext.canvas)
+        }
         if (luminanceState != null) {
             luminanceLogicalSize = size
             if (luminanceLogicalDensity.density != density || luminanceLogicalDensity.fontScale != fontScale) {
@@ -689,10 +694,11 @@ private class DrawBackdropNode(
             drawContent()
             return
         }
-        val managed = nativeGlassNeedsColorManagement(requireView())
+        val view = requireView()
+        val managed = nativeGlassNeedsColorManagement(view)
         val colorSpaceChanged = effectScope.colorManagedNativeGlass != managed
         effectScope.colorManagedNativeGlass = managed
-        val headroom = nativeGlassDisplayHeadroom(requireView())
+        val headroom = nativeGlassDisplayHeadroom(view)
         val headroomChanged = effectScope.nativeGlassHeadroom != headroom
         effectScope.nativeGlassHeadroom = headroom
         val geometryChanged = effectScope.update(this, samplingScale(size, this))
