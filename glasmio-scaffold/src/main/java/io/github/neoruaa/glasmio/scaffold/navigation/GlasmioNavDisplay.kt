@@ -29,6 +29,8 @@ import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.SeekableTransitionState
 import androidx.compose.animation.core.rememberTransition
@@ -40,7 +42,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.RectangleShape
 import io.github.neoruaa.glasmio.glass.navigationGlassDropShadow
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import androidx.compose.runtime.withFrameNanos
 import io.github.neoruaa.glasmio.glass.LiquidMenuSpring
 import io.github.neoruaa.glasmio.glass.LiquidMenuSpringSpec
@@ -142,6 +148,7 @@ fun <T : Any> GlasmioNavDisplay(
         iosPredictivePopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     transitionEffects: NavDisplayTransitionEffects = IosNavigationTransitionEffects,
     swipeBackEnabled: Boolean = true,
+    retainedTabKeys: Set<Any> = emptySet(),
     entryProvider: (key: T) -> NavEntry<T>,
 ) {
     require(backStack.isNotEmpty()) { "NavDisplay backstack cannot be empty" }
@@ -164,6 +171,7 @@ fun <T : Any> GlasmioNavDisplay(
         predictivePopTransitionSpec = predictivePopTransitionSpec,
         transitionEffects = transitionEffects,
         swipeBackEnabled = swipeBackEnabled,
+        retainedTabKeys = retainedTabKeys,
         onBack = onBack,
     )
 }
@@ -232,6 +240,7 @@ private fun <T : Any> GlasmioNavDisplay(
         iosPredictivePopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     transitionEffects: NavDisplayTransitionEffects = IosNavigationTransitionEffects,
     swipeBackEnabled: Boolean,
+    retainedTabKeys: Set<Any> = emptySet(),
     onBack: () -> Unit,
 ) {
     require(entries.isNotEmpty()) { "NavDisplay entries cannot be empty" }
@@ -261,6 +270,7 @@ private fun <T : Any> GlasmioNavDisplay(
         predictivePopTransitionSpec,
         transitionEffects,
         swipeBackEnabled = swipeBackEnabled,
+        retainedTabKeys = retainedTabKeys,
         onBack = onBack,
     )
 }
@@ -307,6 +317,7 @@ fun <T : Any> GlasmioNavDisplay(
         iosPredictivePopTransitionSpec(LocalLayoutDirection.current, LocalDensity.current.density),
     transitionEffects: NavDisplayTransitionEffects = IosNavigationTransitionEffects,
     swipeBackEnabled: Boolean = true,
+    retainedTabKeys: Set<Any> = emptySet(),
     onBack: (() -> Unit)? = null,
 ) {
     // Calculate current Scene and set up transitions
@@ -573,111 +584,228 @@ fun <T : Any> GlasmioNavDisplay(
         }
     }
 
+    val retainedScenes = remember { mutableStateMapOf<Any, Scene<T>>() }
+    if (retainedTabKeys.isNotEmpty()) {
+        val currentEntryKey = transition.currentState.entries.last().contentKey
+        val targetEntryKey = transition.targetState.entries.last().contentKey
+        if (currentEntryKey in retainedTabKeys && retainedScenes[currentEntryKey] !== transition.currentState) {
+            retainedScenes[currentEntryKey] = transition.currentState
+        }
+        if (targetEntryKey in retainedTabKeys && retainedScenes[targetEntryKey] !== transition.targetState) {
+            retainedScenes[targetEntryKey] = transition.targetState
+        }
+        sceneState.previousScenes.fastForEach { prev ->
+            val prevKey = prev.entries.last().contentKey
+            if (prevKey in retainedTabKeys && retainedScenes[prevKey] !== prev) {
+                retainedScenes[prevKey] = prev
+            }
+        }
+        if (retainedScenes.keys.any { it !in retainedTabKeys }) {
+            retainedScenes.keys.toList().forEach { k ->
+                if (k !in retainedTabKeys) retainedScenes.remove(k)
+            }
+        }
+    } else if (retainedScenes.isNotEmpty()) {
+        retainedScenes.clear()
+    }
+
     // allows OverlayScenes to access animatedContentScope even if it's no-op so that
     // LocalNavAnimatedContentScope doesn't need to be nullable
     lateinit var animatedContentScope: AnimatedContentScope
 
-    transition.AnimatedContent(
-        contentKey = { scene -> AnimatedSceneKey(scene) },
-        contentAlignment = contentAlignment,
-        modifier = modifier.then(swipeModifier),
-        transitionSpec = {
-            ContentTransform(
-                targetContentEnter = contentTransform(this).targetContentEnter,
-                initialContentExit = contentTransform(this).initialContentExit,
-                // z-index increases during navigate and decreases during pop.
-                targetContentZIndex = targetZIndex,
-                sizeTransform = sizeTransform,
-            )
-        },
-    ) { targetScene ->
-        // If there is a transition in progress, set the maximum state of the scene (and every
-        // entry within the scene) to STARTED - only allow the RESUMED state when the
-        // AnimatedContent has settled into its final state
-        val isSettled = transition.currentState == transition.targetState
-        val sceneLifecycleOwner =
-            rememberLifecycleOwner(
-                maxLifecycle =
-                    if (isSettled) Lifecycle.State.RESUMED
-                    else Lifecycle.State.STARTED
-            )
-        animatedContentScope = remember { this }
-        CompositionLocalProvider(
-            LocalGlasmioSwipeBackExclusions provides exclusions,
-            LocalLifecycleOwner provides sceneLifecycleOwner,
-            LocalNavAnimatedContentScope provides animatedContentScope,
-        ) {
-            val myZIndex =
-                zIndices.getOrElse(AnimatedSceneKey(targetScene)) { targetZIndex }
-            val topZIndex = maxOf(initialZIndex, targetZIndex)
-
-            val isTopScene =
-                !isSettled &&
-                        myZIndex > minOf(initialZIndex, targetZIndex) &&
-                        initialZIndex != targetZIndex
-
-            val hasMovingPageEdge = isTopScene && motion.operation != GlasmioNavigationOperation.Tab
-            val roundedModifier = if (transitionEffects.enableCornerClip && hasMovingPageEdge) {
-                Modifier.clip(windowShape)
-            } else {
-                Modifier
-            }
-
-            val blockerCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
-            val blockInputModifier =
-                if (transitionEffects.blockInputDuringTransition && !isSettled && targetScene != transition.targetState) {
-                    Modifier.onGloballyPositioned { blockerCoordinates[0] = it }.pointerInput(targetScene.key) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                            val point = blockerCoordinates[0]?.takeIf { it.isAttached }?.localToWindow(down.position)
-                            val allowNavigationMove = currentCanSwipeBack && point != null && !exclusions.hitTest(point)
-                            down.consume()
-                            do {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                event.changes.fastForEach { change ->
-                                    // Keep outgoing content inert to taps while allowing the parent
-                                    // navigation recognizer to grab the visible moving presentation.
-                                    if (!allowNavigationMove || change.positionChangeIgnoreConsumed() == Offset.Zero || !change.pressed) {
-                                        change.consume()
+    Box(modifier = modifier.then(swipeModifier)) {
+        if (retainedTabKeys.isNotEmpty()) {
+            // Scope retained-tab zIndex inside this container so non-tab detail scenes in
+            // AnimatedContent always composite above the underlying retained tab during Push/Pop.
+            Box(Modifier.fillMaxSize()) {
+                val currentEntryKey = transition.currentState.entries.last().contentKey
+                val targetEntryKey = transition.targetState.entries.last().contentKey
+                val isSettled = transition.currentState == transition.targetState
+                val isTabTransition = currentEntryKey in retainedTabKeys && targetEntryKey in retainedTabKeys
+                retainedScenes.forEach { (tabKey, tabScene) ->
+                    key(tabKey) {
+                        val active = tabKey == targetEntryKey || (!isSettled && tabKey == currentEntryKey)
+                        val tabAlphaState = transition.animateFloat(
+                            transitionSpec = { spring(stiffness = Spring.StiffnessMediumLow) },
+                            label = "retainedTabAlpha",
+                        ) { state ->
+                            if (state.entries.last().contentKey == tabKey) 1f else 0f
+                        }
+                        val tabLifecycleOwner = rememberLifecycleOwner(
+                            maxLifecycle = when {
+                                isSettled && tabKey == targetEntryKey -> Lifecycle.State.RESUMED
+                                active -> Lifecycle.State.STARTED
+                                else -> Lifecycle.State.CREATED
+                            },
+                        )
+                        CompositionLocalProvider(
+                            LocalGlasmioSwipeBackExclusions provides exclusions,
+                            LocalLifecycleOwner provides tabLifecycleOwner,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .zIndex(if (tabKey == targetEntryKey) 1f else 0f)
+                                    .layout { measurable, constraints ->
+                                        if (!active) {
+                                            layout(0, 0) {}
+                                        } else {
+                                            val placeable = measurable.measure(constraints)
+                                            layout(placeable.width, placeable.height) {
+                                                placeable.place(0, 0)
+                                            }
+                                        }
                                     }
+                                    .graphicsLayer {
+                                        if (!active) {
+                                            alpha = 0f
+                                            translationX = 0f
+                                        } else if (isTabTransition && !isSettled) {
+                                            // Outgoing tab stays opaque underneath to avoid a second full-screen
+                                            // FP16 offscreen layer; incoming tab fades cleanly 0 -> 1 on top.
+                                            alpha = if (tabKey == targetEntryKey) tabAlphaState.value else 1f
+                                            translationX = 0f
+                                        } else if (!isTabTransition && !isSettled) {
+                                            val physical = if (predictivePresentation) transitionState.fraction
+                                                else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
+                                            val sign = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) 1f else -1f
+                                            val offset = iosNavigationParallaxOffset(size.width.roundToInt(), density.density).toFloat()
+                                            translationX = if (tabKey == currentEntryKey) -offset * physical * sign
+                                                else -offset * (1f - physical) * sign
+                                            alpha = 1f
+                                        } else {
+                                            alpha = 1f
+                                            translationX = 0f
+                                        }
+                                    },
+                            ) {
+                                tabScene.content()
+                                if (transitionEffects.dimAmount > 0f && !isTabTransition && !isSettled && active) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .graphicsLayer {
+                                                val physical = if (predictivePresentation) transitionState.fraction
+                                                    else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
+                                                alpha = (if (tabKey == currentEntryKey) physical else 1f - physical) *
+                                                    transitionEffects.dimAmount
+                                            }
+                                            .background(Color.Black),
+                                    )
                                 }
-                            } while (event.changes.any { it.pressed })
+                            }
                         }
                     }
-                } else Modifier
-            val shadowModifier = if (hasMovingPageEdge) {
-                Modifier.navigationGlassDropShadow(shape = { if (transitionEffects.enableCornerClip) windowShape else RectangleShape }, cacheBlurResult = true,
-                    shadowRadius = 12.dp, shadowOffsetY = (-3).dp, shadowAlpha = 0.04f)
-            } else Modifier
+                }
+            }
+        }
 
-            Box(
-                modifier =
-                    Modifier
-                        .then(shadowModifier)
-                        .then(roundedModifier)
-                        .then(blockInputModifier),
+        transition.AnimatedContent(
+            contentKey = { scene -> AnimatedSceneKey(scene) },
+            contentAlignment = contentAlignment,
+            modifier = Modifier.fillMaxSize(),
+            transitionSpec = {
+                ContentTransform(
+                    targetContentEnter = contentTransform(this).targetContentEnter,
+                    initialContentExit = contentTransform(this).initialContentExit,
+                    // z-index increases during navigate and decreases during pop.
+                    targetContentZIndex = targetZIndex,
+                    sizeTransform = sizeTransform,
+                )
+            },
+        ) { targetScene ->
+            if (targetScene.entries.last().contentKey in retainedTabKeys) {
+                Spacer(Modifier.fillMaxSize())
+                return@AnimatedContent
+            }
+            // If there is a transition in progress, set the maximum state of the scene (and every
+            // entry within the scene) to STARTED - only allow the RESUMED state when the
+            // AnimatedContent has settled into its final state
+            val isSettled = transition.currentState == transition.targetState
+            val sceneLifecycleOwner =
+                rememberLifecycleOwner(
+                    maxLifecycle =
+                        if (isSettled) Lifecycle.State.RESUMED
+                        else Lifecycle.State.STARTED
+                )
+            animatedContentScope = remember { this }
+            CompositionLocalProvider(
+                LocalGlasmioSwipeBackExclusions provides exclusions,
+                LocalLifecycleOwner provides sceneLifecycleOwner,
+                LocalNavAnimatedContentScope provides animatedContentScope,
             ) {
-                targetScene.content()
+                val myZIndex =
+                    zIndices.getOrElse(AnimatedSceneKey(targetScene)) { targetZIndex }
+                val topZIndex = maxOf(initialZIndex, targetZIndex)
 
-                if (transitionEffects.dimAmount > 0f && myZIndex < topZIndex) {
-                    val isCurrentScene = targetScene == transition.currentState
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxSize()
-                                .graphicsLayer {
-                                    val settled =
-                                        transition.currentState == transition.targetState
-                                    val physical = if (predictivePresentation) transitionState.fraction
-                                        else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
-                                    alpha = if (!settled) {
-                                        (if (isCurrentScene) physical else 1f - physical) * transitionEffects.dimAmount
-                                    } else {
-                                        0f
+                val isTopScene =
+                    !isSettled &&
+                            myZIndex > minOf(initialZIndex, targetZIndex) &&
+                            initialZIndex != targetZIndex
+
+                val hasMovingPageEdge = isTopScene && motion.operation != GlasmioNavigationOperation.Tab
+                val roundedModifier = if (transitionEffects.enableCornerClip && hasMovingPageEdge) {
+                    Modifier.clip(windowShape)
+                } else {
+                    Modifier
+                }
+
+                val blockerCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
+                val blockInputModifier =
+                    if (transitionEffects.blockInputDuringTransition && !isSettled && targetScene != transition.targetState) {
+                        Modifier.onGloballyPositioned { blockerCoordinates[0] = it }.pointerInput(targetScene.key) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                val point = blockerCoordinates[0]?.takeIf { it.isAttached }?.localToWindow(down.position)
+                                val allowNavigationMove = currentCanSwipeBack && point != null && !exclusions.hitTest(point)
+                                down.consume()
+                                do {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    event.changes.fastForEach { change ->
+                                        // Keep outgoing content inert to taps while allowing the parent
+                                        // navigation recognizer to grab the visible moving presentation.
+                                        if (!allowNavigationMove || change.positionChangeIgnoreConsumed() == Offset.Zero || !change.pressed) {
+                                            change.consume()
+                                        }
                                     }
-                                }
-                                .background(Color.Black),
-                    )
+                                } while (event.changes.any { it.pressed })
+                            }
+                        }
+                    } else Modifier
+                val shadowModifier = if (hasMovingPageEdge) {
+                    Modifier.navigationGlassDropShadow(shape = { if (transitionEffects.enableCornerClip) windowShape else RectangleShape }, cacheBlurResult = true,
+                        shadowRadius = 12.dp, shadowOffsetY = (-3).dp, shadowAlpha = 0.04f)
+                } else Modifier
+
+                Box(
+                    modifier =
+                        Modifier
+                            .then(shadowModifier)
+                            .then(roundedModifier)
+                            .then(blockInputModifier),
+                ) {
+                    targetScene.content()
+
+                    if (transitionEffects.dimAmount > 0f && myZIndex < topZIndex) {
+                        val isCurrentScene = targetScene == transition.currentState
+                        Box(
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        val settled =
+                                            transition.currentState == transition.targetState
+                                        val physical = if (predictivePresentation) transitionState.fraction
+                                            else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
+                                        alpha = if (!settled) {
+                                            (if (isCurrentScene) physical else 1f - physical) * transitionEffects.dimAmount
+                                        } else {
+                                            0f
+                                        }
+                                    }
+                                    .background(Color.Black),
+                        )
+                    }
                 }
             }
         }
