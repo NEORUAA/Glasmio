@@ -32,7 +32,12 @@ internal val IosNavigationEasing = Easing { iosNavigationPosition(it, 350_000_00
 
 /** Stock FloatSpringSpec rounds time to milliseconds, which breaks inverse seeking mid-push. */
 internal object IosNavigationFloatSpring : FloatAnimationSpec {
-    private val duration = FloatSpringSpec(dampingRatio = 1f, stiffness = IosNavigationStiffness)
+    // IntOffset slides round to whole pixels; settling below 1px adds ~230ms of invisible tail.
+    private val duration = FloatSpringSpec(
+        dampingRatio = 1f,
+        stiffness = IosNavigationStiffness,
+        visibilityThreshold = 1f,
+    )
 
     override fun getValueFromNanos(playTimeNanos: Long, initialValue: Float, targetValue: Float, initialVelocity: Float): Float {
         val time = playTimeNanos.coerceAtLeast(0L) / 1e9
@@ -60,16 +65,20 @@ internal object IosNavigationSlideSpring : FiniteAnimationSpec<IntOffset> {
 
 /** Unnormalized critical spring, sampled on the actual transition clock rather than cut at 350ms. */
 internal fun iosNavigationPosition(fraction: Float, durationNanos: Long): Float {
-    val time = fraction.coerceIn(0f, 1f) * durationNanos / 1e9
+    val clamped = fraction.coerceIn(0f, 1f)
+    if (durationNanos <= 0L) return clamped
+    val time = clamped * durationNanos / 1e9
     return (1.0 - (1.0 + IosNavigationOmega * time) * exp(-IosNavigationOmega * time)).toFloat()
 }
 
 internal fun iosNavigationFraction(position: Float, durationNanos: Long = 350_000_000L): Float {
+    val target = position.coerceIn(0f, 1f)
+    if (durationNanos <= 0L) return target
     var low = 0f
     var high = 1f
     repeat(22) {
         val middle = (low + high) / 2f
-        if (iosNavigationPosition(middle, durationNanos) < position) low = middle else high = middle
+        if (iosNavigationPosition(middle, durationNanos) < target) low = middle else high = middle
     }
     return ((low + high) / 2f).coerceIn(0f, 1f)
 }

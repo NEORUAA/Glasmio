@@ -56,6 +56,7 @@ internal class IosSwipeBackArbitrator(private val slop: Float) {
 
 internal fun Modifier.iosSwipeBack(
     enabled: Boolean,
+    canStart: () -> Boolean = { true },
     direction: LayoutDirection,
     entryKey: Any,
     state: IosSwipeBackState,
@@ -69,6 +70,7 @@ internal fun Modifier.iosSwipeBack(
     try {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Final)
+            if (!canStart()) return@awaitEachGesture
             val root = coordinates()?.takeIf { it.isAttached } ?: return@awaitEachGesture
             if (systemOwnsGesture() || registry.hitTest(root.localToWindow(down.position))) return@awaitEachGesture
             val extent = size.width.toFloat().coerceAtLeast(1f)

@@ -213,6 +213,59 @@ class NavigationClockTest {
         }
     }
 
+    @Test fun queuedNavigationDuringClosingExitBlocksPhantomSecondTap() {
+        val stack = mutableStateListOf("A")
+        val motion = GlasmioNavHeaderMotion("A")
+        val goBack: () -> Unit = { stack.removeAt(stack.lastIndex) }
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavDisplay(stack, motion, onBack = goBack, entryProvider = { key ->
+                    NavEntry(key, contentKey = key) {
+                        Box(Modifier.fillMaxSize().background(Color.White).testTag("phantom-page-$key")) {
+                            if (key == "A") {
+                                Column(Modifier.align(Alignment.CenterStart).padding(start = 104.dp)) {
+                                    Text("Open B", Modifier.testTag("open-B").clickable { stack.add("B") })
+                                    Text("Open C", Modifier.testTag("open-C").clickable { stack.add("C") })
+                                }
+                            } else {
+                                Text("Back", Modifier.testTag("phantom-back").clickable(onClick = goBack))
+                            }
+                        }
+                    }
+                })
+            }
+        }
+
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.runOnUiThread { stack.add("B") }
+            rule.mainClock.advanceTimeBy(1_200)
+            rule.runOnUiThread(goBack)
+            rule.mainClock.advanceTimeBy(96)
+            // First tap during closing pop queues B; a second tap on C before
+            // the closing page finishes exiting must be blocked rather than stacking a phantom route.
+            rule.onNodeWithTag("open-B").performTouchInput {
+                down(center)
+                up()
+            }
+            rule.mainClock.advanceTimeByFrame()
+            rule.runOnUiThread { assertEquals(listOf("A", "B"), stack.toList()) }
+
+            rule.onNodeWithTag("open-C").performTouchInput {
+                down(center)
+                up()
+            }
+            rule.mainClock.advanceTimeBy(1_200)
+            rule.runOnUiThread {
+                assertEquals("Queued closing pop must ignore duplicate taps on the stale destination",
+                    listOf("A", "B"), stack.toList())
+                assertEquals("B", motion.committedKey)
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
     @Test fun predictiveCancellationAfterPopKeepsTheSamePresentation() {
         val stack = mutableStateListOf("A", "B", "C")
         val motion = GlasmioNavHeaderMotion("C")

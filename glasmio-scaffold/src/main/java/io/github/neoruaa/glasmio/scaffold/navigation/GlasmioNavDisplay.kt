@@ -28,8 +28,9 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.TargetBasedAnimation
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.SeekableTransitionState
@@ -111,11 +112,8 @@ import androidx.navigationevent.NavigationEventTransitionState.Idle
 import androidx.navigationevent.NavigationEventTransitionState.InProgress
 import androidx.navigationevent.compose.NavigationEventState
 import androidx.compose.ui.draw.clip
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.coroutineScope
 import kotlin.jvm.JvmMultifileClass
 import kotlin.jvm.JvmName
 import kotlin.reflect.KClass
@@ -394,7 +392,8 @@ fun <T : Any> GlasmioNavDisplay(
             previousScene?.entries?.last()?.contentKey ?: scene.entries.last().contentKey, true) != GlasmioNavigationOperation.Tab
     val currentCanSwipeBack by androidx.compose.runtime.rememberUpdatedState(canSwipeBack)
     val swipeModifier = Modifier.onGloballyPositioned { displayCoordinates[0] = it }.iosSwipeBack(
-        enabled = canSwipeBack,
+        enabled = swipeBackEnabled && onBack != null,
+        canStart = { currentCanSwipeBack },
         direction = layoutDirection, entryKey = scene.key, state = swipe, registry = exclusions,
         coordinates = { displayCoordinates[0] },
         systemOwnsGesture = { navigationEventState.transitionState is InProgress },
@@ -422,6 +421,7 @@ fun <T : Any> GlasmioNavDisplay(
     var localPredictive by remember { mutableStateOf(false) }
     var interruptedPushPresentation by remember { mutableStateOf(false) }
     val sceneKey = AnimatedSceneKey(scene)
+    val hasPendingNavigation = closingScene != null && AnimatedSceneKey(sceneState.currentScene) != sceneKey
     val initialKey = AnimatedSceneKey(transition.currentState)
     val targetKey = AnimatedSceneKey(transition.targetState)
     // If Back returns to the still-visible source, reverse the existing entry clock.
@@ -437,10 +437,6 @@ fun <T : Any> GlasmioNavDisplay(
         localPredictive = swipe.tracking && navigationEventState.transitionState !is InProgress
         lastSwipeEdge = swipeEdge
     }
-
-    fun presentedProgress(): Float =
-        if (predictivePresentation && !interruptedPushPresentation) transitionState.fraction
-        else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
 
     // Track currently rendered Scenes and their ZIndices
     val sceneMap = remember { mutableStateMapOf<AnimatedSceneKey, Scene<T>>() }
@@ -467,6 +463,16 @@ fun <T : Any> GlasmioNavDisplay(
             transition.currentState
         } else {
             transition.targetState
+        }
+    val usesDefaultEntryMotion = transitionScene.contentTransform(NavDisplay.TransitionKey) == null
+
+    fun presentedProgress(): Float =
+        if ((predictivePresentation && !interruptedPushPresentation) ||
+            (!usesDefaultEntryMotion && (isReversingPush || interruptedPushPresentation))
+        ) {
+            transitionState.fraction
+        } else {
+            iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
         }
 
     if (inPredictiveBack && previousScene != null) {
@@ -547,8 +553,9 @@ fun <T : Any> GlasmioNavDisplay(
             try {
                 if (predictivePresentation || reversePush) {
                     // Settle on the active transform so the page keeps its position at the handoff.
-                    val usesEntryTransform = reversePush || interruptedPushPresentation
                     val entryDuration = entryClock.durationNanos
+                    val usesEntryTransform =
+                        (reversePush || interruptedPushPresentation) && usesDefaultEntryMotion && entryDuration > 0L
                     val finalFraction = if (targetTransitionKey == sceneKey) 1f else 0f
                     val velocity = if (localPredictive) swipe.releaseVelocity else motion.frame.value.gestureVelocity
                     val releaseVelocity = when {
@@ -556,21 +563,32 @@ fun <T : Any> GlasmioNavDisplay(
                         usesEntryTransform -> -velocity
                         else -> velocity
                     }
-                    val startPosition = if (usesEntryTransform)
-                        iosNavigationPosition(transitionState.fraction, entryDuration) else transitionState.fraction
-                    val settling = Animatable(startPosition)
-                    coroutineScope {
-                        val seek = launch {
-                            snapshotFlow { settling.value }.collectLatest {
-                                val fraction = if (usesEntryTransform)
-                                    iosNavigationFraction(it, entryDuration) else it.coerceIn(0f, 1f)
-                                transitionState.seekTo(fraction)
-                            }
+                    val startPosition = if (usesEntryTransform) {
+                        iosNavigationPosition(transitionState.fraction, entryDuration)
+                    } else transitionState.fraction
+                    val settling = TargetBasedAnimation(
+                        animationSpec = spring(
+                            dampingRatio = if (predictivePresentation) 0.85f else 1f,
+                            stiffness = IosNavigationStiffness,
+                            visibilityThreshold = 0.001f,
+                        ),
+                        typeConverter = Float.VectorConverter,
+                        initialValue = startPosition,
+                        targetValue = finalFraction,
+                        initialVelocity = releaseVelocity,
+                    )
+                    if (!settling.isFinishedFromNanos(0L)) {
+                        val startTimeNanos = withFrameNanos { it }
+                        while (isActive) {
+                            val frameTimeNanos = withFrameNanos { it }
+                            val playTimeNanos = (frameTimeNanos - startTimeNanos).coerceAtLeast(0L)
+                            val position = settling.getValueFromNanos(playTimeNanos)
+                            val fraction = if (usesEntryTransform) {
+                                iosNavigationFraction(position, entryDuration)
+                            } else position.coerceIn(0f, 1f)
+                            transitionState.seekTo(fraction)
+                            if (settling.isFinishedFromNanos(playTimeNanos)) break
                         }
-                        settling.animateTo(finalFraction, initialVelocity = releaseVelocity,
-                            animationSpec = spring(dampingRatio = if (predictivePresentation) 0.85f else 1f,
-                                stiffness = IosNavigationStiffness, visibilityThreshold = 0.0001f))
-                        seek.cancel()
                     }
                     transitionState.snapTo(scene)
                 } else if (transitionState.currentState != scene || transitionState.targetState != scene) {
@@ -705,7 +723,26 @@ fun <T : Any> GlasmioNavDisplay(
                                             alpha = 1f
                                             translationX = 0f
                                         }
-                                    },
+                                    }
+                                    // Once a new route is already queued behind a closing pop, swallow
+                                    // further taps on the stale tab so impatient taps cannot stack phantom routes.
+                                    .then(
+                                        if (hasPendingNavigation && active) {
+                                            Modifier.pointerInput(tabKey) {
+                                                awaitEachGesture {
+                                                    val down = awaitFirstDown(
+                                                        requireUnconsumed = false,
+                                                        pass = PointerEventPass.Initial,
+                                                    )
+                                                    down.consume()
+                                                    do {
+                                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                        event.changes.fastForEach { it.consume() }
+                                                    } while (event.changes.any { it.pressed })
+                                                }
+                                            }
+                                        } else Modifier,
+                                    ),
                             ) {
                                 tabScene.content()
                                 if (transitionEffects.dimAmount > 0f && !isTabTransition && !isSettled && active) {
@@ -781,7 +818,9 @@ fun <T : Any> GlasmioNavDisplay(
                 val blockerCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
                 val inputSceneKey = if (isReversingPush) sceneKey else targetKey
                 val blockInputModifier =
-                    if (transitionEffects.blockInputDuringTransition && !isSettled && animatedSceneKey != inputSceneKey) {
+                    if (transitionEffects.blockInputDuringTransition && !isSettled &&
+                        (hasPendingNavigation || animatedSceneKey != inputSceneKey)
+                    ) {
                         Modifier.onGloballyPositioned { blockerCoordinates[0] = it }.pointerInput(targetScene.key) {
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
