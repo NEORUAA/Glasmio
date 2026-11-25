@@ -165,11 +165,65 @@ fun GlasmioListRow(
     titleAlignment: TextAlign = TextAlign.Start,
 ) {
     val colors = LocalGlassColors.current
+    val subtitleContent: (@Composable () -> Unit)? = subtitle?.let { text ->
+        @Composable {
+            IosSheetText(
+                text,
+                style = IosTypography.subheadline,
+                color = colors.secondaryContent,
+                role = IosSheetTextRole.Secondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+    GlasmioListRow(
+        titleContent = {
+            IosSheetText(
+                title,
+                modifier = Modifier.fillMaxWidth(),
+                style = IosTypography.body,
+                color = if (titleColor == Color.Unspecified) colors.content else titleColor,
+                useMaterial = titleColor == Color.Unspecified,
+                textAlign = titleAlignment,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        modifier = modifier,
+        subtitleContent = subtitleContent,
+        detail = detail,
+        systemName = systemName,
+        leading = leading,
+        onClick = onClick,
+        trailing = trailing,
+        showTopSeparator = showTopSeparator,
+        enabled = enabled,
+        showDisclosure = showDisclosure,
+    )
+}
+
+/** Uses custom labels within the regular grouped list row layout. */
+@Composable
+fun GlasmioListRow(
+    titleContent: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    subtitleContent: (@Composable () -> Unit)? = null,
+    detail: String? = null,
+    systemName: String? = null,
+    leading: (@Composable () -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+    showTopSeparator: Boolean = true,
+    enabled: Boolean = true,
+    showDisclosure: Boolean = onClick != null && trailing == null,
+) {
+    val colors = LocalGlassColors.current
     val inSheet = LocalIosSheetMaterialContext.current != null
     Row(
         modifier
             .fillMaxWidth()
-            .height(if (subtitle == null) 52.dp else 68.dp)
+            .height(if (subtitleContent == null) 52.dp else 68.dp)
             .then(if (onClick != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick) else Modifier)
             .padding(horizontal = if (inSheet) 20.dp else 16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -189,26 +243,8 @@ fun GlasmioListRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                IosSheetText(
-                    title,
-                    modifier = Modifier.fillMaxWidth(),
-                    style = IosTypography.body,
-                    color = if (titleColor == Color.Unspecified) colors.content else titleColor,
-                    useMaterial = titleColor == Color.Unspecified,
-                    textAlign = titleAlignment,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                subtitle?.let {
-                    IosSheetText(
-                        it,
-                        style = IosTypography.subheadline,
-                        color = colors.secondaryContent,
-                        role = IosSheetTextRole.Secondary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                titleContent()
+                subtitleContent?.invoke()
             }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
