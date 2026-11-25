@@ -128,7 +128,8 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
     val topology = resolvedCompletion.programTopology()
     val atlas = NativeGlassMipAtlas(base, storageSize, listOf(
         IntRect(0, 0, base.width, base.height), opticalRect),
-        producer, storage.colorManagedNativeGlass)
+        producer, storage.colorManagedNativeGlass,
+        allowHardwareLinearSampling = storage.supportsNativeGlassHardwareLinearSampling)
     val retainedPair = Build.VERSION.SDK_INT >= 36 && storage.supportsRetainedOpticalStage &&
         storage.supportsNativeGlassHardwareLinearSampling && !atlas.nativeGammaStorage && filteredIsNativeRaw &&
         field == null && topology == OrdinaryAtlasCompletion
@@ -180,7 +181,8 @@ internal fun BackdropEffectScope.completeNativeMenuFilteredGlass(
     val topology = completion.programTopology()
     val atlas = NativeGlassMipAtlas(base, storageSize, listOf(
         IntRect(0, 0, base.width, base.height), opticalRect),
-        null, storage.colorManagedNativeGlass)
+        null, storage.colorManagedNativeGlass,
+        allowHardwareLinearSampling = storage.supportsNativeGlassHardwareLinearSampling)
     val functions = field.shaderFunctions
     val sources = storage.cachedResource("Glasmio.NativeControl.menuComplete.sources") {
         object : LinkedHashMap<NativeControlCompletionSourceKey, String>(8, .75f, true) {
@@ -258,11 +260,12 @@ half4 nativeGlassSample(float2 coord, float blurRadius) { return nativeMenuTrans
 float4 nativeAtlasFiltered(float2 coord, float3 liquid) {
     if (coord.x < transitionDrawingBounds.x || coord.y < transitionDrawingBounds.y ||
         coord.x > transitionDrawingBounds.z || coord.y > transitionDrawingBounds.w) return float4(0.0);
-    if (transitionLens.x <= 0.0 || transitionLens.y == 0.0) return float4(nativeMenuTransitionSample(coord));
     float2 p = coord - transitionCenter;
     float sd = liquid.x;
-    if (transitionHasSecondary < 0.5 && (abs(p.x) > transitionHalfSize.x + 1.0 || abs(p.y) > transitionHalfSize.y + 1.0)) return float4(0.0);
-    if (-sd >= max(transitionLens.x, 0.0)) return float4(nativeMenuTransitionSample(coord));
+    bool activeLens = transitionLens.x > 0.0 && transitionLens.y != 0.0;
+    if (activeLens && transitionHasSecondary < 0.5 &&
+        (abs(p.x) > transitionHalfSize.x + 1.0 || abs(p.y) > transitionHalfSize.y + 1.0)) return float4(0.0);
+    if (!activeLens || -sd >= max(transitionLens.x, 0.0)) return float4(nativeMenuTransitionSample(coord));
     float d = nativeGlassDisplacement(sd, 1.0 / transitionLens.x, transitionLens.y);
     float2 grad = liquid.yz;
     float2 refracted = coord + d * grad;

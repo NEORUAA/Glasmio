@@ -35,25 +35,19 @@ float3 nativeGlassStraightColor(half4 color) {
     return rgb / max(float(color.a), 0.000001);
 }
 half4 nativeGlassAberrate(float2 coordinate, float2 delta, float radius) {
-    half4 red = nativeGlassSample(coordinate + delta, radius);
-    half4 orange = nativeGlassSample(coordinate + delta * (2.0 / 3.0), radius);
-    half4 yellow = nativeGlassSample(coordinate + delta * (1.0 / 3.0), radius);
-    half4 green = nativeGlassSample(coordinate, radius);
-    half4 cyan = nativeGlassSample(coordinate - delta * (1.0 / 3.0), radius);
-    half4 blue = nativeGlassSample(coordinate - delta * (2.0 / 3.0), radius);
-    half4 purple = nativeGlassSample(coordinate - delta, radius);
-    float3 r = nativeGlassStraightColor(red);
-    float3 o = nativeGlassStraightColor(orange);
-    float3 y = nativeGlassStraightColor(yellow);
-    float3 g = nativeGlassStraightColor(green);
-    float3 c = nativeGlassStraightColor(cyan);
-    float3 b = nativeGlassStraightColor(blue);
-    float3 p = nativeGlassStraightColor(purple);
-    float3 result = float3(
-        (r.r + o.r * (2.0 / 3.0) + y.r * (1.0 / 3.0)) * 0.5,
-        (o.g * (1.0 / 3.0) + y.g * (2.0 / 3.0) + g.g + c.g * (2.0 / 3.0) + b.g * (1.0 / 3.0)) / 3.0,
-        (c.b * (1.0 / 3.0) + b.b * (2.0 / 3.0) + p.b) * 0.5);
-    float alpha = float(red.a + orange.a + yellow.a + green.a + cyan.a + blue.a + purple.a) / 7.0;
+    float3 result = float3(0.0);
+    float alpha = 0.0;
+    for (int band = 0; band < 7; ++band) {
+        float offset = (3.0 - float(band)) * (1.0 / 3.0);
+        half4 sampleColor = nativeGlassSample(coordinate + delta * offset, radius);
+        float3 s = nativeGlassStraightColor(sampleColor);
+        float rw = max(1.0 - float(band) * (1.0 / 3.0), 0.0) * 0.5;
+        float gw = max(1.0 - abs(float(band) - 3.0) * (1.0 / 3.0), 0.0) * (1.0 / 3.0);
+        float bw = max(1.0 - float(6 - band) * (1.0 / 3.0), 0.0) * 0.5;
+        result += float3(s.r * rw, s.g * gw, s.b * bw);
+        alpha += float(sampleColor.a);
+    }
+    alpha /= 7.0;
     // Literal premultiplied-mode shuffle in aberrate_texture's AIR. Opaque sources keep alpha 1.
     return half4(result.r * alpha, result.g * alpha, result.b, alpha * alpha);
 }

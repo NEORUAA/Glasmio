@@ -45,17 +45,14 @@ private const val NativeControlStraightColor = """float3 nativeControlForeground
 }
 """
 
-private const val NativeControlSpectralSum = """    float3 red = nativeControlForegroundStraight(samples[0]);
-    float3 orange = nativeControlForegroundStraight(samples[1]);
-    float3 yellow = nativeControlForegroundStraight(samples[2]);
-    float3 green = nativeControlForegroundStraight(samples[3]);
-    float3 cyan = nativeControlForegroundStraight(samples[4]);
-    float3 blue = nativeControlForegroundStraight(samples[5]);
-    float3 violet = nativeControlForegroundStraight(samples[6]);
-    float3 color = float3((red.r + orange.r * (2.0 / 3.0) + yellow.r * (1.0 / 3.0)) * .5,
-        (orange.g * (1.0 / 3.0) + yellow.g * (2.0 / 3.0) + green.g + cyan.g * (2.0 / 3.0) + blue.g * (1.0 / 3.0)) / 3.0,
-        (cyan.b * (1.0 / 3.0) + blue.b * (2.0 / 3.0) + violet.b) * .5);
-    float alpha = (samples[0].a + samples[1].a + samples[2].a + samples[3].a + samples[4].a + samples[5].a + samples[6].a) / 7.0 * coverage;
+private const val NativeControlSpectralAccumulate = """        float3 s = nativeControlForegroundStraight(sampled);
+        float rw = max(1.0 - float(band) * (1.0 / 3.0), 0.0) * 0.5;
+        float gw = max(1.0 - abs(float(band) - 3.0) * (1.0 / 3.0), 0.0) * (1.0 / 3.0);
+        float bw = max(1.0 - float(6 - band) * (1.0 / 3.0), 0.0) * 0.5;
+        color += float3(s.r * rw, s.g * gw, s.b * bw);
+        alpha += sampled.a;
+    }
+    alpha = alpha / 7.0 * coverage;
     return float4(color * alpha * colorGain, alpha) * attenuation;
 }
 """
@@ -76,23 +73,16 @@ float4 nativeControlTabForeground(float2 p, float3 field, float4 center, float h
     float2 delta = float2(dot(float2(-.2588190451025207, .9659258262890683), field.yz),
         dot(float2(.9659258262890683, .2588190451025207), field.yz)) * amount;
     bool dispersed = any(notEqual(delta, float2(0.0)));
-    float4 samples[7];
+    float colorGain = 1.0;
+    float3 color = float3(0.0);
+    float alpha = 0.0;
     for (int band = 0; band < 7; ++band) {
         float4 sampled = center;
         if (dispersed && band != 3) {
-            float2 coordinate = p;
-            if (band == 0) coordinate += delta;
-            else if (band == 1) coordinate += delta * (2.0 / 3.0);
-            else if (band == 2) coordinate += delta * (1.0 / 3.0);
-            else if (band == 4) coordinate -= delta * (1.0 / 3.0);
-            else if (band == 5) coordinate -= delta * (2.0 / 3.0);
-            else coordinate -= delta;
-            sampled = nativeControlForegroundSource(coordinate);
+            float offset = (3.0 - float(band)) * (1.0 / 3.0);
+            sampled = nativeControlForegroundSource(p + delta * offset);
         }
-        samples[band] = sampled;
-    }
-    float colorGain = 1.0;
-""" + NativeControlSpectralSum
+""" + NativeControlSpectralAccumulate
 
 internal const val NativeControlForegroundFunctions = """
 float2 nativeControlForegroundDirection(float2 gradient, float4 matrix, float2 direction) {
@@ -121,22 +111,15 @@ float nativeControlForegroundProfile(float sd, float amount, float inverseHeight
     // Sample each wavelength through the same optical path. A zero spectral shift
     // still feeds the seven original weights and alpha additions from one read.
     bool dispersed = any(notEqual(delta, float2(0.0)));
-    float4 samples[7];
+    float3 color = float3(0.0);
+    float alpha = 0.0;
     float4 sampled = float4(0.0);
     for (int band = 0; band < 7; ++band) {
         if (band == 0 || dispersed) {
-            float2 coordinate = refracted;
-            if (band == 0) coordinate += delta;
-            else if (band == 1) coordinate += delta * (2.0 / 3.0);
-            else if (band == 2) coordinate += delta * (1.0 / 3.0);
-            else if (band == 4) coordinate -= delta * (1.0 / 3.0);
-            else if (band == 5) coordinate -= delta * (2.0 / 3.0);
-            else if (band == 6) coordinate -= delta;
-            sampled = nativeControlForegroundSource(coordinate);
+            float offset = (3.0 - float(band)) * (1.0 / 3.0);
+            sampled = nativeControlForegroundSource(refracted + delta * offset);
         }
-        samples[band] = sampled;
-    }
-""" + NativeControlSpectralSum + """float4 nativeControlForeground(float2 p, float4 field, float4 matrix,
+""" + NativeControlSpectralAccumulate + """float4 nativeControlForeground(float2 p, float4 field, float4 matrix,
     float3 refraction, float2 refractionDirection, float3 aberration, float2 aberrationDirection,
     float4 edge, float colorGain) {
     return nativeControlForegroundForRaster(p, field, matrix, refraction, refractionDirection,
