@@ -743,11 +743,12 @@ internal fun Modifier.navigationGlassBackgroundResolved(
     val samplingScale: (Size, Density) -> Float = { size, density ->
         val outline = shape()
         val eligible = when {
-            outline is LiquidContactShape || outline is ToolbarActionShape -> allowContactSamplingScale
+            outline is LiquidContactShape || outline is ToolbarActionShape || outline is NavigationGlassUnionShape -> allowContactSamplingScale
             outline is Capsule || outline is RoundedRectangularShape || outline is CornerBasedShape || outline === RectangleShape -> true
             else -> false
         }
-        if (eligible) navigationGlassCaptureScale(size.minDimension / density.density) else 1f
+        val minDimension = (outline as? NavigationGlassUnionShape)?.minimumDimension ?: size.minDimension
+        if (eligible) navigationGlassCaptureScale(minDimension / density.density) else 1f
     }
     val sampledPressRenderer = if (isRuntimeShaderSupported() && Build.VERSION.SDK_INT < 36 && sampledPressHighlight != null) PressHighlightRenderer() else null
     // Only the shared bottom base opts in: it has no child content before its press overlay.
@@ -791,7 +792,10 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                 val surfaceShape = shape()
                 val outlineShape = surfaceShape as? NavigationGlassOutlineShape
                 val extent = outlineShape?.bodyDimension(size, this)
-                    ?: ((surfaceShape as? NavigationGlassUnionShape)?.minimumDimension ?: size.minDimension) / density
+                    ?: (surfaceShape as? NavigationGlassUnionShape)?.let {
+                        it.minimumDimension / (storage?.sourceDensity?.density ?: density)
+                    }
+                    ?: (size.minDimension / density)
                 val geometry = if (cachedGeometry == null || geometryExtent != extent) {
                     navigationGlassGeometryProfile(extent, material).also { cachedGeometry = it; geometryExtent = extent }
                 } else requireNotNull(cachedGeometry)
@@ -820,7 +824,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                 val nativeField = if (isRuntimeShaderSupported() && (nativeOptics || completion != null)) when (surfaceShape) {
                     is LiquidContactShape -> navigationContainerGlassField(surfaceShape, opticalCenter?.invoke(), completionBand, samplingScale = effectSamplingScale)
                     is ToolbarActionShape -> navigationToolbarGlassField(surfaceShape, completionBand, samplingScale = effectSamplingScale)
-                    is NavigationGlassUnionShape -> surfaceShape.nativeField()
+                    is NavigationGlassUnionShape -> surfaceShape.nativeField(samplingScale = effectSamplingScale)
                     is NavigationGlassOutlineShape -> surfaceShape.nativeField(size, layoutDirection, this, completionBand)
                     else -> null
                 } else null

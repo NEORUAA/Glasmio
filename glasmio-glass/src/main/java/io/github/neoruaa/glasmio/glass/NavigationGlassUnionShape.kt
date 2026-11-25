@@ -65,7 +65,29 @@ class NavigationGlassUnionShape(
     override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
         outline.createOutline(size, layoutDirection, density)
 
-    internal fun nativeField(): NativeGlassFilterField = opticalField
+    private var scaledFieldScale = 1f
+    private var scaledField: NativeGlassFilterField? = null
+
+    internal fun nativeField(samplingScale: Float = 1f): NativeGlassFilterField {
+        val s = samplingScale.coerceAtLeast(.0001f)
+        if (s == 1f) return opticalField
+        val existing = scaledField
+        if (existing != null && scaledFieldScale == s) return existing
+        val bounds = FloatArray(packedBounds.size) { packedBounds[it] * s }
+        val radii = FloatArray(packedRadii.size) { packedRadii[it] * s }
+        val scaledSmoothness = smoothness * s
+        return NativeGlassFilterField(NavigationGlassUnionFieldShader) { shader ->
+            if (isRuntimeShaderSupported()) {
+                shader.setFloatUniform("compoundElements", bounds)
+                shader.setFloatUniform("compoundRadii", radii)
+                shader.setFloatUniform("compoundCount", elements.size.toFloat())
+                shader.setFloatUniform("compoundSmoothness", scaledSmoothness)
+            }
+        }.also {
+            scaledFieldScale = s
+            scaledField = it
+        }
+    }
 
     /** CPU counterpart of the shader, including its unnormalized mixed normal. */
     internal fun field(x: Float, y: Float, output: FloatArray = FloatArray(3)): FloatArray {

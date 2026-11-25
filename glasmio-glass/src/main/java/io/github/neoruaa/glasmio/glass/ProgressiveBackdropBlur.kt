@@ -17,6 +17,7 @@ import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.platform.InspectorInfo
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlin.math.ceil
@@ -28,6 +29,8 @@ import io.github.neoruaa.glasmio.glass.render.effects.blur
 import io.github.neoruaa.glasmio.glass.render.effects.runtimeShaderEffect
 import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 
+private val ProgressiveBlurSamplingScale: (Size, Density) -> Float = { _, _ -> 0.5f }
+
 // A normalized intensity animation keeps the same programs throughout. Only the static
 // loop bound differs between families; each pixel still uses its exact local radius.
 private enum class ProgressiveBlurKernel(val limit: Int) {
@@ -35,6 +38,7 @@ private enum class ProgressiveBlurKernel(val limit: Int) {
 
     val horizontal by lazy { progressiveBlurPassShader(isVertical = false, limit = limit) }
     val vertical by lazy { progressiveBlurPassShader(isVertical = true, limit = limit) }
+    val verticalFade by lazy { progressiveBlurPassShader(isVertical = true, limit = limit, fadeLowRadius = true) }
 }
 
 /**
@@ -46,12 +50,21 @@ private enum class ProgressiveBlurKernel(val limit: Int) {
 private fun progressiveBlurPassShader(
     isVertical: Boolean,
     limit: Int,
+    fadeLowRadius: Boolean = false,
 ): String {
     val pairedOffset =
         if (isVertical) "vec2(0.0, i + weightH / weight)"
         else "vec2(i + weightH / weight, 0.0)"
     val oddOffset = if (isVertical) "vec2(0.0, r)" else "vec2(r, 0.0)"
     val axis = if (isVertical) "y" else "x"
+    val outputStatement = if (fadeLowRadius) {
+        "float radius = blurRadius * intensity;\n" +
+            "            float edgeAlpha = clamp(radius / 1.5, 0.0, 1.0);\n" +
+            "            if (edgeAlpha <= 0.0) { return half4(0.0); }\n" +
+            "            return half4(blur(coord, radius) * edgeAlpha);"
+    } else {
+        "return half4(blur(coord, blurRadius * intensity));"
+    }
     return """
         uniform shader content;
         uniform float blurRadius;
@@ -126,7 +139,7 @@ private fun progressiveBlurPassShader(
             float2 ba = endPoint - startPoint;
             float fraction = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
             float intensity = mix(startIntensity, endIntensity, fraction);
-            return half4(blur(coord, blurRadius * intensity));
+            $outputStatement
         }
     """.trimIndent()
 }
@@ -137,6 +150,22 @@ fun BackdropEffectScope.progressiveBackdropBlur(
     endYFraction: Float = 1f,
     startIntensity: Float = 1f,
     endIntensity: Float = 0f,
+) = progressiveBackdropBlurInternal(
+    maxRadius = maxRadius,
+    startYFraction = startYFraction,
+    endYFraction = endYFraction,
+    startIntensity = startIntensity,
+    endIntensity = endIntensity,
+    fadeLowRadius = false,
+)
+
+private fun BackdropEffectScope.progressiveBackdropBlurInternal(
+    maxRadius: Float,
+    startYFraction: Float = 0.42f,
+    endYFraction: Float = 1f,
+    startIntensity: Float = 1f,
+    endIntensity: Float = 0f,
+    fadeLowRadius: Boolean,
 ) {
     if (maxRadius <= 0f) return
     if (!isRuntimeShaderSupported()) {
@@ -164,7 +193,11 @@ fun BackdropEffectScope.progressiveBackdropBlur(
     }
 
     applyPass("IosTopBarProgressiveBlurHorizontal", kernel.horizontal, size.width)
-    applyPass("IosTopBarProgressiveBlurVertical", kernel.vertical, size.height)
+    if (fadeLowRadius) {
+        applyPass("IosTopBarProgressiveBlurVerticalFade", kernel.verticalFade, size.height)
+    } else {
+        applyPass("IosTopBarProgressiveBlurVertical", kernel.vertical, size.height)
+    }
 }
 
 /** Build the same two-pass separable progressive blur RenderEffect for retained local layers. */
@@ -253,7 +286,8 @@ fun Modifier.progressiveBlurBackdrop(
     // shader cache, but detach the unused source graph at the zero endpoint.
     backdrop = if (!active) emptyBackdrop() else backdrop,
     shape = { RectangleShape },
-    effects = { progressiveBackdropBlur(maxRadius.toPx()) },
+    samplingScale = ProgressiveBlurSamplingScale,
+    effects = { progressiveBackdropBlurInternal(maxRadius.toPx(), fadeLowRadius = true) },
 )
 
 /**
