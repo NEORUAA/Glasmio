@@ -249,7 +249,7 @@ uniform float2 transitionLens;
 uniform float transitionHasSecondary;
 half4 nativeMenuTransitionSample(float2 coord) {
     float4 rect = nativeAtlasRect(1);
-    return content.eval(rect.xy + clamp(coord, float2(0.5), transitionSampleExtent - float2(0.5)));
+    return half4(nativeAtlasDecode(float4(content.eval(rect.xy + clamp(coord, float2(0.5), transitionSampleExtent - float2(0.5))))));
 }
 half4 nativeGlassSample(float2 coord, float blurRadius) { return nativeMenuTransitionSample(coord); }
 """ + NativeGlassSpectralFunctions + CustomGlassChromaticFunctions + """

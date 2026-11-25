@@ -235,7 +235,9 @@ internal class NativeGlassMipAtlas(
     }
     internal val hasRegularMipLayout: Boolean get() = regularMipRow != null
     private val hardwareLinearSampling = allowHardwareLinearSampling && (nativeGammaStorage || !colorManaged)
-    private val sharedControlDecode = controlScenePlane != null && colorManaged && !nativeGammaStorage
+    // Share one color-managed texel decode site in a 4-corner loop across all managed atlases,
+    // slashing SPIR-V size and Qualcomm Adreno cold pipeline compilation latency in HDR.
+    private val sharedControlDecode = colorManaged && !nativeGammaStorage
     val samplingLayoutKey: String = (if (regularMipRow == null) "packed$lookupCapacity" else "mip") +
         ".linear=$hardwareLinearSampling" + if (sharedControlDecode) ".control" else ""
     val samplingFunctions: String = (if (regularMipRow == null)
@@ -953,9 +955,10 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
             val input = rects[index - 1]
             val output = rects[index]
             val textureProgram = texturePrograms.getOrPut(textureProgramKey) {
-                (if (colorManaged && !storeNativeGamma) NativeAtlasManagedColorFunctions else NativeAtlasRawColorFunctions) +
-                    nativeMipTextureGridFunctions(kernel.clampToZero, textureHardwareLinear) +
-                    nativeMipTextureKernelFunctions(kernel.halfArithmetic, kernel.flushSmallRgb) +
+                val managedDecode = colorManaged && !storeNativeGamma
+                (if (managedDecode) NativeAtlasManagedColorFunctions else NativeAtlasRawColorFunctions) +
+                    nativeMipTextureGridFunctions(kernel.clampToZero, textureHardwareLinear, managedDecode) +
+                    nativeMipTextureKernelFunctions(kernel.halfArithmetic, kernel.flushSmallRgb, managedDecode) +
                     nativeMipTextureDownsampleMain(kernel.outputGridOffsets)
             }
             val texture = shaders.obtainRuntimeShader("Glasmio.NativeMip.texture.$textureProgramKey.$index", textureProgram)
@@ -1156,11 +1159,50 @@ half4 nativeMipKernel(float2 center, float2 inner, float2 outer) {
 }
 """
 
+/** Loop-structured 13-tap half kernel keeping a single managed decode site for fast HDR cold compiles. */
+private const val NativeMipHalfKernelManagedLoopBody = """
+    half4 axisInner = half4(0.0);
+    half4 diagonal = half4(0.0);
+    half4 axisOuter = half4(0.0);
+    half4 value = half4(0.0);
+    for (int tap = 0; tap < 13; ++tap) {
+        float2 delta = float2(0.0);
+        if (tap == 0) delta = float2(0.0, -inner.y);
+        else if (tap == 1) delta = float2(-inner.x, 0.0);
+        else if (tap == 2) delta = float2(0.0, inner.y);
+        else if (tap == 3) delta = float2(inner.x, 0.0);
+        else if (tap == 5) delta = -inner;
+        else if (tap == 6) delta = float2(-inner.x, inner.y);
+        else if (tap == 7) delta = float2(inner.x, -inner.y);
+        else if (tap == 8) delta = inner;
+        else if (tap == 9) delta = float2(-outer.x, 0.0);
+        else if (tap == 10) delta = float2(0.0, -outer.y);
+        else if (tap == 11) delta = float2(0.0, outer.y);
+        else if (tap == 12) delta = float2(outer.x, 0.0);
+        half4 sampleTap = half4(nativeMipBilinear(center + delta));
+        if (tap < 4) {
+            axisInner = tap == 0 ? sampleTap : axisInner + sampleTap;
+        } else if (tap == 4) {
+            value = axisInner * half(nativeMipKernelWeights.y) + sampleTap * half(nativeMipKernelWeights.x);
+        } else if (tap < 9) {
+            diagonal = tap == 5 ? sampleTap : diagonal + sampleTap;
+            if (tap == 8) value = value + diagonal * half(nativeMipKernelWeights.z);
+        } else {
+            axisOuter = tap == 9 ? sampleTap : axisOuter + sampleTap;
+            if (tap == 12) value = value + axisOuter * half(nativeMipKernelWeights.w);
+        }
+    }
+"""
+
 /** Only the private texture producer has a statically known arithmetic/flush mode. */
-private fun nativeMipTextureKernelFunctions(halfArithmetic: Boolean, flushSmallRgb: Boolean): String =
+private fun nativeMipTextureKernelFunctions(
+    halfArithmetic: Boolean,
+    flushSmallRgb: Boolean,
+    sharedManagedLoop: Boolean = false,
+): String =
     NativeMipKernelUniforms + """
 half4 nativeMipKernel(float2 center, float2 inner, float2 outer) {
-""" + (if (halfArithmetic) NativeMipHalfKernelBody +
+""" + (if (halfArithmetic) (if (sharedManagedLoop) NativeMipHalfKernelManagedLoopBody else NativeMipHalfKernelBody) +
         (if (flushSmallRgb) NativeMipHalfKernelFlush else "") + "    return value;\n"
     else NativeMipFloatKernelBody) + "}\n"
 
@@ -1266,7 +1308,11 @@ private const val NativeMipAtlasManagedDownsampleShader = NativeAtlasManagedColo
     NativeMipKernelFunctions + NativeMipAtlasDownsampleMain
 
 /** Real-sized intermediate textures keep every recovered tap on its original discrete grid. */
-private fun nativeMipTextureGridFunctions(clampToZero: Boolean, hardwareLinear: Boolean): String = """
+private fun nativeMipTextureGridFunctions(
+    clampToZero: Boolean,
+    hardwareLinear: Boolean,
+    sharedManagedLoop: Boolean = false,
+): String = """
 uniform shader content;
 uniform float2 nativeMipBaseSize;
 uniform float2 nativeMipLevelSize;
@@ -1285,6 +1331,19 @@ float4 nativeMipBilinear(float2 coordinate) {
     pixel = clamp(pixel, float2(0.0), nativeMipLevelSize - 1.0);
 """) + (if (hardwareLinear) """
     return nativeAtlasDecode(float4(content.eval(pixel + .5)));
+""" else if (sharedManagedLoop) """
+    float2 index = floor(pixel);
+    float2 fraction = pixel - index;
+    float4 left = float4(0.0), upper = float4(0.0), lower = float4(0.0);
+    for (int corner = 0; corner < 4; ++corner) {
+        bool right = corner == 1 || corner == 3;
+        float2 offset = float2(right ? 1.0 : 0.0, corner >= 2 ? 1.0 : 0.0);
+        float4 value = nativeMipTexel(index + offset);
+        if (!right) left = value;
+        else if (corner == 1) upper = mix(left, value, fraction.x);
+        else lower = mix(left, value, fraction.x);
+    }
+    return mix(upper, lower, fraction.y);
 """ else """
     float2 index = floor(pixel);
     float2 fraction = pixel - index;

@@ -8,27 +8,21 @@ package io.github.neoruaa.glasmio.glass.render
  * Android supplies the working-space transforms for both SDR and HDR destinations.
  */
 const val GlassColorSpaceShaderFunctions = """
-float glassExtendedSrgbEncodeChannel(float value) {
-    float magnitude = abs(value);
-    float encoded = magnitude <= 0.0031308
-        ? 12.92 * magnitude
-        : 1.055 * pow(magnitude, 1.0 / 2.4) - 0.055;
+float3 glassLinearToNativeGamma(float3 value) {
+    float3 magnitude = abs(value);
+    float3 encoded = mix(
+        1.055 * pow(max(magnitude, float3(0.0031308)), float3(1.0 / 2.4)) - 0.055,
+        12.92 * magnitude,
+        step(magnitude, float3(0.0031308)));
     return sign(value) * encoded;
 }
-float glassExtendedSrgbDecodeChannel(float value) {
-    float magnitude = abs(value);
-    float decoded = magnitude <= 0.04045
-        ? magnitude / 12.92
-        : pow((magnitude + 0.055) / 1.055, 2.4);
-    return sign(value) * decoded;
-}
-float3 glassLinearToNativeGamma(float3 value) {
-    return float3(glassExtendedSrgbEncodeChannel(value.r),
-        glassExtendedSrgbEncodeChannel(value.g), glassExtendedSrgbEncodeChannel(value.b));
-}
 float3 glassNativeGammaToLinear(float3 value) {
-    return float3(glassExtendedSrgbDecodeChannel(value.r),
-        glassExtendedSrgbDecodeChannel(value.g), glassExtendedSrgbDecodeChannel(value.b));
+    float3 magnitude = abs(value);
+    float3 decoded = mix(
+        pow((max(magnitude, float3(0.04045)) + 0.055) / 1.055, float3(2.4)),
+        magnitude / 12.92,
+        step(magnitude, float3(0.04045)));
+    return sign(value) * decoded;
 }
 float3 glassWorkingToNativeGamma(float3 straightWorkingRgb) {
     return glassLinearToNativeGamma(toLinearSrgb(straightWorkingRgb));

@@ -567,7 +567,7 @@ class GlassMorphRenderer(
         // Capability stays present at zero amount, without initializing the unused B builder.
         val fuseTransitionRefraction = completeNativeMaterial && nativeBackgroundFilter && customOptics &&
             appearance.usesRefraction && menuField != null && cornerRadii != null && filterField != null &&
-            drawContext.canvas.nativeCanvas.isHardwareAccelerated && !nativeFilterScope.colorManagedNativeGlass
+            drawContext.canvas.nativeCanvas.isHardwareAccelerated
         val shader: RuntimeShader? = if (!fuseTransitionRefraction && (!nativeBackgroundFilter || customOptics))
             this@GlassMorphRenderer.shader else null
         val refractionEffect = if (isRuntimeShaderSupported() && shader != null) {

@@ -799,8 +799,7 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                 val amount = if (refractionAmount.value.isFinite()) refractionAmount.toPx() else geometry.innerAmount * density
                 val nativeOptics = !refractionHeight.value.isFinite() && !refractionAmount.value.isFinite()
                 val contactShape = surfaceShape as? LiquidContactShape
-                val pressGlow = if (canFusePressOverlay && storage != null && storage.nativeGlassHardwareRendering &&
-                    !storage.colorManagedNativeGlass) {
+                val pressGlow = if (canFusePressOverlay && storage != null && storage.nativeGlassHardwareRendering) {
                     NativeGlassPressGlow(sampledPressHighlight?.invoke(storage.fullSize))
                 } else null
                 val completion = nativeRecipe?.let { recipe ->

@@ -246,6 +246,7 @@ private data class NativeAtlasTwoRateOpticalSourceKey(
 
 private data class NativeAtlasTwoRateCompletionSourceKey(
     val functions: String,
+    val colorManaged: Boolean,
     val topology: NativeGlassCompletionTopology,
 )
 
@@ -304,7 +305,7 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
             maximumLod * .25f + 2f, ceil(nativeNavigationGlassLod(radius) + .001f).toInt())
     }
     val preferredOutputSize = if (completion != null && storage.supportsTwoRateNativeOpticalStage &&
-        !storage.colorManagedNativeGlass && density in .125f..32f
+        density in .125f..32f
     ) {
         val scale = completion.textureScale ?: storage.samplingScale
         val outputDensity = completion.outputDensity ?: storage.sourceDensity.density
@@ -326,7 +327,7 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     val functions = field?.shaderFunctions ?: NativeDefaultFieldShader
     val twoRateEligible = Build.VERSION.SDK_INT >= 36 && completion != null &&
         storage.supportsTwoRateNativeOpticalStage && storage.nativeGlassHardwareRendering &&
-        !atlas.colorManaged && !atlas.nativeGammaStorage && atlas.textureStages.isNotEmpty() &&
+        !atlas.nativeGammaStorage && atlas.textureStages.isNotEmpty() &&
         completion.clearFraction < .001f && (completion.textureScale ?: storage.samplingScale) <= .5f &&
         radius > 0f && profile.mainBlurAlpha1 >= .2f
     if (twoRateEligible) {
@@ -404,16 +405,17 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
         val stageBSources = storage.cachedResource("Glasmio.NativeAtlas.twoRateComplete.sources") {
             mutableMapOf<NativeAtlasTwoRateCompletionSourceKey, String>()
         }
-        val stageBProgram = stageBSources.getOrPut(NativeAtlasTwoRateCompletionSourceKey(functions, stageBTopology)) {
+        val stageBProgram = stageBSources.getOrPut(NativeAtlasTwoRateCompletionSourceKey(functions, atlas.colorManaged, stageBTopology)) {
             nativeGlassCompletionFieldFunctions(functions) +
                 (if (stageBTopology.hasSourceShadow && stageBTopology.hasShadow &&
                     !functions.contains("float3 nativeGlassRoundedField(")) NativeGlassSdfFunctions else "") +
+                nativeGlassAtlasColorFunctions(atlas.colorManaged) +
                 NativeTwoRateCompletionSamplingFunctions +
-                (if (stageBTopology.hasPressGlow) GlassColorSpaceShaderFunctions else "") +
+                (if (!atlas.colorManaged && stageBTopology.hasPressGlow) GlassColorSpaceShaderFunctions else "") +
                 nativeGlassCompletionShader(stageBTopology, twoRateSample = true)
         }
         val stageBShader = obtainRuntimeShader(
-            "Glasmio.NativeAtlas.twoRateComplete.${stageBTopology.cacheKey}.${functions.hashCode()}",
+            "Glasmio.NativeAtlas.twoRateComplete.${atlas.colorManaged}.${stageBTopology.cacheKey}.${functions.hashCode()}",
             stageBProgram,
         ).asAndroidRuntimeShader()
         if (field == null) {
@@ -669,13 +671,12 @@ float3 nativeAtlasFlush(float3 color) {
     return float3(abs(color.r) < .000001 ? 0.0 : color.r,
         abs(color.g) < .000001 ? 0.0 : color.g, abs(color.b) < .000001 ? 0.0 : color.b);
 }
-float4 nativeAtlasEncodeRelative(float4 relative, float4 backdrop) { return relative; }
 float4 nativeTwoRateFiltered(float2 localPoint) {
-    return float4(content.eval(nativeTwoRateOpticalRect.xy +
-        clamp(localPoint, float2(0.5), nativeTwoRateOpticalRect.zw - float2(0.5))));
+    return nativeAtlasDecode(float4(content.eval(nativeTwoRateOpticalRect.xy +
+        clamp(localPoint, float2(0.5), nativeTwoRateOpticalRect.zw - float2(0.5)))));
 }
 float4 nativeTwoRateOriginal(float2 localPoint) {
-    return float4(content.eval(nativeTwoRateOriginalRect.xy +
-        clamp(localPoint, float2(0.5), nativeTwoRateOriginalRect.zw - float2(0.5))));
+    return nativeAtlasDecode(float4(content.eval(nativeTwoRateOriginalRect.xy +
+        clamp(localPoint, float2(0.5), nativeTwoRateOriginalRect.zw - float2(0.5)))));
 }
 """
