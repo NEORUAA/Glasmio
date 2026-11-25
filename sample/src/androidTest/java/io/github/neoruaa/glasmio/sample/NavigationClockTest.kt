@@ -3,6 +3,7 @@ package io.github.neoruaa.glasmio.sample
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -14,6 +15,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
@@ -33,6 +35,251 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class NavigationClockTest {
     @get:Rule val rule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun backButtonDuringPushReversesThePresentedPage() {
+        val stack = mutableStateListOf("A")
+        val motion = GlasmioNavHeaderMotion("A")
+        var pops = 0
+        val goBack: () -> Unit = {
+            pops++
+            stack.removeAt(stack.lastIndex)
+        }
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavigationScaffold(motion, header = { key ->
+                    val leading = if (key == "B") {
+                        listOf(GlasmioHeaderGroup("navigation", listOf(
+                            GlasmioHeaderAction("back", "chevron.backward", "Page Back", goBack) { Text("‹") },
+                        )))
+                    } else emptyList()
+                    GlasmioHeaderSpec("Title $key", leading = leading)
+                }) {
+                    GlasmioNavDisplay(stack, motion, onBack = goBack, entryProvider = { key ->
+                        NavEntry(key, contentKey = key) {
+                            Box(Modifier.fillMaxSize().background(Color.White).testTag("button-page-$key")) {
+                                GlasmioPageTitle(key)
+                            }
+                        }
+                    })
+                }
+            }
+        }
+
+        val sourcePage = rule.onNodeWithTag("button-page-A")
+        val enteringPage = rule.onNodeWithTag("button-page-B")
+        val backButton = rule.onNode(hasContentDescription("Page Back") and hasClickAction())
+        val sourceBounds = sourcePage.fetchSemanticsNode().boundsInRoot
+        val sourceTitle = rule.onNodeWithText("Title A").fetchSemanticsNode().boundsInRoot
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.runOnUiThread { stack.add("B") }
+            rule.mainClock.advanceTimeBy(144)
+            val previousPosition = enteringPage.fetchSemanticsNode().boundsInRoot.left
+            rule.mainClock.advanceTimeByFrame()
+            val beforeBack = enteringPage.fetchSemanticsNode().boundsInRoot.left
+            val entryPlayTime = rule.runOnUiThread { motion.frame.value.playTimeNanos }
+            assertTrue("The page must still be entering", beforeBack > sourceBounds.left + 1f)
+            assertTrue("The entrance clock must be running", entryPlayTime > 0L)
+
+            val handoffTime = rule.mainClock.currentTime
+            backButton.performSemanticsAction(SemanticsActions.OnClick) { it() }
+            assertEquals(handoffTime, rule.mainClock.currentTime)
+            rule.mainClock.advanceTimeByFrame()
+            val afterBack = enteringPage.fetchSemanticsNode().boundsInRoot.left
+            // The push can tick once before recomposition handles the new stack.
+            assertEquals("Back must keep the current presentation at the handoff",
+                beforeBack, afterBack, previousPosition - beforeBack + 2f)
+            rule.runOnUiThread {
+                assertTrue("Back must keep the entrance clock at the handoff",
+                    kotlin.math.abs(motion.frame.value.playTimeNanos - entryPlayTime) <= 32_000_000L)
+            }
+            rule.mainClock.advanceTimeBy(64)
+            val exiting = enteringPage.fetchSemanticsNode().boundsInRoot.left
+            assertTrue("The interrupted page must move out to the right", exiting > afterBack + 1f)
+            rule.onNodeWithText("Title B").assertExists()
+            rule.runOnUiThread {
+                assertEquals(GlasmioNavigationOperation.Pop, motion.frame.value.operation)
+                assertEquals(GlasmioNavigationPhase.Settling, motion.frame.value.phase)
+                assertEquals("B", motion.frame.value.fromEntryKey)
+                assertEquals("A", motion.frame.value.toEntryKey)
+                assertTrue("Back must reverse the same entrance clock",
+                    motion.frame.value.playTimeNanos in 1L until entryPlayTime)
+            }
+
+            rule.mainClock.advanceTimeBy(1_200)
+            enteringPage.assertDoesNotExist()
+            backButton.assertDoesNotExist()
+            assertEquals(sourceBounds, sourcePage.fetchSemanticsNode().boundsInRoot)
+            assertEquals(sourceTitle, rule.onNodeWithText("Title A").fetchSemanticsNode().boundsInRoot)
+            rule.runOnUiThread {
+                assertEquals(listOf("A"), stack.toList())
+                assertEquals(1, pops)
+                assertEquals(GlasmioNavigationPhase.Idle, motion.frame.value.phase)
+                assertEquals("A", motion.committedKey)
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test fun reopeningDuringExitWaitsForTheOutgoingPage() {
+        val stack = mutableStateListOf("A")
+        val motion = GlasmioNavHeaderMotion("A")
+        var opens = 0
+        var pops = 0
+        val goBack: () -> Unit = {
+            pops++
+            stack.removeAt(stack.lastIndex)
+        }
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavDisplay(stack, motion, onBack = goBack, entryProvider = { key ->
+                    NavEntry(key, contentKey = key) {
+                        Box(Modifier.fillMaxSize().background(Color.White).testTag("reopen-page-$key")) {
+                            if (key == "A") {
+                                Text("Open detail", Modifier.align(Alignment.CenterStart).padding(start = 104.dp)
+                                    .testTag("reopen-trigger").clickable { stack.add("B${++opens}") })
+                            } else {
+                                Text("Back", Modifier.testTag("reopen-back").clickable(onClick = goBack))
+                            }
+                        }
+                    }
+                })
+            }
+        }
+
+        fun page(key: String) = rule.onNodeWithTag("reopen-page-$key")
+        fun click(tag: String) = rule.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.OnClick) { it() }
+        val rootBounds = page("A").fetchSemanticsNode().boundsInRoot
+        fun reopenDuringExit(outgoing: String, incoming: String) {
+            val beforeRequest = page(outgoing).fetchSemanticsNode().boundsInRoot.left
+            assertTrue("The outgoing page must still be sliding away", beforeRequest > rootBounds.left + 1f)
+            click("reopen-trigger")
+            rule.runOnUiThread { assertEquals(listOf("A", incoming), stack.toList()) }
+
+            rule.mainClock.advanceTimeBy(32)
+            page(incoming).assertDoesNotExist()
+            assertTrue("Reopening must not pull the outgoing page back onto the screen",
+                page(outgoing).fetchSemanticsNode().boundsInRoot.left >= beforeRequest - 2f)
+
+            repeat(80) {
+                rule.mainClock.advanceTimeByFrame()
+                val incomingBounds = rule.onAllNodesWithTag("reopen-page-$incoming")
+                    .fetchSemanticsNodes().firstOrNull()?.boundsInRoot
+                if (incomingBounds != null && incomingBounds.width > 1f) {
+                    val outgoingVisible = rule.onAllNodesWithTag("reopen-page-$outgoing")
+                        .fetchSemanticsNodes().any { it.boundsInRoot.width > 1f }
+                    assertFalse("Only one detail page may be visible", outgoingVisible)
+                    assertTrue("The new detail must enter from the right", incomingBounds.left > rootBounds.left + 1f)
+                    return
+                }
+            }
+            fail("The accepted navigation request must start after the outgoing page exits")
+        }
+
+        rule.mainClock.autoAdvance = false
+        try {
+            click("reopen-trigger")
+            rule.mainClock.advanceTimeBy(160)
+            click("reopen-back")
+            rule.mainClock.advanceTimeBy(64)
+            reopenDuringExit("B1", "B2")
+
+            rule.mainClock.advanceTimeBy(120)
+            click("reopen-back")
+            rule.mainClock.advanceTimeBy(64)
+            reopenDuringExit("B2", "B3")
+
+            rule.mainClock.advanceTimeBy(1_200)
+            rule.runOnUiThread { assertEquals("B3", motion.committedKey) }
+            click("reopen-back")
+            rule.mainClock.advanceTimeBy(96)
+            reopenDuringExit("B3", "B4")
+
+            rule.mainClock.advanceTimeBy(1_200)
+            assertEquals(rootBounds, page("B4").fetchSemanticsNode().boundsInRoot)
+            click("reopen-back")
+            rule.mainClock.advanceTimeBy(1_200)
+            assertEquals(rootBounds, page("A").fetchSemanticsNode().boundsInRoot)
+            page("B4").assertDoesNotExist()
+            rule.runOnUiThread {
+                assertEquals(listOf("A"), stack.toList())
+                assertEquals(4, pops)
+                assertEquals(GlasmioNavigationPhase.Idle, motion.frame.value.phase)
+                assertEquals("A", motion.committedKey)
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
+    @Test fun predictiveCancellationAfterPopKeepsTheSamePresentation() {
+        val stack = mutableStateListOf("A", "B", "C")
+        val motion = GlasmioNavHeaderMotion("C")
+        val goBack: () -> Unit = { stack.removeAt(stack.lastIndex) }
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavDisplay(stack, motion, onBack = goBack, entryProvider = { key ->
+                    NavEntry(key, contentKey = key) {
+                        Box(Modifier.fillMaxSize().background(Color.White).testTag("cancel-page-$key"))
+                    }
+                })
+            }
+        }
+
+        fun page(key: String) = rule.onNodeWithTag("cancel-page-$key")
+        fun canceledSwipe(from: String, to: String): Float {
+            val sourceBounds = page(from).fetchSemanticsNode().boundsInRoot
+            fun travel() = (page(from).fetchSemanticsNode().boundsInRoot.left - sourceBounds.left) / sourceBounds.width
+
+            rule.runOnUiThread {
+                val dispatcher = rule.activity.onBackPressedDispatcher
+                dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 100f, 0f, BackEventCompat.EDGE_LEFT))
+                dispatcher.dispatchOnBackProgressed(BackEventCompat(200f, 100f, .55f, BackEventCompat.EDGE_LEFT))
+            }
+            rule.mainClock.advanceTimeBy(288)
+            val tracking = travel()
+            assertEquals("Predictive Back must move the source page with the gesture", .55f, tracking, .02f)
+            page(to).assertExists()
+            rule.runOnUiThread {
+                assertEquals(GlasmioNavigationPhase.Tracking, motion.frame.value.phase)
+                rule.activity.onBackPressedDispatcher.dispatchOnBackCancelled()
+            }
+
+            rule.mainClock.advanceTimeByFrame()
+            assertEquals("Cancel must start from the tracked presentation", tracking, travel(), .02f)
+            rule.mainClock.advanceTimeBy(64)
+            val settling = travel()
+            assertTrue("Cancel must move the source back toward its resting position",
+                settling > 0f && settling < tracking - .01f)
+            rule.runOnUiThread { assertEquals(GlasmioNavigationPhase.Canceling, motion.frame.value.phase) }
+
+            rule.mainClock.advanceTimeBy(1_200)
+            assertEquals(sourceBounds, page(from).fetchSemanticsNode().boundsInRoot)
+            page(to).assertDoesNotExist()
+            rule.runOnUiThread {
+                assertEquals(from, stack.last())
+                assertEquals(GlasmioNavigationPhase.Idle, motion.frame.value.phase)
+                assertEquals(from, motion.committedKey)
+            }
+            return settling
+        }
+
+        rule.mainClock.autoAdvance = false
+        try {
+            val baseline = canceledSwipe("C", "B")
+            rule.runOnUiThread(goBack)
+            rule.mainClock.advanceTimeBy(1_200)
+            rule.runOnUiThread {
+                assertEquals("B", motion.committedKey)
+                assertEquals(GlasmioNavigationOperation.Pop, motion.frame.value.operation)
+            }
+            assertEquals("An earlier pop must not change predictive cancellation motion",
+                baseline, canceledSwipe("B", "A"), .03f)
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
 
     @Test fun swipeDuringPushAndExternalNavigationRetainsThePresentedPage() {
         val stack = mutableStateListOf("A")

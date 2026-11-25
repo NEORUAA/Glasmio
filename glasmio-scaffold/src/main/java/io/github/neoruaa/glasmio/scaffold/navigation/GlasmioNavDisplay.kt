@@ -320,8 +320,10 @@ fun <T : Any> GlasmioNavDisplay(
     retainedTabKeys: Set<Any> = emptySet(),
     onBack: (() -> Unit)? = null,
 ) {
-    // Calculate current Scene and set up transitions
-    val scene = sceneState.currentScene
+    // Keep a closing scene's destination until its outgoing layer has left the display.
+    // The latest back stack can still change while the visible destination accepts input.
+    var closingScene by remember { mutableStateOf<Scene<T>?>(null) }
+    val scene = closingScene ?: sceneState.currentScene
     val transitionState = remember {
         // The state returned here cannot be nullable cause it produces the input of the
         // transitionSpec passed into the AnimatedContent and that must match the non-nullable
@@ -348,14 +350,14 @@ fun <T : Any> GlasmioNavDisplay(
             var isPop = false
         }
     }
-    if (isPopRef.previousKeys != currentContentKeys) {
+    if (closingScene == null && isPopRef.previousKeys != currentContentKeys) {
         isPopRef.isPop = isPop(isPopRef.previousKeys, currentContentKeys)
         isPopRef.previousKeys = currentContentKeys
     }
     val isPop = isPopRef.isPop
 
     // Set up Gesture Back tracking
-    val previousScene = sceneState.previousScenes.lastOrNull()
+    val previousScene = if (closingScene == null) sceneState.previousScenes.lastOrNull() else null
 
     val hasPreviousScene = previousScene != null
     val swipe = remember { IosSwipeBackState() }
@@ -419,6 +421,13 @@ fun <T : Any> GlasmioNavDisplay(
     var lastSwipeEdge by remember { mutableStateOf(NavigationEvent.EDGE_NONE) }
     var localPredictive by remember { mutableStateOf(false) }
     var interruptedPushPresentation by remember { mutableStateOf(false) }
+    val sceneKey = AnimatedSceneKey(scene)
+    val initialKey = AnimatedSceneKey(transition.currentState)
+    val targetKey = AnimatedSceneKey(transition.targetState)
+    // If Back returns to the still-visible source, reverse the existing entry clock.
+    fun reversesPush(initial: AnimatedSceneKey, target: AnimatedSceneKey): Boolean =
+        isPop && !inPredictiveBack && !predictivePresentation && initial == sceneKey && target != sceneKey
+    val isReversingPush = reversesPush(initialKey, targetKey)
     if (!inPredictiveBack && !predictivePresentation && transition.totalDurationNanos > 0L) {
         entryClock.durationNanos = transition.totalDurationNanos
     }
@@ -429,11 +438,13 @@ fun <T : Any> GlasmioNavDisplay(
         lastSwipeEdge = swipeEdge
     }
 
+    fun presentedProgress(): Float =
+        if (predictivePresentation && !interruptedPushPresentation) transitionState.fraction
+        else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
+
     // Track currently rendered Scenes and their ZIndices
     val sceneMap = remember { mutableStateMapOf<AnimatedSceneKey, Scene<T>>() }
     val zIndices = remember { mutableObjectFloatMapOf<AnimatedSceneKey>() }
-    val initialKey = AnimatedSceneKey(transition.currentState)
-    val targetKey = AnimatedSceneKey(transition.targetState)
     val initialZIndex = zIndices.getOrPut(initialKey) { 0f }
     // Preserve existing z-index for scenes already tracked in the current transition.
     // This prevents z-index from flipping during settle animations (e.g. after committing
@@ -524,36 +535,54 @@ fun <T : Any> GlasmioNavDisplay(
             } else if (motion.frame.value.toEntryKey != key || motion.frame.value.phase == GlasmioNavigationPhase.Tracking) {
                 motion.beginNavigation(motion.interactionKey, key, isPop)
             }
-            if (predictivePresentation) {
-                // Keep the tracking transform linear until the release spring settles. Switching
-                // back to the noninteractive easing here would move the page at finger lift.
-                val finalFraction = if (transitionState.targetState == scene) 1f else 0f
-                val velocity = if (localPredictive) swipe.releaseVelocity else motion.frame.value.gestureVelocity
-                val releaseVelocity = if (interruptedPushPresentation) -velocity else velocity
-                val startPosition = if (interruptedPushPresentation)
-                    iosNavigationPosition(transitionState.fraction, entryClock.durationNanos) else transitionState.fraction
-                val settling = Animatable(startPosition)
-                coroutineScope {
-                    val seek = launch {
-                        snapshotFlow { settling.value }.collectLatest {
-                            val fraction = if (interruptedPushPresentation)
-                                iosNavigationFraction(it, entryClock.durationNanos) else it.coerceIn(0f, 1f)
-                            transitionState.seekTo(fraction)
-                        }
-                    }
-                    settling.animateTo(finalFraction, initialVelocity = releaseVelocity,
-                        animationSpec = spring(dampingRatio = 0.85f,
-                            stiffness = IosNavigationStiffness, visibilityThreshold = 0.0001f))
-                    seek.cancel()
-                }
-                transitionState.snapTo(scene)
-            } else if (transitionState.currentState != scene || transitionState.targetState != scene) {
-                transitionState.animateTo(scene)
+            // The previous animation may have finished between composition and this effect.
+            val currentTransitionKey = AnimatedSceneKey(transitionState.currentState)
+            val targetTransitionKey = AnimatedSceneKey(transitionState.targetState)
+            val reversePush = reversesPush(currentTransitionKey, targetTransitionKey)
+            val commitsPop = isPop && (!predictivePresentation || gestureFrame.toEntryKey == key)
+            val ownsClosingScene = commitsPop && (currentTransitionKey != sceneKey || targetTransitionKey != sceneKey)
+            if (ownsClosingScene) {
+                closingScene = scene
             }
-            if (transitionState.currentState == scene && transitionState.targetState == scene) {
-                motion.finish(key)
-                predictivePresentation = false
-                interruptedPushPresentation = false
+            try {
+                if (predictivePresentation || reversePush) {
+                    // Settle on the active transform so the page keeps its position at the handoff.
+                    val usesEntryTransform = reversePush || interruptedPushPresentation
+                    val entryDuration = entryClock.durationNanos
+                    val finalFraction = if (targetTransitionKey == sceneKey) 1f else 0f
+                    val velocity = if (localPredictive) swipe.releaseVelocity else motion.frame.value.gestureVelocity
+                    val releaseVelocity = when {
+                        !predictivePresentation -> 0f
+                        usesEntryTransform -> -velocity
+                        else -> velocity
+                    }
+                    val startPosition = if (usesEntryTransform)
+                        iosNavigationPosition(transitionState.fraction, entryDuration) else transitionState.fraction
+                    val settling = Animatable(startPosition)
+                    coroutineScope {
+                        val seek = launch {
+                            snapshotFlow { settling.value }.collectLatest {
+                                val fraction = if (usesEntryTransform)
+                                    iosNavigationFraction(it, entryDuration) else it.coerceIn(0f, 1f)
+                                transitionState.seekTo(fraction)
+                            }
+                        }
+                        settling.animateTo(finalFraction, initialVelocity = releaseVelocity,
+                            animationSpec = spring(dampingRatio = if (predictivePresentation) 0.85f else 1f,
+                                stiffness = IosNavigationStiffness, visibilityThreshold = 0.0001f))
+                        seek.cancel()
+                    }
+                    transitionState.snapTo(scene)
+                } else if (transitionState.currentState != scene || transitionState.targetState != scene) {
+                    transitionState.animateTo(scene)
+                }
+                if (transitionState.currentState == scene && transitionState.targetState == scene) {
+                    motion.finish(key)
+                    predictivePresentation = false
+                    interruptedPushPresentation = false
+                }
+            } finally {
+                if (ownsClosingScene && closingScene === scene) closingScene = null
             }
         }
     }
@@ -562,14 +591,14 @@ fun <T : Any> GlasmioNavDisplay(
 
     val contentTransform: AnimatedContentTransitionScope<Scene<T>>.() -> ContentTransform = {
         when {
+            isReversingPush || interruptedPushPresentation -> {
+                transitionScene.contentTransform(NavDisplay.TransitionKey)?.invoke(this)
+                    ?: transitionSpec(this)
+            }
+
             inPredictiveBack || predictivePresentation -> {
-                if (interruptedPushPresentation) {
-                    transitionScene.contentTransform(NavDisplay.TransitionKey)?.invoke(this)
-                        ?: transitionSpec(this)
-                } else {
-                    transitionScene.predictivePopSpec()?.invoke(this, activeSwipeEdge)
-                        ?: predictivePopTransitionSpec(activeSwipeEdge)
-                }
+                transitionScene.predictivePopSpec()?.invoke(this, activeSwipeEdge)
+                    ?: predictivePopTransitionSpec(activeSwipeEdge)
             }
 
             isPop -> {
@@ -666,8 +695,7 @@ fun <T : Any> GlasmioNavDisplay(
                                             alpha = if (tabKey == targetEntryKey) tabAlphaState.value else 1f
                                             translationX = 0f
                                         } else if (!isTabTransition && !isSettled) {
-                                            val physical = if (predictivePresentation) transitionState.fraction
-                                                else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
+                                            val physical = presentedProgress()
                                             val sign = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) 1f else -1f
                                             val offset = iosNavigationParallaxOffset(size.width.roundToInt(), density.density).toFloat()
                                             translationX = if (tabKey == currentEntryKey) -offset * physical * sign
@@ -685,8 +713,7 @@ fun <T : Any> GlasmioNavDisplay(
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .graphicsLayer {
-                                                val physical = if (predictivePresentation) transitionState.fraction
-                                                    else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
+                                                val physical = presentedProgress()
                                                 alpha = (if (tabKey == currentEntryKey) physical else 1f - physical) *
                                                     transitionEffects.dimAmount
                                             }
@@ -734,8 +761,9 @@ fun <T : Any> GlasmioNavDisplay(
                 LocalLifecycleOwner provides sceneLifecycleOwner,
                 LocalNavAnimatedContentScope provides animatedContentScope,
             ) {
+                val animatedSceneKey = AnimatedSceneKey(targetScene)
                 val myZIndex =
-                    zIndices.getOrElse(AnimatedSceneKey(targetScene)) { targetZIndex }
+                    zIndices.getOrElse(animatedSceneKey) { targetZIndex }
                 val topZIndex = maxOf(initialZIndex, targetZIndex)
 
                 val isTopScene =
@@ -751,8 +779,9 @@ fun <T : Any> GlasmioNavDisplay(
                 }
 
                 val blockerCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
+                val inputSceneKey = if (isReversingPush) sceneKey else targetKey
                 val blockInputModifier =
-                    if (transitionEffects.blockInputDuringTransition && !isSettled && targetScene != transition.targetState) {
+                    if (transitionEffects.blockInputDuringTransition && !isSettled && animatedSceneKey != inputSceneKey) {
                         Modifier.onGloballyPositioned { blockerCoordinates[0] = it }.pointerInput(targetScene.key) {
                             awaitEachGesture {
                                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -795,8 +824,7 @@ fun <T : Any> GlasmioNavDisplay(
                                     .graphicsLayer {
                                         val settled =
                                             transition.currentState == transition.targetState
-                                        val physical = if (predictivePresentation) transitionState.fraction
-                                            else iosNavigationPosition(transitionState.fraction, transition.totalDurationNanos)
+                                        val physical = presentedProgress()
                                         alpha = if (!settled) {
                                             (if (isCurrentScene) physical else 1f - physical) * transitionEffects.dimAmount
                                         } else {
