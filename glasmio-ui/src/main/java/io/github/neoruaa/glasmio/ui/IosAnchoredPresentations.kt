@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.isFinite
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -96,9 +97,11 @@ import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.render.shadow.Shadow
 import io.github.neoruaa.glasmio.icons.SfIcon
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 private val TooltipSides = listOf(AnchoredSide.Above, AnchoredSide.Below)
+private val PopoverBelowFirstSides = listOf(AnchoredSide.Below, AnchoredSide.Above)
 private val PopoverSides = listOf(AnchoredSide.Above, AnchoredSide.Right, AnchoredSide.Below, AnchoredSide.Left)
 private val RtlPopoverSides = listOf(AnchoredSide.Above, AnchoredSide.Left, AnchoredSide.Below, AnchoredSide.Right)
 private val TooltipShape = RoundedCornerShape(9.dp)
@@ -228,6 +231,36 @@ fun GlasmioPopover(
     backdrop: Backdrop = LocalBlurBackdrop.current,
     anchor: @Composable () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
+) = GlasmioPopover(
+    visible = visible,
+    onDismissRequest = onDismissRequest,
+    preferBelowAnchor = false,
+    modifier = modifier,
+    adaptToSheet = adaptToSheet,
+    maxWidth = maxWidth,
+    title = title,
+    backdrop = backdrop,
+    anchor = anchor,
+    content = content,
+)
+
+/**
+ * Set [preferBelowAnchor] to place the popover below the trigger when it fits, with an above fallback.
+ * Provide [anchorBoundsInWindow] to point the arrow at a specific region within [anchor].
+ */
+@Composable
+fun GlasmioPopover(
+    visible: Boolean,
+    onDismissRequest: () -> Unit,
+    preferBelowAnchor: Boolean,
+    modifier: Modifier = Modifier,
+    adaptToSheet: Boolean = true,
+    maxWidth: Dp = 296.dp,
+    title: String = "Popover",
+    backdrop: Backdrop = LocalBlurBackdrop.current,
+    anchorBoundsInWindow: Rect? = null,
+    anchor: @Composable () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     require(maxWidth.value.isFinite() && maxWidth > 0.dp) { "Popover width must be finite and positive." }
     val density = LocalDensity.current
@@ -256,7 +289,10 @@ fun GlasmioPopover(
             val appearance = LocalGlassAppearance.current
             val adaptiveAppearance = remember(appearance) { appearance.copy(adaptiveColorScheme = true) }
             CompositionLocalProvider(LocalGlassAppearance provides adaptiveAppearance) {
-                GlasmioPopoverPopup(visible, onDismissRequest, maxWidth, title, backdrop, content)
+                GlasmioPopoverPopup(
+                    visible, onDismissRequest, preferBelowAnchor, maxWidth, title, backdrop,
+                    anchorBoundsInWindow, content,
+                )
             }
         }
     }
@@ -266,9 +302,11 @@ fun GlasmioPopover(
 private fun GlasmioPopoverPopup(
     visible: Boolean,
     onDismissRequest: () -> Unit,
+    preferBelowAnchor: Boolean,
     maxWidth: Dp,
     title: String,
     backdrop: Backdrop,
+    anchorBoundsInWindow: Rect?,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val appearance = LocalGlassAppearance.current
@@ -278,6 +316,8 @@ private fun GlasmioPopoverPopup(
         tooltip = false,
         onDismissRequest = onDismissRequest,
         usesRegularShadow = usesRegularGlass,
+        preferBelowAnchor = preferBelowAnchor,
+        anchorBoundsInWindow = anchorBoundsInWindow,
     ) { placement, bounds, transform ->
         val material = rememberGlassMaterialContext(inheritLuminance = false)
         val dark = material.isDark
@@ -374,6 +414,8 @@ private fun AnchoredPopup(
     tooltip: Boolean,
     onDismissRequest: (() -> Unit)? = null,
     usesRegularShadow: Boolean = false,
+    preferBelowAnchor: Boolean = false,
+    anchorBoundsInWindow: Rect? = null,
     content: @Composable (AnchoredPlacement?, DpSize, GraphicsLayerScope.() -> Unit) -> Unit,
 ) {
     val visibility = remember { MutableTransitionState(false) }.apply { targetState = visible }
@@ -421,7 +463,7 @@ private fun AnchoredPopup(
     ) { _, _ -> layout(0, 0) {} }
     var placement by remember { mutableStateOf<AnchoredPlacement?>(null) }
     var shadowPadding by remember(baseShadowPx) { mutableStateOf(IntOffset(baseShadowPx, baseShadowPx)) }
-    val provider = remember(view, window, tooltip, left, top, right, bottom, baseShadowPx, pointerPx, separation, pointerInset) {
+    val provider = remember(view, window, tooltip, preferBelowAnchor, anchorBoundsInWindow, left, top, right, bottom, baseShadowPx, pointerPx, separation, pointerInset) {
         object : PopupPositionProvider {
             override fun calculatePosition(
                 anchorBounds: IntRect,
@@ -436,23 +478,31 @@ private fun AnchoredPopup(
                 )
                 val sides = when {
                     tooltip -> TooltipSides
+                    preferBelowAnchor -> PopoverBelowFirstSides
                     layoutDirection == LayoutDirection.Ltr -> PopoverSides
                     else -> RtlPopoverSides
                 }
                 val coordinates = anchorCoordinates?.takeIf { it.isAttached }
+                val anchorInWindow = coordinates?.positionInWindow()?.round()
                 // Compose uses screen coordinates for nested popups and window coordinates otherwise.
-                val origin = if (coordinates != null && anchorBounds.topLeft != coordinates.positionInWindow().round()) {
+                val origin = if (coordinates != null && anchorBounds.topLeft != anchorInWindow) {
                     val screenPosition = coordinates.positionOnScreen()
                     if (screenPosition.isFinite && anchorBounds.topLeft == screenPosition.round()) {
                         val frame = view.context.getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
                         IntOffset(frame.left, frame.top)
                     } else IntOffset.Zero
                 } else IntOffset.Zero
+                val placementAnchor = anchorBoundsInWindow?.let {
+                    IntRect(
+                        it.left.roundToInt(), it.top.roundToInt(),
+                        it.right.roundToInt(), it.bottom.roundToInt(),
+                    ).translate(anchorInWindow?.let { position -> anchorBounds.topLeft - position } ?: IntOffset.Zero)
+                } ?: anchorBounds
                 val viewport = IntRect(left, top, windowSize.width - right, windowSize.height - bottom)
                 val next = placeAnchoredSurface(
-                    anchorBounds,
+                    placementAnchor,
                     viewport.translate(origin),
-                    bodySize, sides, separation, pointerInset, preferMaximumVisibleArea = !tooltip,
+                    bodySize, sides, separation, pointerInset, preferMaximumVisibleArea = !tooltip && !preferBelowAnchor,
                 )
                 placement = next
                 return next.body.topLeft - gutter
