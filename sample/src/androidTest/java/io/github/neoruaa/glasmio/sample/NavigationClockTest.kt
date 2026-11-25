@@ -266,6 +266,73 @@ class NavigationClockTest {
         }
     }
 
+    @Test fun switchingFromDetailToAnotherRetainedTabPopsDetailToTheRight() {
+        val tabs = setOf<Any>("Home", "Library")
+        val stack = mutableStateListOf("Home")
+        val motion = GlasmioNavHeaderMotion("Home") { from, to, pop ->
+            when {
+                from in tabs && to in tabs -> GlasmioNavigationOperation.Tab
+                pop -> GlasmioNavigationOperation.Pop
+                else -> GlasmioNavigationOperation.Push
+            }
+        }
+        rule.setContent {
+            GlasmioTheme(appearance = GlassAppearance(reduceTransparency = true)) {
+                GlasmioNavDisplay(
+                    stack,
+                    motion,
+                    retainedTabKeys = tabs,
+                    onBack = { if (stack.size > 1) stack.removeAt(stack.lastIndex) },
+                    entryProvider = { key ->
+                        NavEntry(key, contentKey = key) {
+                            Box(Modifier.fillMaxSize().background(Color.White).testTag("tab-pop-$key"))
+                        }
+                    },
+                )
+            }
+        }
+
+        val rootBounds = rule.onNodeWithTag("tab-pop-Home").fetchSemanticsNode().boundsInRoot
+        rule.mainClock.autoAdvance = false
+        try {
+            // Push a secondary detail page from Home: [Home] -> [Home, Detail].
+            rule.runOnUiThread { stack.add("Detail") }
+            rule.mainClock.advanceTimeBy(1_200)
+            assertEquals(rootBounds, rule.onNodeWithTag("tab-pop-Detail").fetchSemanticsNode().boundsInRoot)
+
+            // Switch via TopNav to another retained tab: [Home, Detail] -> [Home, Library].
+            rule.runOnUiThread {
+                stack.clear()
+                stack.add("Home")
+                stack.add("Library")
+            }
+            rule.mainClock.advanceTimeBy(96)
+            val detailLeft = rule.onNodeWithTag("tab-pop-Detail").fetchSemanticsNode().boundsInRoot.left
+            val libraryLeft = rule.onNodeWithTag("tab-pop-Library").fetchSemanticsNode().boundsInRoot.left
+            assertTrue(
+                "Detail page must slide out to the right instead of parallaxing left (left=$detailLeft, root=${rootBounds.left})",
+                detailLeft > rootBounds.left + 20f,
+            )
+            assertTrue(
+                "Underlying retained tab must uncover from the left parallax offset (left=$libraryLeft, root=${rootBounds.left})",
+                libraryLeft < rootBounds.left,
+            )
+            rule.runOnUiThread {
+                assertEquals(GlasmioNavigationOperation.Pop, motion.frame.value.operation)
+            }
+
+            rule.mainClock.advanceTimeBy(1_200)
+            rule.onNodeWithTag("tab-pop-Detail").assertDoesNotExist()
+            assertEquals(rootBounds, rule.onNodeWithTag("tab-pop-Library").fetchSemanticsNode().boundsInRoot)
+            rule.runOnUiThread {
+                assertEquals(GlasmioNavigationPhase.Idle, motion.frame.value.phase)
+                assertEquals("Library", motion.committedKey)
+            }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+    }
+
     @Test fun predictiveCancellationAfterPopKeepsTheSamePresentation() {
         val stack = mutableStateListOf("A", "B", "C")
         val motion = GlasmioNavHeaderMotion("C")

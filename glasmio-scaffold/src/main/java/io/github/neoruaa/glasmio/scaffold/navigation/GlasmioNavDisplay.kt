@@ -349,7 +349,7 @@ fun <T : Any> GlasmioNavDisplay(
         }
     }
     if (closingScene == null && isPopRef.previousKeys != currentContentKeys) {
-        isPopRef.isPop = isPop(isPopRef.previousKeys, currentContentKeys)
+        isPopRef.isPop = isPop(isPopRef.previousKeys, currentContentKeys, retainedTabKeys)
         isPopRef.previousKeys = currentContentKeys
     }
     val isPop = isPopRef.isPop
@@ -900,7 +900,18 @@ fun <T : Any> GlasmioNavDisplay(
 
 }
 
-private fun <T : Any> isPop(oldBackStack: List<T>, newBackStack: List<T>): Boolean {
+private fun <T : Any> isPop(
+    oldBackStack: List<T>,
+    newBackStack: List<T>,
+    retainedTabKeys: Set<Any>,
+): Boolean {
+    if (oldBackStack.isEmpty() || newBackStack.isEmpty()) return false
+    // Retained tabs always composite underneath AnimatedContent's pushed detail layers.
+    // Leaving a secondary destination for any retained tab (e.g. [Home, Detail] -> [Home, Library])
+    // must pop the detail page off the top to the right rather than pushing the underlying tab.
+    if (oldBackStack.last() !in retainedTabKeys && newBackStack.last() in retainedTabKeys) {
+        return true
+    }
     // entire stack replaced
     if (oldBackStack.first() != newBackStack.first()) return false
     // navigated
