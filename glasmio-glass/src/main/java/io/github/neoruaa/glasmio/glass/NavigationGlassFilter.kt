@@ -628,7 +628,7 @@ internal val OrdinaryAtlasCompletion = NativeGlassCompletionTopology(
 // Optical draws still use hardware-linear mips; the stored completion uses four manual taps.
 private fun buildRetainedCompletionProgram(samplingFunctions: String): String =
     nativeGlassCompletionFieldFunctions(NativeDefaultFieldShader) + samplingFunctions +
-        NativeAtlasMaterialFunctions + NativeStoredPairBilinear + """
+        NativeAtlasMaterialFunctions + NativeStoredPairHardwareLinear + """
 float4 nativeStoredOrOptical(float2 coordinate, float3 field) {
     if (nativeAtlasLastLevel < 0.0) return nativeStoredPairBilinear(coordinate, nativeAtlasRects[1]);
     return nativeAtlasFiltered(coordinate, field);

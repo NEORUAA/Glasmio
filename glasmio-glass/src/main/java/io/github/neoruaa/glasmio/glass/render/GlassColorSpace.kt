@@ -9,20 +9,22 @@ package io.github.neoruaa.glasmio.glass.render
  */
 const val GlassColorSpaceShaderFunctions = """
 float3 glassLinearToNativeGamma(float3 value) {
-    float3 magnitude = abs(value);
-    float3 encoded = mix(
-        1.055 * pow(max(magnitude, float3(0.0031308)), float3(1.0 / 2.4)) - 0.055,
-        12.92 * magnitude,
-        step(magnitude, float3(0.0031308)));
-    return sign(value) * encoded;
+    half3 v = half3(value);
+    half3 magnitude = abs(v);
+    half3 encoded = mix(
+        half(1.055) * pow(max(magnitude, half3(0.0031308)), half3(0.41666666)) - half(0.055),
+        half(12.92) * magnitude,
+        step(magnitude, half3(0.0031308)));
+    return float3(sign(v) * encoded);
 }
 float3 glassNativeGammaToLinear(float3 value) {
-    float3 magnitude = abs(value);
-    float3 decoded = mix(
-        pow((max(magnitude, float3(0.04045)) + 0.055) / 1.055, float3(2.4)),
-        magnitude / 12.92,
-        step(magnitude, float3(0.04045)));
-    return sign(value) * decoded;
+    half3 v = half3(value);
+    half3 magnitude = abs(v);
+    half3 decoded = mix(
+        pow((max(magnitude, half3(0.04045)) + half(0.055)) * half(0.9478673), half3(2.4)),
+        magnitude * half(0.07739938),
+        step(magnitude, half3(0.04045)));
+    return float3(sign(v) * decoded);
 }
 float3 glassWorkingToNativeGamma(float3 straightWorkingRgb) {
     return glassLinearToNativeGamma(toLinearSrgb(straightWorkingRgb));

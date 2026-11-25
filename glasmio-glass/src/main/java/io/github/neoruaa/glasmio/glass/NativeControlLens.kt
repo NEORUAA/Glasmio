@@ -186,8 +186,10 @@ fun BackdropEffectScope.nativeControlLens(
     val lensSource = scope.cachedResource(sourceKey) {
         if (builtInConsumer) {
             nativeBuiltInControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene, heldTab, knownRestingThumb,
-                sampledTabConsumer, sampledField, uniformRoundedTab)
-        } else nativeControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene)
+                sampledTabConsumer, sampledField, uniformRoundedTab,
+                hardwareLinear = scope.supportsNativeGlassHardwareLinearSampling)
+        } else nativeControlLensProgram(atlas.samplingFunctions, fullyResting, small, tab, precomposedScene,
+            hardwareLinear = scope.supportsNativeGlassHardwareLinearSampling)
     }
     fun configureLens(shader: android.graphics.RuntimeShader, highlight: Boolean, scenePass: Boolean = false) {
         atlas.configure(shader)
@@ -242,11 +244,12 @@ fun BackdropEffectScope.nativeControlLens(
         val sceneShader = obtainRuntimeShader(sceneKey,
             scope.cachedResource("$sceneKey.source") {
                 if (separateSceneOutput) nativeControlScenePlaneProgram(atlas.samplingFunctions, heldTab, style, sampledField,
-                    tab && builtInConsumer, uniformRoundedTab)
+                    tab && builtInConsumer, uniformRoundedTab,
+                    hardwareLinear = scope.supportsNativeGlassHardwareLinearSampling)
                 else GlassSdfShader +
                     atlas.samplingFunctions + NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
                     NativeControlDisplacementFunctions +
-                    (if (heldTab) NativeControlHeldTabSceneFunctions else NativeControlLensSceneFunctions) +
+                    nativeControlSceneFunctions(heldTab, scope.supportsNativeGlassHardwareLinearSampling) +
                     NativeControlSceneAtlasMain
             }).asAndroidRuntimeShader()
         configureLens(sceneShader, highlight = false, scenePass = true)
@@ -279,13 +282,15 @@ internal fun nativeControlScenePlaneProgram(
     sampledField: Boolean = false,
     boundedTab: Boolean = false,
     uniformRoundedTab: Boolean = false,
+    hardwareLinear: Boolean = false,
 ): String {
     val sceneFunctions = if (style == null) {
-        if (heldTab) NativeControlHeldTabSceneFunctions else NativeControlLensSceneFunctions
+        nativeControlSceneFunctions(heldTab, hardwareLinear)
     } else nativeControlStyleSceneFunctions(
         style == NativeControlLensStyle.SwitchThumb || style == NativeControlLensStyle.SliderThumb,
         style == NativeControlLensStyle.TabBarIndicator,
         heldTab,
+        hardwareLinear,
     )
     return nativeControlLensGeometryFunctions(samplingFunctions, sampledField, uniformRoundedTab) +
         NativeGlassRefractionFunctions + NativeGlassEdgeFunctions +
@@ -395,15 +400,17 @@ internal fun nativeControlLensProgram(
     small: Boolean,
     tab: Boolean,
     precomposedScene: Boolean = false,
+    hardwareLinear: Boolean = false,
 ): String {
     val scene = if (fullyResting) {
         // UIKit's unlift endpoint has no background/foreground optical transfer.
         // Make that a program boundary rather than asking the GPU to compile both paths.
-        NativeGlassEdgeFunctions + NativeControlLensUniforms + NativeControlRestingFunctions +
+        NativeGlassEdgeFunctions + NativeControlLensUniforms + nativeControlRestingFunctions(hardwareLinear) +
             nativeControlRestingMain(tab)
     } else {
         NativeGlassRefractionFunctions + NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
-            NativeVibrantColorMatrixFunctions + NativeControlDisplacementFunctions + NativeControlLensSceneFunctions +
+            NativeVibrantColorMatrixFunctions + NativeControlDisplacementFunctions +
+            nativeControlSceneFunctions(heldTab = false, hardwareLinear = hardwareLinear) +
             if (small) NativeControlSmallForegroundFunctions + NativeControlSmallLensMain
             else (if (precomposedScene) NativeControlPrecomposedSource else NativeControlAnalyticSource) +
                 NativeControlForegroundFunctions + NativeControlLensMain
@@ -423,13 +430,14 @@ private fun nativeBuiltInControlLensProgram(
     sampledSceneConsumer: Boolean = false,
     sampledField: Boolean = false,
     uniformRoundedTab: Boolean = false,
+    hardwareLinear: Boolean = false,
 ): String {
     if (knownRestingThumb) {
         // A resting switch or slider without lifted content draws only its body and shadow.
         return GlassSdfShader + samplingFunctions + NativeGlassEdgeFunctions + NativeControlLensUniforms +
-            NativeControlRestingBody + NativeControlRestingShadow + nativeControlRestingMain(tab = false)
+            nativeControlRestingBody(hardwareLinear) + NativeControlRestingShadow + nativeControlRestingMain(tab = false)
     }
-    if (fullyResting) return nativeControlLensProgram(samplingFunctions, true, small, tab, precomposedScene)
+    if (fullyResting) return nativeControlLensProgram(samplingFunctions, true, small, tab, precomposedScene, hardwareLinear)
     if (sampledSceneConsumer) {
         return nativeControlLensGeometryFunctions(samplingFunctions, sampledField, uniformRoundedTab) + NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
             NativeVibrantColorMatrixFunctions + NativeControlSampledSceneFunctions + NativeControlPrecomposedSource +
@@ -437,7 +445,7 @@ private fun nativeBuiltInControlLensProgram(
     }
     val scene = NativeGlassRefractionFunctions + NativeGlassEdgeFunctions + NativeCasdfHighlightMaskFunctions +
         NativeVibrantColorMatrixFunctions + NativeControlDisplacementFunctions +
-        nativeControlStyleSceneFunctions(small, tab, heldTab) +
+        nativeControlStyleSceneFunctions(small, tab, heldTab, hardwareLinear) +
         if (small) NativeControlSmallForegroundFunctions + NativeControlBuiltInSmallLensMain
         else (if (precomposedScene) NativeControlPrecomposedSource else NativeControlAnalyticSource) +
             NativeControlForegroundFunctions + NativeControlBuiltInLensMain
@@ -732,6 +740,10 @@ float nativeControlCoverage(float3 field) {
 }
 """
 
+private const val NativeControlHardwareLinearCorner = """    return nativeAtlasDecode(float4(content.eval(rect.xy + pixel + .5)));
+}
+"""
+
 private const val NativeControlLensScenePrefix = NativeControlCompositionFunctions + """
 float4 nativeControlNatural(float2 p, bool blurred) {
     if (!blurred || lensHasBlur < .5) return nativeAtlasBilinear(lensOrigin + p, 0);
@@ -742,6 +754,24 @@ float4 nativeControlNatural(float2 p, bool blurred) {
     float2 index = floor(pixel);
     float2 fraction = pixel - index;
 """ + NativeControlBilinearCorners + """
+float4 nativeControlMap(float3 field, float height) {
+    return nativeControlDisplacementMapForRaster(float4(field, 1.0), max(height, .000001), 1.0,
+        0.0, 0.0, float2(1.0, 0.0), lensScale);
+}
+float4 nativeControlPortal(float2 p, float3 field) {
+    if (lensHasContent < .5) return float4(0.0);
+    float4 map = nativeControlMap(field, 11.2 * lensDensity);
+    float2 q = p + map.rg * (-17.5 * lensDensity * lensMaterialProgress);
+    return nativeAtlasBilinear(lensOrigin + q, 1) * map.b;
+}
+"""
+
+private const val NativeControlLensScenePrefixLinear = NativeControlCompositionFunctions + """
+float4 nativeControlNatural(float2 p, bool blurred) {
+    if (!blurred || lensHasBlur < .5) return nativeAtlasBilinear(lensOrigin + p, 0);
+    float4 rect = nativeAtlasRect(2);
+    float2 pixel = clamp((lensOrigin + p) * lensBlurScale - .5, float2(0.0), rect.zw - 1.0);
+""" + NativeControlHardwareLinearCorner + """
 float4 nativeControlMap(float3 field, float height) {
     return nativeControlDisplacementMapForRaster(float4(field, 1.0), max(height, .000001), 1.0,
         0.0, 0.0, float2(1.0, 0.0), lensScale);
@@ -896,8 +926,24 @@ private const val NativeControlLensSceneFunctions =
     NativeControlLensScenePrefix + NativeControlBelowFunctions + NativeControlLensSceneSuffix
 private const val NativeControlHeldTabSceneFunctions =
     NativeControlLensScenePrefix + NativeControlHeldTabBelowFunctions + NativeControlLensSceneSuffix
+private const val NativeControlLensSceneFunctionsLinear =
+    NativeControlLensScenePrefixLinear + NativeControlBelowFunctions + NativeControlLensSceneSuffix
+private const val NativeControlHeldTabSceneFunctionsLinear =
+    NativeControlLensScenePrefixLinear + NativeControlHeldTabBelowFunctions + NativeControlLensSceneSuffix
 
-private fun nativeControlStyleSceneFunctions(small: Boolean, tab: Boolean, heldTab: Boolean): String {
+private fun nativeControlSceneFunctions(heldTab: Boolean, hardwareLinear: Boolean): String = when {
+    heldTab && hardwareLinear -> NativeControlHeldTabSceneFunctionsLinear
+    heldTab -> NativeControlHeldTabSceneFunctions
+    hardwareLinear -> NativeControlLensSceneFunctionsLinear
+    else -> NativeControlLensSceneFunctions
+}
+
+private fun nativeControlStyleSceneFunctions(
+    small: Boolean,
+    tab: Boolean,
+    heldTab: Boolean,
+    hardwareLinear: Boolean = false,
+): String {
     val below = if (tab && !small) {
         // Active Tab states share one program. The held endpoint retains its exact
         // zero-body transfer without sampling the blur plane omitted by its producer.
@@ -905,7 +951,8 @@ private fun nativeControlStyleSceneFunctions(small: Boolean, tab: Boolean, heldT
             "    if (lensRest == 0.0) return nativeControlOver(float4(0.0), natural);\n" +
                 "    float coverage = nativeControlCoverage(field);")
     } else if (heldTab) NativeControlHeldTabBelowFunctions else NativeControlBelowFunctions
-    return NativeControlLensScenePrefix + (below + NativeControlLensSceneSuffix)
+    val prefix = if (hardwareLinear) NativeControlLensScenePrefixLinear else NativeControlLensScenePrefix
+    return prefix + (below + NativeControlLensSceneSuffix)
         .replace("lensSmall", if (small) "1.0" else "0.0")
         .replace("lensTab", if (tab) "1.0" else "0.0")
 }
@@ -1102,6 +1149,27 @@ float4 nativeControlResting(float2 p, bool tab) {
     float4 result = float4(body.rgb * body.a, body.a) * coverage;
 """
 
+private const val NativeControlRestingBodyLinear = """
+float4 nativeControlOver(float4 source, float4 destination) {
+    return source + destination * (1.0 - source.a);
+}
+float4 nativeControlRestingBlur(float2 p) {
+    if (lensHasBlur < .5) return nativeAtlasBilinear(lensOrigin + p, 0);
+    float4 rect = nativeAtlasRect(2);
+    float2 pixel = clamp((lensOrigin + p) * lensBlurScale - .5, float2(0.0), rect.zw - 1.0);
+""" + NativeControlHardwareLinearCorner + """
+float4 nativeControlResting(float2 p, bool tab) {
+    float3 field = glassField(p, 0.0);
+    float coverage = nativeGlassShapeCoverage(float3(field.x / lensScale, field.yz), 1.0);
+    float4 body = lensRestColor;
+    if (tab) {
+        float4 sampled = nativeControlRestingBlur(p);
+        float4 straight = float4(sampled.rgb / max(sampled.a, .000001), 1.0);
+        body = float4(dot(lensIdleRow0, straight), dot(lensIdleRow1, straight), dot(lensIdleRow2, straight), 1.0);
+    }
+    float4 result = float4(body.rgb * body.a, body.a) * coverage;
+"""
+
 private const val NativeControlRestingSelection = """    if (lensHasContent > .5 && coverage > 0.0) {
         float4 selected = nativeAtlasBilinear(lensOrigin + p, 1) * coverage;
         result = nativeControlOver(selected, result);
@@ -1119,6 +1187,14 @@ private const val NativeControlRestingShadow = """    if (lensSliderShadow > 0.0
 
 private const val NativeControlRestingFunctions =
     NativeControlRestingBody + NativeControlRestingSelection + NativeControlRestingShadow
+private const val NativeControlRestingFunctionsLinear =
+    NativeControlRestingBodyLinear + NativeControlRestingSelection + NativeControlRestingShadow
+
+private fun nativeControlRestingBody(hardwareLinear: Boolean): String =
+    if (hardwareLinear) NativeControlRestingBodyLinear else NativeControlRestingBody
+
+private fun nativeControlRestingFunctions(hardwareLinear: Boolean): String =
+    if (hardwareLinear) NativeControlRestingFunctionsLinear else NativeControlRestingFunctions
 
 private fun nativeControlRestingMain(tab: Boolean): String = """
 uniform float2 lensOutputOrigin;

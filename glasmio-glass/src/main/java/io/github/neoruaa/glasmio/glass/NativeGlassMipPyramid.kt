@@ -1159,36 +1159,28 @@ half4 nativeMipKernel(float2 center, float2 inner, float2 outer) {
 
 /** Loop-structured 13-tap half kernel keeping a single managed decode site for fast HDR cold compiles. */
 private const val NativeMipHalfKernelManagedLoopBody = """
-    half4 axisInner = half4(0.0);
-    half4 diagonal = half4(0.0);
-    half4 axisOuter = half4(0.0);
     half4 value = half4(0.0);
     for (int tap = 0; tap < 13; ++tap) {
         float2 delta = float2(0.0);
-        if (tap == 0) delta = float2(0.0, -inner.y);
-        else if (tap == 1) delta = float2(-inner.x, 0.0);
-        else if (tap == 2) delta = float2(0.0, inner.y);
-        else if (tap == 3) delta = float2(inner.x, 0.0);
-        else if (tap == 5) delta = -inner;
-        else if (tap == 6) delta = float2(-inner.x, inner.y);
-        else if (tap == 7) delta = float2(inner.x, -inner.y);
-        else if (tap == 8) delta = inner;
-        else if (tap == 9) delta = float2(-outer.x, 0.0);
-        else if (tap == 10) delta = float2(0.0, -outer.y);
-        else if (tap == 11) delta = float2(0.0, outer.y);
-        else if (tap == 12) delta = float2(outer.x, 0.0);
-        half4 sampleTap = half4(nativeMipBilinear(center + delta));
+        half w = half(nativeMipKernelWeights.x);
         if (tap < 4) {
-            axisInner = tap == 0 ? sampleTap : axisInner + sampleTap;
-        } else if (tap == 4) {
-            value = axisInner * half(nativeMipKernelWeights.y) + sampleTap * half(nativeMipKernelWeights.x);
-        } else if (tap < 9) {
-            diagonal = tap == 5 ? sampleTap : diagonal + sampleTap;
-            if (tap == 8) value = value + diagonal * half(nativeMipKernelWeights.z);
-        } else {
-            axisOuter = tap == 9 ? sampleTap : axisOuter + sampleTap;
-            if (tap == 12) value = value + axisOuter * half(nativeMipKernelWeights.w);
+            delta = tap == 0 ? float2(0.0, -inner.y)
+                : (tap == 1 ? float2(-inner.x, 0.0)
+                : (tap == 2 ? float2(0.0, inner.y) : float2(inner.x, 0.0)));
+            w = half(nativeMipKernelWeights.y);
+        } else if (tap > 4) {
+            if (tap < 9) {
+                delta = float2((tap == 5 || tap == 6) ? -inner.x : inner.x,
+                    (tap == 5 || tap == 7) ? -inner.y : inner.y);
+                w = half(nativeMipKernelWeights.z);
+            } else {
+                delta = tap == 9 ? float2(-outer.x, 0.0)
+                    : (tap == 10 ? float2(0.0, -outer.y)
+                    : (tap == 11 ? float2(0.0, outer.y) : float2(outer.x, 0.0)));
+                w = half(nativeMipKernelWeights.w);
+            }
         }
+        value += half4(nativeMipBilinear(center + delta)) * w;
     }
 """
 
@@ -1453,6 +1445,12 @@ private const val NativeAtlasManualBilinear = NativeAtlasBilinearCoordinates + N
 
 internal const val NativeStoredPairBilinear = """float4 nativeStoredPairBilinear(float2 coordinate, float4 rect) {
 """ + NativeAtlasManualCoordinates + NativeAtlasManualCorners
+
+internal const val NativeStoredPairHardwareLinear = """float4 nativeStoredPairBilinear(float2 coordinate, float4 rect) {
+    float2 pixel = clamp(coordinate / nativeAtlasBaseSize * rect.zw - .5, float2(0.0), rect.zw - 1.0);
+    return nativeAtlasDecode(float4(content.eval(rect.xy + pixel + .5)));
+}
+"""
 
 internal val nativeRegularHardwareSdrSampling: String get() = NativeAtlasRegularSamplingFunctions[1][0].value
 internal val nativeRegularHardwareManagedSampling: String get() = NativeAtlasRegularSamplingFunctions[1][1].value
