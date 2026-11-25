@@ -234,10 +234,9 @@ internal class NativeGlassMipAtlas(
         else -> 32
     }
     internal val hasRegularMipLayout: Boolean get() = regularMipRow != null
-    private val hardwareLinearSampling = allowHardwareLinearSampling && (nativeGammaStorage || !colorManaged)
-    // Share one color-managed texel decode site in a 4-corner loop across all managed atlases,
-    // slashing SPIR-V size and Qualcomm Adreno cold pipeline compilation latency in HDR.
-    private val sharedControlDecode = colorManaged && !nativeGammaStorage
+    private val hardwareLinearSampling = allowHardwareLinearSampling
+    // Share one color-managed texel decode site in a 4-corner loop whenever manual bilinear is used.
+    private val sharedControlDecode = !hardwareLinearSampling && colorManaged && !nativeGammaStorage
     val samplingLayoutKey: String = (if (regularMipRow == null) "packed$lookupCapacity" else "mip") +
         ".linear=$hardwareLinearSampling" + if (sharedControlDecode) ".control" else ""
     val samplingFunctions: String = (if (regularMipRow == null)
@@ -498,7 +497,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
     ) {
-        check(!atlas.colorManaged && atlas.producerStages.size == 2)
+        check(atlas.producerStages.size == 2)
         val plane = requireNotNull(atlas.controlBlurPlane)
         val stages = configureLayers(atlas.composeProducerStages)
         val raw = controlSource ?: context.createGraphicsLayer().also { controlSource = it }
@@ -945,10 +944,9 @@ internal class NativeGlassMipPyramid(private val shaders: RuntimeShaderCache) {
             NativeGlassMipProducer(effect, stages)
         }
         val textureStages = ArrayList<RenderEffect>()
-        // The owned texture input uses HWUI's linear sampler. Interpolate only stored
-        // channels with an identity decode; transparent-border kernels retain four taps.
-        val textureHardwareLinear = allowHardwareLinearSampling &&
-            (storeNativeGamma || !colorManaged) && !kernel.clampToZero
+        // Use HWUI's hardware bilinear sampler in linear working space, then decode once per tap
+        // instead of 4x manual texel fetches + 4x color-space decodes; transparent-border kernels keep 4 taps.
+        val textureHardwareLinear = allowHardwareLinearSampling && !kernel.clampToZero
         val textureMode = "${kernel.outputGridOffsets}.${kernel.halfArithmetic}.${kernel.flushSmallRgb}.${kernel.clampToZero}"
         val textureProgramKey = "$colorManaged.$storeNativeGamma.$textureMode.linear=$textureHardwareLinear"
         for (index in 1 until rects.size) {
@@ -1463,7 +1461,7 @@ private const val NativeAtlasControlBilinear = NativeAtlasBilinearCoordinates + 
 private const val NativeAtlasHardwareLinearBilinear = """float4 nativeAtlasBilinear(float2 coordinate, int level) {
     float4 rect = nativeAtlasRect(level);
     float2 pixel = clamp(coordinate / nativeAtlasBaseSize * rect.zw - .5, float2(0.0), rect.zw - 1.0);
-    return float4(content.eval(rect.xy + pixel + .5));
+    return nativeAtlasDecode(float4(content.eval(rect.xy + pixel + .5)));
 }
 """
 
@@ -1501,7 +1499,7 @@ private const val NativeAtlasLodFromRadius = """float nativeGlassLod(float radiu
 private const val NativeAtlasSamplingBody =
     NativeAtlasTexelFunctions + NativeAtlasManualBilinear + NativeAtlasManualLodFunctions + NativeAtlasLodFromRadius
 private const val NativeAtlasHardwareLinearSamplingBody =
-    NativeAtlasTexelFunctions + NativeAtlasHardwareLinearBilinear + NativeAtlasHardwareLinearLodFunctions + NativeAtlasLodFromRadius
+    NativeAtlasTexelFunctions + NativeAtlasHardwareLinearBilinear + NativeAtlasManualLodFunctions + NativeAtlasLodFromRadius
 
 private const val NativeAtlasSamplingFunctions =
     NativeAtlasSamplingUniforms + NativeAtlasRectLookup + NativeAtlasSamplingBody

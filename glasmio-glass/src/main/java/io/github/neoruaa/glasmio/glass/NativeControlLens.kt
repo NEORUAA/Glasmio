@@ -96,14 +96,14 @@ fun BackdropEffectScope.nativeControlLens(
         ceil(base.height * blurScale).toInt().coerceAtLeast(1))
     val managed = scope.colorManagedNativeGlass
     val stagedBlur = producesBlur && (managed || scope.supportsNativeControlLensPlaneStages)
-    val fusedExtract = stagedBlur && tab && !small && !managed &&
+    val fusedExtract = stagedBlur && tab && !small &&
         scope.nativeGlassHardwareRendering && scope.supportsNativeControlLensConsumerSharing &&
         scope.supportsNativeControlLensPlaneStages && scope.supportsNativeGlassHardwareLinearSampling
     val producerStages = mutableListOf<RenderEffect>()
     val producer = if (stagedBlur) {
         val colorFunctions = if (managed) NativeControlProducerManagedColor else NativeControlProducerIdentityColor
         if (!fusedExtract) {
-            val linearExtract = !managed && scope.supportsNativeGlassHardwareLinearSampling
+            val linearExtract = scope.supportsNativeGlassHardwareLinearSampling
             val extractKey = "Glasmio.ControlLens.extractAtlas.$managed.warp=$small.linear=$linearExtract"
             val atlasExtract = obtainRuntimeShader(extractKey,
                 scope.cachedResource("$extractKey.source") {
