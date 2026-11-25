@@ -147,6 +147,35 @@ fun GlasmioGroupedList(
     }
 }
 
+/** Renders a grouped-row label with native sheet text vibrancy when hosted inside a sheet. */
+@Composable
+fun GlasmioListRowText(
+    text: String,
+    modifier: Modifier = Modifier,
+    secondary: Boolean = false,
+    color: Color = Color.Unspecified,
+    textAlign: TextAlign? = null,
+    maxLines: Int = 1,
+) {
+    val colors = LocalGlassColors.current
+    val resolvedColor = when {
+        color != Color.Unspecified -> color
+        secondary -> colors.secondaryContent
+        else -> colors.content
+    }
+    IosSheetText(
+        text = text,
+        modifier = modifier,
+        style = if (secondary) IosTypography.subheadline else IosTypography.body,
+        color = resolvedColor,
+        role = if (secondary) IosSheetTextRole.Secondary else IosSheetTextRole.Primary,
+        useMaterial = color == Color.Unspecified,
+        textAlign = textAlign,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
 /** Apple's 52dp regular row and 68dp title/subtitle row. Accessories remain caller-owned slots. */
 @Composable
 fun GlasmioListRow(
