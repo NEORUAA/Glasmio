@@ -64,7 +64,7 @@ internal fun BackdropEffectScopeImpl.nativeControlLensFieldPlane(
     storageSize: IntSize,
 ): NativeControlLensFieldPlane? {
     if (shape !is Capsule && shape !is ContinuousRoundedRectangle) return null
-    if (!nativeGlassHardwareRendering || colorManagedNativeGlass || samplingScale != 1f) return null
+    if (!nativeGlassHardwareRendering || samplingScale != 1f) return null
     if (!surfaceSize.width.isFinite() || !surfaceSize.height.isFinite() ||
         surfaceSize.width <= 0f || surfaceSize.height <= 0f ||
         !sourceDensity.isFinite() || sourceDensity <= 0f ||

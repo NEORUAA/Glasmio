@@ -435,18 +435,20 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
     }
     val requestedTopology = completion?.programTopology()
     // A morph can bind its own size and radii to the same default field program.
-    val shareOptics = Build.VERSION.SDK_INT >= 36 && functions == NativeDefaultFieldShader && !atlas.colorManaged &&
+    val shareOptics = Build.VERSION.SDK_INT >= 36 && functions == NativeDefaultFieldShader &&
+        !atlas.nativeGammaStorage &&
         storage.supportsNativeGlassHardwareLinearSampling &&
         (if (requestedTopology == null) storage.supportsRetainedOpticalStage
          else requestedTopology == OrdinaryAtlasCompletion && (storage.nativeGlassHardwareRendering ||
-             (atlas.hasRegularMipLayout && !atlas.nativeGammaStorage)))
+             atlas.hasRegularMipLayout))
     val completionTopology = if (shareOptics) OrdinaryAtlasCompletion else requestedTopology
     // Keep the full field source in the key so hash collisions retain source validation.
     val sources = storage.cachedResource("Glasmio.NativeAtlas.material.sources") {
         mutableMapOf<NativeAtlasMaterialSourceKey, String>()
     }
-    val program = if (shareOptics && atlas.hasRegularMipLayout) NativeRetainedCompletionProgram
-    else sources.getOrPut(NativeAtlasMaterialSourceKey(
+    val program = if (shareOptics && atlas.hasRegularMipLayout) {
+        if (atlas.colorManaged) NativeRetainedCompletionProgramManaged else NativeRetainedCompletionProgram
+    } else sources.getOrPut(NativeAtlasMaterialSourceKey(
         functions, atlas.colorManaged, atlas.nativeGammaStorage, completionTopology, atlas.samplingLayoutKey, shareOptics,
     )) {
         (if (completionTopology != null) nativeGlassCompletionFieldFunctions(functions) else functions) +
@@ -624,8 +626,8 @@ internal val OrdinaryAtlasCompletion = NativeGlassCompletionTopology(
 
 // A negative last level identifies the retained pair. Each member has a full base grid.
 // Optical draws still use hardware-linear mips; the stored completion uses four manual taps.
-internal val NativeRetainedCompletionProgram: String by lazy {
-    nativeGlassCompletionFieldFunctions(NativeDefaultFieldShader) + nativeRegularHardwareSdrSampling +
+private fun buildRetainedCompletionProgram(samplingFunctions: String): String =
+    nativeGlassCompletionFieldFunctions(NativeDefaultFieldShader) + samplingFunctions +
         NativeAtlasMaterialFunctions + NativeStoredPairBilinear + """
 float4 nativeStoredOrOptical(float2 coordinate, float3 field) {
     if (nativeAtlasLastLevel < 0.0) return nativeStoredPairBilinear(coordinate, nativeAtlasRects[1]);
@@ -636,6 +638,13 @@ float4 nativeStoredOrOriginal(float2 coordinate) {
     return nativeAtlasBilinear(coordinate, 0);
 }
 """ + nativeGlassCompletionShader(OrdinaryAtlasCompletion, NativeAtlasOpticalStage, retainedPair = true)
+
+internal val NativeRetainedCompletionProgram: String by lazy {
+    buildRetainedCompletionProgram(nativeRegularHardwareSdrSampling)
+}
+
+internal val NativeRetainedCompletionProgramManaged: String by lazy {
+    buildRetainedCompletionProgram(nativeRegularHardwareManagedSampling)
 }
 
 private const val NativeAtlasMaterialOutput = """    if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= nativeAtlasBaseSize.x

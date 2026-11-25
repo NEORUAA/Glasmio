@@ -164,7 +164,7 @@ fun BackdropEffectScope.nativeControlLens(
     val corners = glassCornerRadii(shape, size, layoutDirection, this)
     val fieldPlane = if (tab && !fullyResting && !small && separateSceneOutput &&
         scope.supportsNativeControlLensConsumerSharing && scope.supportsNativeGlassHardwareLinearSampling &&
-        scope.nativeGlassHardwareRendering && !managed && scope.samplingScale == 1f) {
+        scope.nativeGlassHardwareRendering && scope.samplingScale == 1f) {
         scope.nativeControlLensFieldPlane(shape, size, corners, density, padding, opticalProgress,
             base, sceneTop, requireNotNull(rects.getOrNull(3)), storageSize)
     } else null

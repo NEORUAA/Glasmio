@@ -130,7 +130,7 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
         IntRect(0, 0, base.width, base.height), opticalRect),
         producer, storage.colorManagedNativeGlass)
     val retainedPair = Build.VERSION.SDK_INT >= 36 && storage.supportsRetainedOpticalStage &&
-        storage.supportsNativeGlassHardwareLinearSampling && !atlas.colorManaged && filteredIsNativeRaw &&
+        storage.supportsNativeGlassHardwareLinearSampling && !atlas.nativeGammaStorage && filteredIsNativeRaw &&
         field == null && topology == OrdinaryAtlasCompletion
     val functions = field?.shaderFunctions ?: NativeDefaultFieldShader
     val sources = storage.cachedResource("Glasmio.NativeControl.complete.sources") {
@@ -139,7 +139,9 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
                 size > 8
         }
     }
-    val source = if (retainedPair) NativeRetainedCompletionProgram else sources.getOrPut(
+    val source = if (retainedPair) {
+        if (atlas.colorManaged) NativeRetainedCompletionProgramManaged else NativeRetainedCompletionProgram
+    } else sources.getOrPut(
         NativeControlCompletionSourceKey(functions, atlas.colorManaged, filteredIsNativeRaw, topology,
         samplingLayoutKey = atlas.samplingLayoutKey)) {
         nativeGlassCompletionFieldFunctions(functions) +

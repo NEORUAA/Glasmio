@@ -1455,6 +1455,7 @@ internal const val NativeStoredPairBilinear = """float4 nativeStoredPairBilinear
 """ + NativeAtlasManualCoordinates + NativeAtlasManualCorners
 
 internal val nativeRegularHardwareSdrSampling: String get() = NativeAtlasRegularSamplingFunctions[1][0].value
+internal val nativeRegularHardwareManagedSampling: String get() = NativeAtlasRegularSamplingFunctions[1][1].value
 
 private const val NativeAtlasControlBilinear = NativeAtlasBilinearCoordinates + NativeControlBilinearCorners
 

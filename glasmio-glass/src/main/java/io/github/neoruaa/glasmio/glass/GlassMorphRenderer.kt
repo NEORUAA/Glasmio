@@ -548,7 +548,7 @@ class GlassMorphRenderer(
                 // The plain SDR optical pass reads only its own mip rectangles, also when its
                 // private backing extends past the logical atlas. Keep subsequent draw clips.
                 val opticalInput = if (Build.VERSION.SDK_INT >= 36 && filterField == null &&
-                    !customOptics && !nativeFilterScope.colorManagedNativeGlass && mipAtlas != null &&
+                    !customOptics && mipAtlas != null &&
                     completeNativeMaterial && drawContext.canvas.nativeCanvas.isHardwareAccelerated)
                     atlasSize.withFullHardwareBacking() else atlasSize
                 refracted.record(density = this@GlassMorphRenderer.density,
