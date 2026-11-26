@@ -1387,6 +1387,20 @@ internal data class ToolbarActionShape(
 
     internal fun refractionContour(): NavigationContactContour = opticalContour
     internal fun refractionField(): NavigationContactField = opticalField
+    internal fun isSingleMergedCapsule(size: Size): Boolean {
+        if (nativeSmoothness <= 0f || runs.size != 1) return false
+        val raw = runs.single()
+        if (raw.isEmpty() || raw.any { it == null }) return false
+        if (raw.size > 1 && separation > 0f) return false
+        val actions = raw.filterNotNull()
+        val left = actions.minOf { it.bounds.left }
+        val top = actions.minOf { it.bounds.top }
+        val right = actions.maxOf { it.bounds.right }
+        val bottom = actions.maxOf { it.bounds.bottom }
+        return abs(left) <= 0.01f && abs(top) <= 0.01f &&
+            abs(right - size.width) <= 0.51f && abs(bottom - size.height) <= 0.51f
+    }
+
     internal val nativeUnion: NavigationNativeUnion? by lazy(LazyThreadSafetyMode.NONE) {
         if (nativeSmoothness <= 0f || runs.size != 1 || runs.single().any { it == null }) null
         else {
@@ -1395,7 +1409,9 @@ internal data class ToolbarActionShape(
                 actions.maxOf { it.bounds.right }, actions.maxOf { it.bounds.bottom })
             // Android keeps action hit slots stable. Animate each backing rectangle
             // from the shared platter to its own slot; UIKit owns the spring and union.
-            val capsules = actions.map { action ->
+            val capsules = if (separation <= 0f) {
+                listOf(LiquidContactCapsule(merged.size, merged))
+            } else actions.map { action ->
                 val target = action.bounds
                 val rect = Rect(
                     merged.left + (target.left - merged.left) * separation,

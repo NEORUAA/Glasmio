@@ -122,12 +122,15 @@ uniform float compoundCount;
 uniform float compoundSmoothness;
 float3 navigationGlassShapeField(float2 point) {
     if (compoundCount < 0.5) return float3(100000.0, 0.0, -1.0);
-    float4 first = compoundElements[0];
-    float3 a = nativeGlassRoundedField(point - first.xy, first.zw, compoundRadii[0], 0.0);
-    for (int i = 1; i < 16; ++i) {
-        if (float(i) < compoundCount) {
-            float4 element = compoundElements[i];
-            float3 b = nativeGlassRoundedField(point - element.xy, element.zw, compoundRadii[i], 0.0);
+    float3 a = float3(100000.0, 0.0, -1.0);
+    // Single SDF call site with dynamic early exit keeps the driver from unrolling 16 supercircle copies.
+    for (int i = 0; i < 16; ++i) {
+        if (float(i) >= compoundCount) break;
+        float4 element = compoundElements[i];
+        float3 b = nativeGlassRoundedField(point - element.xy, element.zw, compoundRadii[i], 0.0);
+        if (i == 0) {
+            a = b;
+        } else {
             float radius = compoundSmoothness * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
             float h = radius <= 0.000001 ? (a.x < b.x ? 1.0 : 0.0)
                 : clamp(0.5 + 0.5 * (b.x - a.x) / radius, 0.0, 1.0);

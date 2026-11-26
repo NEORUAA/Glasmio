@@ -834,9 +834,12 @@ internal fun Modifier.navigationGlassBackgroundResolved(
                     else ceil(.53333333f * density + 2f)
                 } ?: 0f
                 val effectSamplingScale = storage?.samplingScale ?: 1f
+                val unscaledSize = storage?.fullSize?.takeIf { it.width.isFinite() && it.height.isFinite() }
+                    ?: Size(size.width / effectSamplingScale, size.height / effectSamplingScale)
                 val nativeField = if (isRuntimeShaderSupported() && (nativeOptics || completion != null)) when (surfaceShape) {
                     is LiquidContactShape -> navigationContainerGlassField(surfaceShape, opticalCenter?.invoke(), completionBand, samplingScale = effectSamplingScale)
-                    is ToolbarActionShape -> navigationToolbarGlassField(surfaceShape, completionBand, samplingScale = effectSamplingScale)
+                    is ToolbarActionShape -> if (surfaceShape.isSingleMergedCapsule(unscaledSize)) null
+                        else navigationToolbarGlassField(surfaceShape, completionBand, samplingScale = effectSamplingScale)
                     is NavigationGlassUnionShape -> surfaceShape.nativeField(samplingScale = effectSamplingScale)
                     is NavigationGlassOutlineShape -> surfaceShape.nativeField(size, layoutDirection, this, completionBand)
                     else -> null

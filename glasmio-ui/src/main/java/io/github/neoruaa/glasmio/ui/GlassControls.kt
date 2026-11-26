@@ -634,6 +634,7 @@ fun <T> GlasmioSegmentedControl(
                 }
             }
         }
+        val isLifted by remember(animation) { derivedStateOf { animation.pressProgress > 0.0001f } }
         val indicatorGlassModifier = remember(indicatorBackdrop, tabsBackdrop, animation, appearance, isLight, indicatorColor) {
             if (!appearance.usesRefraction) Modifier else Modifier.drawPlainBackdrop(
                 backdrop = indicatorBackdrop,
@@ -655,29 +656,43 @@ fun <T> GlasmioSegmentedControl(
             )
         }
 
-        // 1. Record the actual track independently from both label planes.
+        // 1. Record the actual track independently from both label planes while lifted.
         Box(
             Modifier.fillMaxSize()
-                .then(if (appearance.usesRefraction) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
+                .then(if (appearance.usesRefraction && isLifted) Modifier.layerBackdrop(trackBackdrop, reuseContent = true) else Modifier)
                 .clip(Capsule())
                 .background(trackColor),
         )
+        // Resting indicator shares the exact solid capsule behind Layer 1 labels without
+        // capturing the page backdrop or compiling the control-lens shader until lifted.
+        if (selectedIndex >= 0 && (!appearance.usesRefraction || !isLifted)) {
+            Box(
+                Modifier
+                    .align(AbsoluteAlignment.TopLeft)
+                    .graphicsLayer {
+                        val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
+                        translationX = trackPaddingPx + visualIndex * tabWidthPx
+                        translationY = trackPaddingPx
+                        val velocity = animation.velocity / 10f
+                        scaleX = 1f / (1f - (velocity * .75f).fastCoerceIn(-.18f, .18f))
+                        scaleY = 1f - (velocity * .25f).fastCoerceIn(-.14f, .14f)
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin.Center
+                    }
+                    .height(indicatorHeight)
+                    .layout { measurable, constraints ->
+                        val width = indicatorWidthPx.fastRoundToInt()
+                        val placeable = measurable.measure(
+                            constraints.copy(minWidth = width, maxWidth = width),
+                        )
+                        layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                    }
+                    .background(indicatorColor, Capsule()),
+            )
+        }
         Row(
             Modifier
                 .fillMaxSize()
                 .clip(Capsule())
-                .drawBehind {
-                    if (!appearance.usesRefraction && selectedIndex >= 0) {
-                        val visualIndex = if (isLtr) animation.value else items.lastIndex - animation.value
-                        val pillHeight = indicatorHeight.toPx()
-                        drawRoundRect(
-                            color = indicatorColor,
-                            topLeft = Offset(trackPaddingPx + visualIndex * tabWidthPx, trackPaddingPx),
-                            size = Size(indicatorWidthPx, pillHeight),
-                            cornerRadius = CornerRadius(pillHeight / 2f),
-                        )
-                    }
-                }
                 .padding(vertical = 2.dp),
         ) {
             SegmentedTabContent(
@@ -689,8 +704,8 @@ fun <T> GlasmioSegmentedControl(
             )
         }
 
-        // 2. Keep the original labels in a separate, unfiltered portal recording.
-        if (appearance.usesRefraction) Row(
+        // 2. Keep the original labels in a separate, unfiltered portal recording only while lifted.
+        if (appearance.usesRefraction && isLifted) Row(
             Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth()
@@ -741,7 +756,7 @@ fun <T> GlasmioSegmentedControl(
                             if (appearance.usesRefraction) animation.pressProgress else 0f
                         },
                     )
-                    .then(indicatorGlassModifier),
+                    .then(if (appearance.usesRefraction && isLifted) indicatorGlassModifier else Modifier),
             )
         }
     }

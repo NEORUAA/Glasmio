@@ -248,7 +248,8 @@ class NavigationDropShadowRenderer(
         if (nativePaint != null && isRuntimeShaderSupported()) {
             val field = fieldOverride ?: when (shape) {
                 is LiquidContactShape -> navigationContainerGlassField(shape, minimumBand = padding)
-                is ToolbarActionShape -> navigationToolbarGlassField(shape, minimumBand = padding)
+                is ToolbarActionShape -> if (shape.isSingleMergedCapsule(size)) null
+                    else navigationToolbarGlassField(shape, minimumBand = padding)
                 is NavigationGlassUnionShape -> shape.nativeField()
                 is NavigationGlassOutlineShape -> shape.nativeField(size, scope.layoutDirection, scope, padding)
                 else -> null

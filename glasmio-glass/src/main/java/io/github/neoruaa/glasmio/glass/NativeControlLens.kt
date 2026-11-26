@@ -837,11 +837,16 @@ float4 nativeControlBackgroundMasks(float2 p, float3 f) {
     float strip = nativeHighlightStrip(-(f.x - (2.0 / 3.0) * lensDensity), lensDensity, .75, aa);
     float key = strip * (nativeHighlightAngular(f.y, lensKeyThreshold) + nativeHighlightAngular(-f.y, lensKeyThreshold))
         * lensMaterialOpacity;
-    float shifted = glassDistance(p - float2(0.0, 8.0 * lensDensity));
-    float ring = clamp(nativeGaussianTail(shifted / (3.0 * lensDensity) * .7071067811865476)
-        - nativeGaussianTail((shifted + 4.0 * lensDensity) / (3.0 * lensDensity) * .7071067811865476), 0.0, 1.0) * lensRingOpacity;
-    float shadowD = glassDistance(p - float2(0.0, 7.0 * lensDensity));
-    float shadow = nativeGaussianTail(shadowD / (8.0 * lensDensity)) * lensShadowOpacity;
+    float ring = 0.0, shadow = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        float d = glassDistance(p - float2(0.0, (i == 0 ? 8.0 : 7.0) * lensDensity));
+        if (i == 0) {
+            ring = clamp(nativeGaussianTail(d / (3.0 * lensDensity) * .7071067811865476)
+                - nativeGaussianTail((d + 4.0 * lensDensity) / (3.0 * lensDensity) * .7071067811865476), 0.0, 1.0) * lensRingOpacity;
+        } else {
+            shadow = nativeGaussianTail(d / (8.0 * lensDensity)) * lensShadowOpacity;
+        }
+    }
     return float4(coverage, key, ring, shadow);
 }
 float4 nativeControlBackground(float2 p, out float3 field, out float4 source, out float4 originalRaw) {
@@ -972,11 +977,16 @@ float nativeControlBackgroundAlpha(float2 p, float3 f) {
     float strip = nativeHighlightStrip(-(f.x - (2.0 / 3.0) * lensDensity), lensDensity, .75, aa);
     float key = strip * (nativeHighlightAngular(f.y, lensKeyThreshold) + nativeHighlightAngular(-f.y, lensKeyThreshold))
         * lensMaterialOpacity;
-    float shifted = glassDistance(p - float2(0.0, 8.0 * lensDensity));
-    float ring = clamp(nativeGaussianTail(shifted / (3.0 * lensDensity) * .7071067811865476)
-        - nativeGaussianTail((shifted + 4.0 * lensDensity) / (3.0 * lensDensity) * .7071067811865476), 0.0, 1.0) * lensRingOpacity;
-    float shadowD = glassDistance(p - float2(0.0, 7.0 * lensDensity));
-    float shadow = nativeGaussianTail(shadowD / (8.0 * lensDensity)) * lensShadowOpacity;
+    float ring = 0.0, shadow = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        float d = glassDistance(p - float2(0.0, (i == 0 ? 8.0 : 7.0) * lensDensity));
+        if (i == 0) {
+            ring = clamp(nativeGaussianTail(d / (3.0 * lensDensity) * .7071067811865476)
+                - nativeGaussianTail((d + 4.0 * lensDensity) / (3.0 * lensDensity) * .7071067811865476), 0.0, 1.0) * lensRingOpacity;
+        } else {
+            shadow = nativeGaussianTail(d / (8.0 * lensDensity)) * lensShadowOpacity;
+        }
+    }
     if (coverage <= 0.0 && key <= .000001 && ring <= .000001 && shadow <= .000001) return 0.0;
     // An opaque captured source keeps below.a=1, so identity capture leaves this
     // geometric alpha unchanged. Transparent sources recover alpha from the scene.

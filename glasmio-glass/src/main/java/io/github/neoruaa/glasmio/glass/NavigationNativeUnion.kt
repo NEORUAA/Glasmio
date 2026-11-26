@@ -335,26 +335,19 @@ uniform float2 unionScale;
 uniform float2 unionTranslation;
 float3 navigationGlassShapeField(float2 point) {
     point = (point - unionTranslation) / unionScale;
-    float4 first = unionElements[0];
-    float3 a = nativeGlassUnionBoundaryField(point - first.xy, first.zw, unionRadii[0]);
-    if (unionCount > 1.5) {
-        float4 element = unionElements[1];
-        float3 b = nativeGlassUnionBoundaryField(point - element.xy, element.zw, unionRadii[1]);
-        float radius = unionSmoothness * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
-        float h = radius <= 0.000001 ? (a.x < b.x ? 1.0 : 0.0)
-            : clamp(0.5 + 0.5 * (b.x - a.x) / radius, 0.0, 1.0);
-        a = float3(mix(b.x, a.x, h) - radius * h * (1.0 - h), mix(b.yz, a.yz, h));
-    }
-    if (unionCount > 2.5) {
-        for (int i = 2; i < 16; ++i) {
-            if (float(i) < unionCount) {
-                float4 element = unionElements[i];
-                float3 b = nativeGlassUnionBoundaryField(point - element.xy, element.zw, unionRadii[i]);
-                float radius = unionSmoothness * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
-                float h = radius <= 0.000001 ? (a.x < b.x ? 1.0 : 0.0)
-                    : clamp(0.5 + 0.5 * (b.x - a.x) / radius, 0.0, 1.0);
-                a = float3(mix(b.x, a.x, h) - radius * h * (1.0 - h), mix(b.yz, a.yz, h));
-            }
+    float3 a = float3(100000.0, 0.0, -1.0);
+    // Single SDF call site with dynamic early exit keeps the driver from unrolling 16 supercircle copies.
+    for (int i = 0; i < 16; ++i) {
+        if (float(i) >= unionCount) break;
+        float4 element = unionElements[i];
+        float3 b = nativeGlassUnionBoundaryField(point - element.xy, element.zw, unionRadii[i]);
+        if (i == 0) {
+            a = b;
+        } else {
+            float radius = unionSmoothness * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
+            float h = radius <= 0.000001 ? (a.x < b.x ? 1.0 : 0.0)
+                : clamp(0.5 + 0.5 * (b.x - a.x) / radius, 0.0, 1.0);
+            a = float3(mix(b.x, a.x, h) - radius * h * (1.0 - h), mix(b.yz, a.yz, h));
         }
     }
     float smallest = min(unionScale.x, unionScale.y);

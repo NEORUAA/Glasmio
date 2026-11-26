@@ -440,7 +440,7 @@ fun GlasmioContextMenu(
             // creates a bounded layer even with Unbounded edge treatment, so it must stay
             // outside the spring-sized menu to avoid exposing a menu-sized rectangle.
             .graphicsLayer {
-                alpha = if (morphMotion != null && (!morphMotion.initialized || !morphSourceAcquired)) 0f else menuAlpha.coerceIn(0f, 1f)
+                alpha = if (morphMotion != null && (!morphMotion.initialized || !morphSourceAcquired || menuScreenOrigin == null)) 0f else menuAlpha.coerceIn(0f, 1f)
                 val blurPx = if (morphMotion == null) (8.dp * (1f - progress)).coerceAtLeast(0.dp).toPx() else 0f
                 clip = blurPx > 0.01f
                 renderEffect = if (blurPx > 0.01f) {
@@ -500,6 +500,17 @@ fun GlasmioContextMenu(
                         },
                         content = { childBackdrop -> retainedContent(this, childBackdrop) },
                     )
+                } else if (morphMotion != null) {
+                    // Invisible 1-frame measurement host before LiquidMenuMorphSurface initializes.
+                    // Skip backdrop capture and glass shader compilation on this discarded frame.
+                    val contents = Modifier.clip(menuShape).padding(contentInset)
+                        .graphicsLayer { alpha = contentAlpha.coerceIn(0f, 1f) }
+                        .then(selection?.modifier ?: Modifier)
+                    Column(Modifier.fillMaxSize().then(contents)) {
+                        ProvideGlassMaterialContext(materialContext) {
+                            retainedContent(this, childBackdrop)
+                        }
+                    }
                 } else {
                     val surface = Modifier.navigationGlassBackground(
                         backdrop = samplingBackdrop,
@@ -638,15 +649,12 @@ fun GlasmioMenu(
     val usesAnchorMorph = morphFromAnchor
     var windowScreenOffset by remember { mutableStateOf(Offset.Zero) }
     DisposableEffect(sourceAnchor) { onDispose { sourceAnchor.release() } }
-    var morphSourceBounds by remember { mutableStateOf<Rect?>(null) }
+    val morphSourceBounds = remember { arrayOfNulls<Rect>(1) }
+    var usesMorph by remember { mutableStateOf(false) }
     var surfaceReady by remember { mutableStateOf(false) }
     var measuredMorphTarget by remember { mutableStateOf<Rect?>(null) }
     var positionAnchorBounds by remember { mutableStateOf<Rect?>(null) }
-    val usesMorph = morphSourceBounds != null
     val resolvedFullScreen = fullScreen || usesMorph
-    val contentAlpha = if (usesMorph) {
-        ((progress.value - 0.12f) / 0.64f).coerceIn(0f, 1f)
-    } else 1f
 
     LaunchedEffect(expanded) {
         if (expanded) {
@@ -662,20 +670,21 @@ fun GlasmioMenu(
                     hostView.getLocationOnScreen(screen)
                     hostView.getLocationInWindow(window)
                     windowScreenOffset = Offset((screen[0] - window[0]).toFloat(), (screen[1] - window[1]).toFloat())
-                    morphSourceBounds = source.translate(windowScreenOffset)
+                    morphSourceBounds[0] = source.translate(windowScreenOffset)
+                    usesMorph = true
                 }
             }
             popupAlive = true
-            if (morphSourceBounds != null) {
+            if (morphSourceBounds[0] != null) {
                 snapshotFlow { surfaceReady }.first { it }
                 if (!sourceAnchor.isAcquired || !liquidMotion.initialized) {
-                    morphSourceBounds = sourceAnchor.acquire()?.translate(windowScreenOffset) ?: morphSourceBounds
+                    morphSourceBounds[0] = sourceAnchor.acquire()?.translate(windowScreenOffset) ?: morphSourceBounds[0]
                     liquidMotion.initialize(
-                        morphSourceBounds!!,
+                        morphSourceBounds[0]!!,
                         requireNotNull(measuredMorphTarget),
                         with(density) { 34.dp.toPx() },
                         density.density,
-                        through = sourceAnchor.previewBounds?.translate(windowScreenOffset) ?: morphSourceBounds!!,
+                        through = sourceAnchor.previewBounds?.translate(windowScreenOffset) ?: morphSourceBounds[0]!!,
                     )
                 }
                 // Reopening during collapse retains the live contour and every velocity.
@@ -683,14 +692,14 @@ fun GlasmioMenu(
                 liquidMotion.updateTarget(requireNotNull(measuredMorphTarget), with(density) { 34.dp.toPx() })
             }
             coroutineScope {
-                if (morphSourceBounds != null) launch {
+                if (morphSourceBounds[0] != null) launch {
                     progress.snapTo(1f)
                     shadowAlpha.snapTo(1f)
                     liquidMotion.animateTo(true)
                 } else launch {
                     progress.animateTo(1f, DropdownMorphSpring)
                 }
-                if (morphSourceBounds == null) {
+                if (morphSourceBounds[0] == null) {
                     // Native contentMorph sets the platform view alpha in the same spring
                     // transaction. Fade the whole surface once, including its shadow.
                     launch { menuAlpha.animateTo(1f, DropdownMorphSpring) }
@@ -700,7 +709,7 @@ fun GlasmioMenu(
             }
         } else {
             if (popupAlive) coroutineScope {
-                if (morphSourceBounds != null && liquidMotion.initialized) launch {
+                if (morphSourceBounds[0] != null && liquidMotion.initialized) launch {
                     sourceAnchor.liveBounds?.let {
                         liquidMotion.updateSource(
                             it.translate(windowScreenOffset),
@@ -709,7 +718,7 @@ fun GlasmioMenu(
                     }
                     liquidMotion.animateTo(false)
                 }
-                if (morphSourceBounds == null) {
+                if (morphSourceBounds[0] == null) {
                     launch { progress.animateTo(0f, DropdownMorphSpring) }
                     launch { menuAlpha.animateTo(0f, DropdownMorphSpring) }
                 } else {
@@ -718,7 +727,8 @@ fun GlasmioMenu(
             }
             sourceAnchor.release()
             popupAlive = false
-            morphSourceBounds = null
+            morphSourceBounds[0] = null
+            usesMorph = false
             surfaceReady = false
             if (transitionStarted) {
                 transitionStarted = false
@@ -745,10 +755,12 @@ fun GlasmioMenu(
 
     // The live content can change its measured destination while the opening is still running.
     // Geometry follows that size without restarting the native optical timeline or source lease.
-    LaunchedEffect(measuredMorphTarget, popupAlive, usesMorph, expanded) {
-        if (popupAlive && usesMorph && expanded && liquidMotion.initialized) {
-            measuredMorphTarget?.let { target ->
-                liquidMotion.animateToTarget(target, with(density) { 34.dp.toPx() })
+    LaunchedEffect(popupAlive, usesMorph, expanded) {
+        if (popupAlive && usesMorph && expanded) {
+            snapshotFlow { measuredMorphTarget }.collect { target ->
+                if (target != null && liquidMotion.initialized) {
+                    liquidMotion.animateToTarget(target, with(density) { 34.dp.toPx() })
+                }
             }
         }
     }
@@ -897,15 +909,20 @@ fun GlasmioMenu(
                 expanded && !menuAlpha.isRunning && menuAlpha.value == 1f &&
                     transitionSettled && scaleSettled
             }
-            Popup(
-                popupPositionProvider = popupPositionProvider,
-                onDismissRequest = { onExpandedChange(false) },
-                properties = PopupProperties(
+            val currentOnExpandedChange by rememberUpdatedState(onExpandedChange)
+            val dismissPopup = remember { { currentOnExpandedChange(false) } }
+            val popupProperties = remember(expanded) {
+                PopupProperties(
                     focusable = expanded,
                     dismissOnBackPress = expanded,
                     dismissOnClickOutside = expanded,
                     clippingEnabled = false,
-                ),
+                )
+            }
+            StableMenuPopup(
+                popupPositionProvider = popupPositionProvider,
+                onDismissRequest = dismissPopup,
+                properties = popupProperties,
             ) {
                 // The overshoot margin is invisible window area; treat taps there like
                 // outside taps (dismiss) instead of letting them vanish into the window.
@@ -919,7 +936,7 @@ fun GlasmioMenu(
                         Modifier.matchParentSize().clickable(
                             interactionSource = null,
                             indication = null,
-                        ) { onExpandedChange(false) },
+                        ) { dismissPopup() },
                     )
                     ProvideMenuDragTargets(
                         drag = sourceAnchor.dragSelection,
@@ -939,6 +956,9 @@ fun GlasmioMenu(
                             // Separate the popup window size from its animation shell, which
                             // can exceed the window when a wide menu needs room for shadows.
                             if (!resolvedFullScreen || resolvedFullScreenMenuOffset != null) {
+                                val contentAlpha = if (usesMorph) {
+                                    ((progress.value - 0.12f) / 0.64f).coerceIn(0f, 1f)
+                                } else 1f
                                 GlasmioContextMenu(
                                     visible = true,
                                     modifier = if (resolvedFullScreen) {
@@ -977,7 +997,7 @@ fun GlasmioMenu(
                                         surfaceReady = true
                                     },
                                 ) { childBackdrop ->
-                                    content(childBackdrop) { onExpandedChange(false) }
+                                    content(childBackdrop) { dismissPopup() }
                                 }
                             }
                             overlayContent { menuAlpha.value.coerceIn(0f, 1f) }
@@ -987,6 +1007,22 @@ fun GlasmioMenu(
             }
         }
     }
+}
+
+/** Isolates Popup's SideEffect(updateParameters) from live menu animation recompositions. */
+@Composable
+private fun StableMenuPopup(
+    popupPositionProvider: PopupPositionProvider,
+    onDismissRequest: () -> Unit,
+    properties: PopupProperties,
+    content: @Composable () -> Unit,
+) {
+    Popup(
+        popupPositionProvider = popupPositionProvider,
+        onDismissRequest = onDismissRequest,
+        properties = properties,
+        content = content,
+    )
 }
 
 @Composable

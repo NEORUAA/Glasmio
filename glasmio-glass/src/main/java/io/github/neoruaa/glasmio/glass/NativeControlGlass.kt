@@ -151,7 +151,8 @@ internal fun BackdropEffectScope.completeNativeFilteredGlass(
             atlas.samplingFunctions +
             (if (!atlas.colorManaged && !atlas.nativeGammaStorage && topology.hasPressGlow) GlassColorSpaceShaderFunctions else "") +
             (if (filteredIsNativeRaw) NativeControlFilteredRawFunctions else NativeControlFilteredFunctions) +
-            nativeGlassCompletionShader(topology)
+            nativeGlassCompletionShader(topology,
+                customShadowDistance = functions.contains("navigationGlassShadowDistance("))
     }
     val shader = obtainRuntimeShader("Glasmio.NativeControl.complete.${atlas.colorManaged}.$filteredIsNativeRaw.$retainedPair.${topology.cacheKey}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
         source).asAndroidRuntimeShader()
@@ -198,7 +199,8 @@ internal fun BackdropEffectScope.completeNativeMenuFilteredGlass(
             atlas.samplingFunctions +
             (if (!atlas.colorManaged && !atlas.nativeGammaStorage && topology.hasPressGlow) GlassColorSpaceShaderFunctions else "") +
             NativeMenuTransitionFilteredFunctions +
-            nativeGlassCompletionShader(topology)
+            nativeGlassCompletionShader(topology,
+                customShadowDistance = functions.contains("navigationGlassShadowDistance("))
     }
     val shader = obtainRuntimeShader("Glasmio.NativeControl.menuComplete.${atlas.colorManaged}.${topology.cacheKey}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
         source).asAndroidRuntimeShader()
