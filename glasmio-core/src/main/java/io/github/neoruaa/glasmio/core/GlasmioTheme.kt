@@ -95,7 +95,7 @@ fun glasmioColorScheme(
 @Composable
 fun GlasmioTheme(
     isDark: Boolean = isSystemInDarkTheme(),
-    colorScheme: ColorScheme = glasmioColorScheme(isDark),
+    colorScheme: ColorScheme = remember(isDark) { glasmioColorScheme(isDark) },
     typography: Typography = glasmioTypography(),
     colors: GlassColors = defaultGlassColors(isDark, colorScheme.primary),
     appearance: GlassAppearance = GlassAppearance(),
@@ -111,6 +111,7 @@ fun GlasmioTheme(
     val sizedTypography = if (dynamicTypeSize == null) typography
         else textStyles.resizeMaterialTypography(typography)
     val materialTypography = remember(sizedTypography, letterSpacing) { sizedTypography.withLetterSpacing(letterSpacing) }
+    val materialShapes = remember(shapes) { shapes.materialShapes() }
     CompositionLocalProvider(
         LocalGlassColors provides colors,
         LocalGlassAppearance provides appearance,
@@ -121,7 +122,7 @@ fun GlasmioTheme(
         LocalGlasmioLetterSpacing provides letterSpacing,
         LocalContentColor provides colors.content,
     ) {
-        MaterialTheme(colorScheme, shapes.materialShapes(), materialTypography, content)
+        MaterialTheme(colorScheme, materialShapes, materialTypography, content)
     }
 }
 

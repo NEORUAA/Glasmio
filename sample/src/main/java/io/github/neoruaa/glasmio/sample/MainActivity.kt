@@ -409,6 +409,7 @@ private fun SampleNavigation(
     val adaptiveNavigation = rememberGlasmioAdaptiveNavigationState()
     val navigationLayout = glasmioNavigationLayout()
     val topTabs = navigationLayout == GlasmioNavigationLayout.TopTabs
+    val currentTopTabs by rememberUpdatedState(topTabs)
     val tabItems = sampleTabItems(currentRoute.value ?: "Home")
     val selectedRoot = backStack.asReversed().firstOrNull { it.sampleRouteName() in topLevelRoutes }
         ?.sampleRouteName() ?: "Home"
@@ -509,7 +510,7 @@ private fun SampleNavigation(
                                 val overlay: @Composable BoxScope.(LayerBackdrop) -> Unit = { source ->
                                         val isTopLevel = route in topLevelRoutes
                                         val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-                                        val bottomPadding = navigationInset + if (!topTabs && (isTopLevel || route == "Search")) NavigationBarSurfaceHeight + 8.dp else 0.dp
+                                        val bottomPadding = navigationInset + if (!currentTopTabs && (isTopLevel || route == "Search")) NavigationBarSurfaceHeight + 8.dp else 0.dp
                                         // Reuse GlasmioNavigationScaffold's navigationBackdrop directly for modal blur consumers
                                         // instead of nesting an extra full-screen LayerBackdrop inside every page.
                                         CompositionLocalProvider(LocalBlurBackdrop provides navigationBackdrop) {
@@ -535,7 +536,7 @@ private fun SampleNavigation(
                                                             wallpaper = source.takeIf { wallpaper },
                                                             listState = entryListState,
                                                             alwaysCompact = route == "Text Editing",
-                                                            topPaddingAdjustment = if (topTabs && route == "Search")
+                                                            topPaddingAdjustment = if (currentTopTabs && route == "Search")
                                                                 GlasmioAdaptiveNavigationDefaults.SearchTopPadding + 56.dp - 72.dp else 0.dp,
                                                             backgroundColor = if (route == "Text Editing") {
                                                                 if (LocalGlassColors.current.isDark) Color.Black else Color.White

@@ -316,6 +316,41 @@ fun GlasmioNavigationScaffold(
     content: @Composable (PaddingValues) -> Unit,
 ) {
     val backdrop = contentBackdrop
+    val titles = remember { PageTitleRegistry() }
+    val headerTop = WindowInsets.glasmioPageHeaderInsets.asPaddingValues().calculateTopPadding()
+    val padding = remember(headerTop) {
+        PaddingValues(start = IosPageHorizontalPadding, top = headerTop + 72.dp, end = IosPageHorizontalPadding)
+    }
+    CompositionLocalProvider(LocalPageTitles provides titles) {
+        Box(modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().layerBackdrop(backdrop, reuseContent = true).trackBackdropPosition(backdrop)
+                .background(LocalGlassColors.current.groupedBackground)) { content(padding) }
+            GlasmioNavigationHeaderOverlay(
+                motion = motion,
+                header = header,
+                backdrop = backdrop,
+                titles = titles,
+                headerTop = headerTop,
+                topBar = topBar,
+                topBarPreferredWidth = topBarPreferredWidth,
+                bottomBar = bottomBar,
+            )
+        }
+    }
+}
+
+/** Isolates header spec and transition frame reads so page content never recomposes on header updates. */
+@Composable
+private fun BoxScope.GlasmioNavigationHeaderOverlay(
+    motion: GlasmioHeaderMotion,
+    header: @Composable (entryKey: Any) -> GlasmioHeaderSpec,
+    backdrop: LayerBackdrop,
+    titles: PageTitleRegistry,
+    headerTop: Dp,
+    topBar: (@Composable (availableWidth: Dp) -> Unit)?,
+    topBarPreferredWidth: Dp?,
+    bottomBar: @Composable BoxScope.() -> Unit,
+) {
     val rawFrame = motion.frame
     val frameSource = remember { mutableStateOf(rawFrame, referentialEqualityPolicy()) }
     frameSource.value = rawFrame
@@ -327,7 +362,6 @@ fun GlasmioNavigationScaffold(
     }
     val source = key(frame.fromEntryKey) { header(frame.fromEntryKey) }
     val target = key(frame.toEntryKey) { header(frame.toEntryKey) }
-    val titles = remember { PageTitleRegistry() }
     var forceTopBarOverflow by remember { mutableStateOf(false) }
     // A reset must not erase a fresh fold requested by this layout's SideEffect.
     val overflowWasForced = forceTopBarOverflow
@@ -341,15 +375,9 @@ fun GlasmioNavigationScaffold(
     }
     titles.hasTopTabs = topBar != null && !(adaptive?.usesTabMorph == true && adaptive.motion.expanded)
     SideEffect { titles.update(frame, source, target) }
-    val headerTop = WindowInsets.glasmioPageHeaderInsets.asPaddingValues().calculateTopPadding()
-    val padding = PaddingValues(start = IosPageHorizontalPadding, top = headerTop + 72.dp, end = IosPageHorizontalPadding)
-    CompositionLocalProvider(LocalPageTitles provides titles) {
-    Box(modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().layerBackdrop(backdrop, reuseContent = true).trackBackdropPosition(backdrop)
-            .background(LocalGlassColors.current.groupedBackground)) { content(padding) }
-        GlasmioBackdropProvider(backdrop) {
-            val owner = if (frame.phase == GlasmioNavigationPhase.Tracking || frame.phase == GlasmioNavigationPhase.Canceling) source else target
-            CompositionLocalProvider(LocalGlassColors provides (owner.colors ?: LocalGlassColors.current)) {
+    GlasmioBackdropProvider(backdrop) {
+        val owner = if (frame.phase == GlasmioNavigationPhase.Tracking || frame.phase == GlasmioNavigationPhase.Canceling) source else target
+        CompositionLocalProvider(LocalGlassColors provides (owner.colors ?: LocalGlassColors.current)) {
             GlasmioNavigationHeader(
                 source,
                 target,
@@ -367,10 +395,8 @@ fun GlasmioNavigationScaffold(
                     onLayoutWidthChanged = { forceTopBarOverflow = false },
                 )
             }
-            }
-            bottomBar()
         }
-    }
+        bottomBar()
     }
 }
 

@@ -57,6 +57,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -365,15 +366,17 @@ fun <T : Any> GlasmioNavDisplay(
     val density = LocalDensity.current
     val windowInsets = LocalView.current.rootWindowInsets
     val fallbackCorner = if (transitionEffects.enableCornerClip && windowInsets == null) getRoundedCorner() else 0.dp
-    val windowShape = with(density) {
-        fun radius(position: Int) = if (windowInsets == null) fallbackCorner
-            else (windowInsets.getRoundedCorner(position)?.radius ?: 0).toDp()
-        AbsoluteContinuousRoundedRectangle(
-            topLeft = radius(RoundedCorner.POSITION_TOP_LEFT),
-            topRight = radius(RoundedCorner.POSITION_TOP_RIGHT),
-            bottomRight = radius(RoundedCorner.POSITION_BOTTOM_RIGHT),
-            bottomLeft = radius(RoundedCorner.POSITION_BOTTOM_LEFT),
-        )
+    val windowShape = remember(density, windowInsets, fallbackCorner) {
+        with(density) {
+            fun radius(position: Int) = if (windowInsets == null) fallbackCorner
+                else (windowInsets.getRoundedCorner(position)?.radius ?: 0).toDp()
+            AbsoluteContinuousRoundedRectangle(
+                topLeft = radius(RoundedCorner.POSITION_TOP_LEFT),
+                topRight = radius(RoundedCorner.POSITION_TOP_RIGHT),
+                bottomRight = radius(RoundedCorner.POSITION_BOTTOM_RIGHT),
+                bottomLeft = radius(RoundedCorner.POSITION_BOTTOM_LEFT),
+            )
+        }
     }
     val exclusions = remember { GlasmioSwipeBackExclusionRegistry() }
     val displayCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
@@ -631,21 +634,27 @@ fun <T : Any> GlasmioNavDisplay(
         }
     }
 
-    val retainedScenes = remember { mutableStateMapOf<Any, Scene<T>>() }
+    val retainedScenes = remember { mutableStateMapOf<Any, RetainedTabHolder<T>>() }
     if (retainedTabKeys.isNotEmpty()) {
-        val currentEntryKey = transition.currentState.entries.last().contentKey
-        val targetEntryKey = transition.targetState.entries.last().contentKey
-        if (currentEntryKey in retainedTabKeys && retainedScenes[currentEntryKey] !== transition.currentState) {
-            retainedScenes[currentEntryKey] = transition.currentState
-        }
-        if (targetEntryKey in retainedTabKeys && retainedScenes[targetEntryKey] !== transition.targetState) {
-            retainedScenes[targetEntryKey] = transition.targetState
-        }
-        sceneState.previousScenes.fastForEach { prev ->
-            val prevKey = prev.entries.last().contentKey
-            if (prevKey in retainedTabKeys && retainedScenes[prevKey] !== prev) {
-                retainedScenes[prevKey] = prev
+        fun retainIfAbsentOrChanged(key: Any, candidate: Scene<T>) {
+            if (key !in retainedTabKeys) return
+            val existing = retainedScenes[key]?.scene
+            // Preserve an already-mounted retained tab Scene when rememberDecoratedNavEntries
+            // only re-wrapped the same entry key; replacing the Scene forces a full tab recompose.
+            val sameIdentity = existing != null &&
+                existing.key == candidate.key &&
+                existing.entries.size == candidate.entries.size &&
+                existing.entries.indices.all { i ->
+                    existing.entries[i].contentKey == candidate.entries[i].contentKey
+                }
+            if (!sameIdentity) {
+                retainedScenes[key] = RetainedTabHolder(candidate)
             }
+        }
+        retainIfAbsentOrChanged(transition.currentState.entries.last().contentKey, transition.currentState)
+        retainIfAbsentOrChanged(transition.targetState.entries.last().contentKey, transition.targetState)
+        sceneState.previousScenes.fastForEach { prev ->
+            retainIfAbsentOrChanged(prev.entries.last().contentKey, prev)
         }
         if (retainedScenes.keys.any { it !in retainedTabKeys }) {
             retainedScenes.keys.toList().forEach { k ->
@@ -744,7 +753,7 @@ fun <T : Any> GlasmioNavDisplay(
                                         } else Modifier,
                                     ),
                             ) {
-                                tabScene.content()
+                                RetainedTabContent(tabScene)
                                 if (transitionEffects.dimAmount > 0f && !isTabTransition && !isSettled && active) {
                                     Box(
                                         modifier = Modifier
@@ -898,6 +907,14 @@ fun <T : Any> GlasmioNavDisplay(
     }
 
 
+}
+
+@Stable
+private class RetainedTabHolder<T : Any>(val scene: Scene<T>)
+
+@Composable
+private fun <T : Any> RetainedTabContent(holder: RetainedTabHolder<T>) {
+    holder.scene.content()
 }
 
 private fun <T : Any> isPop(
