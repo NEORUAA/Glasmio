@@ -374,10 +374,19 @@ uniform float2 shadowOffset;
 uniform float shadowInvRadius;
 uniform float shadowCutScale;
 half4 main(float2 p) {
-    float body = nativeShadowDistance(p);
+    float body = 0.0;
+    float d = 0.0;
+    // Single nativeShadowDistance call site avoids duplicating morph/union SDF trees twice.
+    for (int pass = 0; pass < 2; ++pass) {
+        float dist = nativeShadowDistance(pass == 0 ? p : p - shadowOffset);
+        if (pass == 0) {
+            body = dist;
+            if (body * shadowCutScale + 0.5 <= 0.0) return half4(0.0);
+        } else {
+            d = dist;
+        }
+    }
     float cut = clamp(body * shadowCutScale + 0.5, 0.0, 1.0);
-    if (cut <= 0.0) return half4(0.0);
-    float d = nativeShadowDistance(p - shadowOffset);
     float coverage = shadowInvRadius > 0.0 ? nativeGaussianTail(d * shadowInvRadius) : 0.0;
     return half4(0.0, 0.0, 0.0, coverage * cut);
 }

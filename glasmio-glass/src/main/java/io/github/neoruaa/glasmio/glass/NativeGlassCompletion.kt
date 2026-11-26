@@ -246,17 +246,24 @@ private const val NativeGlassCompletionShaderBodyPrefix = """
 float4 nativeCompletionAppearance(float4 filtered, float3 original, float4 shadowResult,
     float coverage, float key, float ring, float tintMask, float highlightMask,
     bool targetAlternate, bool sourceAlternate) {
-    float4 faceResult = nativeCompletionFaceForAppearance(filtered, targetAlternate, sourceAlternate);
-    faceResult.rgb = mix(faceResult.rgb, nativeIdleColor.rgb, nativeIdleColor.a);
-    faceResult.a = nativeIdleColor.a + faceResult.a * (1.0 - nativeIdleColor.a);
-    faceResult.rgb = mix(faceResult.rgb, nativeOverlayColor.rgb, nativeOverlayColor.a);
-    faceResult.a = nativeOverlayColor.a + faceResult.a * (1.0 - nativeOverlayColor.a);
-    float4 covered = mix(shadowResult, faceResult, coverage);
-    covered.rgb *= 1.0 - ring;
-    covered.a = covered.a * (1.0 - ring) + ring;
+    float4 covered = float4(0.0);
     float3 originalFace = float3(0.0);
-    if (key > .000001 && covered.a < 1.0)
-        originalFace = nativeCompletionFaceForAppearance(float4(original, 1.0), targetAlternate, sourceAlternate).rgb;
+    for (int fc = 0; fc < 2; ++fc) {
+        float4 faceResult = nativeCompletionFaceForAppearance(fc == 0 ? filtered : float4(original, 1.0),
+            targetAlternate, sourceAlternate);
+        if (fc == 0) {
+            faceResult.rgb = mix(faceResult.rgb, nativeIdleColor.rgb, nativeIdleColor.a);
+            faceResult.a = nativeIdleColor.a + faceResult.a * (1.0 - nativeIdleColor.a);
+            faceResult.rgb = mix(faceResult.rgb, nativeOverlayColor.rgb, nativeOverlayColor.a);
+            faceResult.a = nativeOverlayColor.a + faceResult.a * (1.0 - nativeOverlayColor.a);
+            covered = mix(shadowResult, faceResult, coverage);
+            covered.rgb *= 1.0 - ring;
+            covered.a = covered.a * (1.0 - ring) + ring;
+            if (!(key > .000001 && covered.a < 1.0)) break;
+        } else {
+            originalFace = faceResult.rgb;
+        }
+    }
     float4 completed = nativeGlassBackgroundCompletion(covered, original, originalFace, key, 1.0, -.3);
     // The tint layer sees the actual reconstructed backdrop, not signed relative RGB.
     completed = nativeCompletionTint(nativeCompletionTint(completed, original, tintMask, coverage, true, sourceAlternate),
@@ -275,17 +282,24 @@ private const val NativeGlassCompletionShaderBodyPrefixWithoutShadow = """
 float4 nativeCompletionAppearance(float4 filtered, float3 original,
     float coverage, float key, float ring, float tintMask, float highlightMask,
     bool targetAlternate, bool sourceAlternate) {
-    float4 faceResult = nativeCompletionFaceForAppearance(filtered, targetAlternate, sourceAlternate);
-    faceResult.rgb = mix(faceResult.rgb, nativeIdleColor.rgb, nativeIdleColor.a);
-    faceResult.a = nativeIdleColor.a + faceResult.a * (1.0 - nativeIdleColor.a);
-    faceResult.rgb = mix(faceResult.rgb, nativeOverlayColor.rgb, nativeOverlayColor.a);
-    faceResult.a = nativeOverlayColor.a + faceResult.a * (1.0 - nativeOverlayColor.a);
-    float4 covered = faceResult * coverage;
-    covered.rgb *= 1.0 - ring;
-    covered.a = covered.a * (1.0 - ring) + ring;
+    float4 covered = float4(0.0);
     float3 originalFace = float3(0.0);
-    if (key > .000001 && covered.a < 1.0)
-        originalFace = nativeCompletionFaceForAppearance(float4(original, 1.0), targetAlternate, sourceAlternate).rgb;
+    for (int fc = 0; fc < 2; ++fc) {
+        float4 faceResult = nativeCompletionFaceForAppearance(fc == 0 ? filtered : float4(original, 1.0),
+            targetAlternate, sourceAlternate);
+        if (fc == 0) {
+            faceResult.rgb = mix(faceResult.rgb, nativeIdleColor.rgb, nativeIdleColor.a);
+            faceResult.a = nativeIdleColor.a + faceResult.a * (1.0 - nativeIdleColor.a);
+            faceResult.rgb = mix(faceResult.rgb, nativeOverlayColor.rgb, nativeOverlayColor.a);
+            faceResult.a = nativeOverlayColor.a + faceResult.a * (1.0 - nativeOverlayColor.a);
+            covered = faceResult * coverage;
+            covered.rgb *= 1.0 - ring;
+            covered.a = covered.a * (1.0 - ring) + ring;
+            if (!(key > .000001 && covered.a < 1.0)) break;
+        } else {
+            originalFace = faceResult.rgb;
+        }
+    }
     float4 completed = nativeGlassBackgroundCompletion(covered, original, originalFace, key, 1.0, -.3);
     // The tint layer sees the actual reconstructed backdrop, not signed relative RGB.
     completed = nativeCompletionTint(nativeCompletionTint(completed, original, tintMask, coverage, true, sourceAlternate),
@@ -326,18 +340,27 @@ private const val NativeGlassCompletionShapeWithoutShadow = """    if (coordinat
         coordinate.x >= nativeOutputSize.x + nativeOutputOrigin.x * 2.0 ||
         coordinate.y >= nativeOutputSize.y + nativeOutputOrigin.y * 2.0) return half4(0.0);
     float2 p = coordinate - nativeOutputOrigin;
-    float3 rawShapeField = navigationGlassShapeField(p * nativeOutputScale);
-    float3 field = float3(rawShapeField.x / nativeOutputScale, rawShapeField.yz);
-    float coverage = nativeGlassShapeCoverage(field, 1.0);
-    float key = coverage < 1.0 && nativeEdgeAlpha > 0.0
-        ? nativeGlassStrokeKeyFill(field, nativeOutputDensity, 1.0, nativeKeyThreshold) * nativeEdgeAlpha : 0.0;
-    bool needsRing = coverage > 0.0 && nativeClearFraction < 1.0 && nativeEdgeAlpha > 0.0 &&
-        field.x >= -36.0 * nativeOutputDensity;
+    float3 rawShapeField = float3(0.0);
+    float3 field = float3(0.0);
+    float coverage = 0.0;
+    float key = 0.0;
     float ring = 0.0;
-    if (needsRing) {
-        float2 shiftedPoint = (p - float2(0.0, 8.0 * nativeOutputDensity)) * nativeOutputScale;
-        float ringDistance = navigationGlassOffsetDistances(shiftedPoint, true, false).x / nativeOutputScale;
-        ring = nativeGlassRingCoverage(ringDistance, coverage, nativeOutputDensity, nativeClearFraction) * nativeEdgeAlpha;
+    // Single navigationGlassShapeField call site keeps the SDF tree from being inlined twice.
+    for (int sp = 0; sp < 2; ++sp) {
+        float2 query = (sp == 0 ? p : p - float2(0.0, 8.0 * nativeOutputDensity)) * nativeOutputScale;
+        float3 sampled = navigationGlassShapeField(query);
+        if (sp == 0) {
+            rawShapeField = sampled;
+            field = float3(rawShapeField.x / nativeOutputScale, rawShapeField.yz);
+            coverage = nativeGlassShapeCoverage(field, 1.0);
+            key = coverage < 1.0 && nativeEdgeAlpha > 0.0
+                ? nativeGlassStrokeKeyFill(field, nativeOutputDensity, 1.0, nativeKeyThreshold) * nativeEdgeAlpha : 0.0;
+            bool needsRing = coverage > 0.0 && nativeClearFraction < 1.0 && nativeEdgeAlpha > 0.0 &&
+                field.x >= -36.0 * nativeOutputDensity;
+            if (!needsRing) break;
+        } else {
+            ring = nativeGlassRingCoverage(sampled.x / nativeOutputScale, coverage, nativeOutputDensity, nativeClearFraction) * nativeEdgeAlpha;
+        }
     }
 """
 
@@ -508,35 +531,54 @@ float4 nativeCompletionTint(float4 destination, float3 original, float mask, flo
          else "nativeAtlasBilinear(samplePoint, 0)") +
         (if (hasShadow) NativeGlassCompletionOriginalSuffixWithShadow else NativeGlassCompletionOriginalSuffixWithoutShadow) +
         buildString {
-        if (topology.hasTargetAppearance) append("""
-    float targetMix = materialOpacity > 0.0 ? materialAppearanceMix : 0.0;
-""")
-        if (topology.hasSourceRecipe && topology.hasSourceAppearance) append("""
-    float sourceMix = source_materialOpacity > 0.0 ? source_materialAppearanceMix : 0.0;
-""")
-        append("""
+        val hasTargetApp = topology.hasTargetAppearance
+        val hasSourceApp = topology.hasSourceRecipe && topology.hasSourceAppearance
+        when {
+            !hasTargetApp && !hasSourceApp -> append("""
     float4 completed = nativeCompletionAppearance($appearanceCallSuffix, false, false);
 """)
-        if (topology.hasTargetAppearance) append("""
-    if (targetMix > 0.0) {
-        float4 alternate = nativeCompletionAppearance($appearanceCallSuffix, true, false);
-        completed = mix(completed, alternate, targetMix);
-    }
-""")
-        if (topology.hasSourceRecipe && topology.hasSourceAppearance) {
-            append("""
-    if (sourceMix > 0.0) {
-        float4 alternate = nativeCompletionAppearance($appearanceCallSuffix, false, true);
-""")
-            if (topology.hasTargetAppearance) append("""
-        if (targetMix > 0.0) {
-            float4 both = nativeCompletionAppearance($appearanceCallSuffix, true, true);
-            alternate = mix(alternate, both, targetMix);
+            hasTargetApp && !hasSourceApp -> append("""
+    float targetMix = materialOpacity > 0.0 ? materialAppearanceMix : 0.0;
+    float4 completed = float4(0.0);
+    for (int ap = 0; ap < 2; ++ap) {
+        float4 res = nativeCompletionAppearance($appearanceCallSuffix, ap == 1, false);
+        if (ap == 0) {
+            completed = res;
+            if (targetMix <= 0.0) break;
+        } else {
+            completed = mix(completed, res, targetMix);
         }
-""")
-            append("""
-        completed = mix(completed, alternate, sourceMix);
     }
+""")
+            !hasTargetApp && hasSourceApp -> append("""
+    float sourceMix = source_materialOpacity > 0.0 ? source_materialAppearanceMix : 0.0;
+    float4 completed = float4(0.0);
+    for (int ap = 0; ap < 2; ++ap) {
+        float4 res = nativeCompletionAppearance($appearanceCallSuffix, false, ap == 1);
+        if (ap == 0) {
+            completed = res;
+            if (sourceMix <= 0.0) break;
+        } else {
+            completed = mix(completed, res, sourceMix);
+        }
+    }
+""")
+            else -> append("""
+    float targetMix = materialOpacity > 0.0 ? materialAppearanceMix : 0.0;
+    float sourceMix = source_materialOpacity > 0.0 ? source_materialAppearanceMix : 0.0;
+    float4 completed = float4(0.0);
+    float4 altSource = float4(0.0);
+    for (int ap = 0; ap < 4; ++ap) {
+        if (ap == 1 && targetMix <= 0.0) continue;
+        if (ap == 2 && sourceMix <= 0.0) break;
+        if (ap == 3 && targetMix <= 0.0) break;
+        float4 res = nativeCompletionAppearance($appearanceCallSuffix, ap == 1 || ap == 3, ap >= 2);
+        if (ap == 0) completed = res;
+        else if (ap == 1) completed = mix(completed, res, targetMix);
+        else if (ap == 2) altSource = res;
+        else altSource = mix(altSource, res, targetMix);
+    }
+    if (sourceMix > 0.0) completed = mix(completed, altSource, sourceMix);
 """)
         }
     } + if (topology.hasPressGlow) NativeGlassCompletionPressGlowSuffix else NativeGlassCompletionShaderSuffix

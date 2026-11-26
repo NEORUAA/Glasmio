@@ -1146,9 +1146,21 @@ float3 roundedFieldGradient(float2 point, float2 origin, float2 extent, float2 r
     return nativeGlassRoundedField(point - origin, extent, radii, 0.5);
 }
 float3 liquidAnalyticFieldGradient(float2 point) {
-    float3 a = roundedFieldGradient(point, center, halfSize, cornerRadii);
-    if (secondaryEnabled < 0.5) return a;
-    float3 b = roundedFieldGradient(point, secondaryCenter, secondaryHalfSize, secondaryRadii);
+    float3 a = float3(0.0);
+    float3 b = float3(0.0);
+    // Single roundedFieldGradient call site avoids duplicating the supercircle SDF twice per contour query.
+    for (int lobe = 0; lobe < 2; ++lobe) {
+        float2 c = lobe == 0 ? center : secondaryCenter;
+        float2 hs = lobe == 0 ? halfSize : secondaryHalfSize;
+        float2 cr = lobe == 0 ? cornerRadii : secondaryRadii;
+        float3 f = roundedFieldGradient(point, c, hs, cr);
+        if (lobe == 0) {
+            a = f;
+            if (secondaryEnabled < 0.5) return a;
+        } else {
+            b = f;
+        }
+    }
     // QuartzCore SDFUnion, iOS 24A434, 0x1c39e27d0: only opposing
     // unit gradients widen the polynomial union between the two skins.
     float k = smoothing * clamp(0.5 - 0.5 * dot(a.yz, b.yz), 0.0, 1.0);
