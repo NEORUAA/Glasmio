@@ -22,6 +22,7 @@ import io.github.neoruaa.glasmio.glass.render.BackdropEffectScope
 import io.github.neoruaa.glasmio.glass.render.BackdropEffectScopeImpl
 import io.github.neoruaa.glasmio.glass.render.GlassColorSpaceShaderFunctions
 import io.github.neoruaa.glasmio.glass.render.asAndroidRuntimeShader
+import io.github.neoruaa.glasmio.glass.render.internal.withFullHardwareBacking
 import io.github.neoruaa.glasmio.glass.render.isRuntimeShaderSupported
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import kotlin.math.ceil
@@ -177,6 +178,33 @@ private fun nativeMipSourceRegions(levels: List<IntRect>, source: IntRect): List
     return regions
 }
 
+/** Compact consumer packing for sampled-scene Tabs: omits unused portal/blur planes and outer padding. */
+internal class NativeControlConsumerPacking(
+    val baseSize: IntSize,
+    val cropInset: Int,
+    val rawRect: IntRect,
+    val sceneRect: IntRect,
+    val storageSize: IntSize,
+) {
+    private val packedRects = FloatArray(32 * 4).apply {
+        this[0] = rawRect.left.toFloat()
+        this[1] = rawRect.top.toFloat()
+        this[2] = rawRect.width.toFloat()
+        this[3] = rawRect.height.toFloat()
+        this[12] = sceneRect.left.toFloat()
+        this[13] = sceneRect.top.toFloat()
+        this[14] = sceneRect.width.toFloat()
+        this[15] = sceneRect.height.toFloat()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    fun configure(shader: RuntimeShader) {
+        shader.setFloatUniform("nativeAtlasBaseSize", baseSize.width.toFloat(), baseSize.height.toFloat())
+        shader.setFloatUniform("nativeAtlasRects", packedRects)
+        shader.setFloatUniform("nativeAtlasLastLevel", 3f)
+    }
+}
+
 /** Packed real-resolution mip texels. The producer must render over [size] before sampling it. */
 internal class NativeGlassMipAtlas(
     val baseSize: IntSize,
@@ -193,6 +221,8 @@ internal class NativeGlassMipAtlas(
     val controlBlurPlane: IntRect? = null,
     /** A separately materialized optical scene; packing happens only at the consumer. */
     val controlScenePlane: IntRect? = null,
+    /** Compact consumer-only packing for sampled-scene Tabs that never read portal or blur planes. */
+    val controlConsumerPacking: NativeControlConsumerPacking? = null,
     /** SDR geometry data is packed independently for the scene and final consumer. */
     val controlFieldPlane: NativeControlLensFieldPlane? = null,
     /** Owned SDR Tab Gaussian H reads its raw input without an extracted quarter texture. */
@@ -376,10 +406,11 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         atlas: NativeGlassMipAtlas,
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
+        fullHardwareBacking: Boolean = false,
     ) {
         recordControlField(atlas.controlFieldPlane, record)
         if (atlas.controlScenePlane == null) {
-            recordControlBlur(atlas, record, sourceBlock)
+            recordControlBlur(atlas, record, sourceBlock, fullHardwareBacking)
             return
         }
         recordedPyramid = null
@@ -391,7 +422,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
             maxOf(captureBottom, atlas.controlBlurPlane?.bottom ?: 0, scene.height),
         )
         if (atlas.controlBlurPlane != null) {
-            recordControlBlur(atlas, record, sourceBlock)
+            recordControlBlur(atlas, record, sourceBlock, fullHardwareBacking)
         } else {
             val raw = controlSource ?: context.createGraphicsLayer().also { controlSource = it }
             raw.clip = true
@@ -405,16 +436,45 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         input.renderEffect = requireNotNull(atlas.composeControlSceneEffect)
         // HWUI's image-filter input subset is the logical RenderNode size. Keep every
         // input plane available; clip only its output when packing the consumer input.
+        // Extending the private input subset to the 64-pixel hardware backing keeps one
+        // Skia GrTextureEffect domain variant across warmup and every animation size.
         val fieldRect = atlas.controlFieldPlane?.sceneRect
         val inputSize = IntSize(maxOf(supportSize.width, fieldRect?.right ?: 0),
             maxOf(supportSize.height, fieldRect?.bottom ?: 0))
-        record(input, inputSize) { drawControlInputs(this, atlas, sceneInput = true) }
+        val sceneRecordSize = if (fullHardwareBacking) inputSize.withFullHardwareBacking() else inputSize
+        record(input, sceneRecordSize) { drawControlInputs(this, atlas, sceneInput = true) }
         recordedControl = atlas
     }
 
     fun drawControlPlanes(scope: DrawScope, atlas: NativeGlassMipAtlas) = with(scope) {
         if (atlas.controlScenePlane == null) {
             drawControlBlurAtlas(this, atlas)
+            return@with
+        }
+        val consumer = atlas.controlConsumerPacking
+        if (consumer != null) {
+            // Sampled-scene Tab consumers read only the raw backdrop, precomposed scene, and optional
+            // field plane; omit portal/blur copies and crop outer padding outside consumer support.
+            val raw = if (atlas.controlBlurPlane != null) {
+                if (atlas.controlUnwarpedBlurSource) requireNotNull(controlSource) else retained[0]
+            } else requireNotNull(controlSource)
+            val inset = consumer.cropInset.toFloat()
+            val rawRect = consumer.rawRect
+            clipRect(rawRect.left.toFloat(), rawRect.top.toFloat(), rawRect.right.toFloat(), rawRect.bottom.toFloat()) {
+                translate(rawRect.left - inset, rawRect.top - inset) { drawLayer(raw) }
+            }
+            val sceneRect = consumer.sceneRect
+            clipRect(sceneRect.left.toFloat(), sceneRect.top.toFloat(), sceneRect.right.toFloat(), sceneRect.bottom.toFloat()) {
+                translate(sceneRect.left - inset, sceneRect.top - inset) { drawLayer(requireNotNull(sceneInput)) }
+            }
+            atlas.controlFieldPlane?.let { plane ->
+                val rect = plane.consumerRect
+                translate(rect.left.toFloat(), rect.top.toFloat()) {
+                    clipRect(0f, 0f, rect.width.toFloat(), rect.height.toFloat()) {
+                        drawLayer(requireNotNull(fieldLayer))
+                    }
+                }
+            }
             return@with
         }
         drawControlInputs(this, atlas)
@@ -450,11 +510,12 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         atlas: NativeGlassMipAtlas,
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
+        fullHardwareBacking: Boolean = false,
     ) {
         recordedPyramid = null
         val plane = requireNotNull(atlas.controlBlurPlane)
         if (atlas.controlUnwarpedBlurSource) {
-            recordControlUnwarpedBlur(atlas, record, sourceBlock)
+            recordControlUnwarpedBlur(atlas, record, sourceBlock, fullHardwareBacking)
             return
         }
         check(atlas.producerStages.size in 3..4)
@@ -496,6 +557,7 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         atlas: NativeGlassMipAtlas,
         record: (GraphicsLayer, IntSize, DrawScope.() -> Unit) -> Unit,
         sourceBlock: DrawScope.() -> Unit,
+        fullHardwareBacking: Boolean = false,
     ) {
         check(atlas.producerStages.size == 2)
         val plane = requireNotNull(atlas.controlBlurPlane)
@@ -509,14 +571,18 @@ internal class NativeGlassAtlasPasses(private val context: GraphicsContext) {
         var environment: RecordingContext? = null
         // RuntimeShader inputs are clipped to their owner's logical bounds. H therefore
         // retains the complete raw plane; the shader writes only the quarter-sized result.
-        record(stages[0], atlas.baseSize) {
+        // Extending both Gaussian stages to the 64-pixel hardware backing avoids duplicate
+        // Skia GrTextureEffect subset/exact pipeline compiles when heights cross multiples of 64.
+        val stage0Size = if (fullHardwareBacking) atlas.baseSize.withFullHardwareBacking() else atlas.baseSize
+        record(stages[0], stage0Size) {
             environment = recordingContext()
             clipRect(0f, 0f, atlas.baseSize.width.toFloat(), atlas.baseSize.height.toFloat()) { drawLayer(raw) }
         }
         val planeSize = IntSize(plane.width, plane.height)
+        val stage1Size = if (fullHardwareBacking) planeSize.withFullHardwareBacking() else planeSize
         if (recordedControl !== atlas || controlInput !== stages[0] || controlOutput !== stages[1] ||
             controlContext != environment || environment?.hardware != true) {
-            record(stages[1], planeSize) {
+            record(stages[1], stage1Size) {
                 clipRect(0f, 0f, plane.width.toFloat(), plane.height.toFloat()) { drawLayer(stages[0]) }
             }
         }

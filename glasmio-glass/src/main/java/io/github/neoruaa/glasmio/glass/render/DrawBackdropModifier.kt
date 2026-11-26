@@ -700,11 +700,14 @@ private class DrawBackdropNode(
                 val context = requireGraphicsContext()
                 val passes = atlasPasses ?: NativeGlassAtlasPasses(context).also { atlasPasses = it }
                 val previous = if (mipAtlas?.hasControlPlanes == true) {
+                    val controlFullBacking = effectScope.nativeGlassHardwareRendering &&
+                        android.os.Build.VERSION.SDK_INT >= 36
                     passes.recordControlPlanes(mipAtlas,
                         record = { target, targetSize, block ->
                             recordLayer(this@DrawBackdropNode, target, targetSize, block)
                         },
-                        sourceBlock = if (source != null) recordBackdropFromLuminanceBlock else recordBackdropBlock)
+                        sourceBlock = if (source != null) recordBackdropFromLuminanceBlock else recordBackdropBlock,
+                        fullHardwareBacking = controlFullBacking)
                     null
                 } else if (mipAtlas != null && opticalStage != null) {
                     passes.recordTwoRatePyramid(

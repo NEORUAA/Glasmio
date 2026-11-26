@@ -30,6 +30,7 @@ import io.github.neoruaa.glasmio.glass.render.optics.glassCornerRadii
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.max
 
 /**
@@ -150,34 +151,60 @@ fun BackdropEffectScope.nativeControlLens(
     } else if (producesBlur) nativeControlLensReferenceProducer(style, liftProgress) else null
     val precomposedScene = !fullyResting && !small
     val separateSceneOutput = precomposedScene && scope.supportsNativeControlLensPlaneStages
-    val sceneTop = base.height * 2 + blurredSize.height
+    val builtInConsumer = scope.supportsNativeControlLensConsumerSharing
+    val sampledTabConsumer = tab && separateSceneOutput && builtInConsumer
+    val blurPlaneHeight = if (producesBlur) blurredSize.height else 0
+    val sceneTop = base.height * 2 + blurPlaneHeight
     val sceneSize = IntSize(ceil(base.width / scope.samplingScale).toInt(),
         ceil(base.height / scope.samplingScale).toInt())
     val rects = if (knownRestingThumb) listOf(IntRect(0, 0, base.width, base.height)) else listOf(
         IntRect(0, 0, base.width, base.height), IntRect(0, base.height, base.width, base.height * 2),
-        IntRect(0, base.height * 2, blurredSize.width, sceneTop)) +
+        IntRect(0, base.height * 2, if (producesBlur) blurredSize.width else 0, sceneTop)) +
         if (precomposedScene) listOf(IntRect(0, sceneTop, sceneSize.width, sceneTop + sceneSize.height)) else emptyList()
     val stages = (producerStages.takeIf { it.isNotEmpty() } ?: listOfNotNull(producer)).toMutableList()
     val storageSize = if (knownRestingThumb) base else IntSize(
         if (precomposedScene) max(base.width, sceneSize.width) else base.width,
         sceneTop + if (precomposedScene) sceneSize.height else 0)
+    val guard = ceil(25.dp.toPx() / scope.samplingScale)
+    val sceneSupportMargin = guard * scope.samplingScale + height / 19f * opticalProgress * 2f + 4f
+    val consumerPacking = if (sampledTabConsumer) {
+        val cropInset = if (scope.samplingScale == 1f) {
+            floor((padding - sceneSupportMargin).coerceAtLeast(0f)).toInt()
+                .coerceAtMost(minOf((base.width - 2) / 2, (base.height - 2) / 2).coerceAtLeast(0))
+        } else 0
+        val consumerBase = IntSize(base.width - cropInset * 2, base.height - cropInset * 2)
+        val consumerScene = if (cropInset > 0) consumerBase else sceneSize
+        val rawRect = IntRect(0, 0, consumerBase.width, consumerBase.height)
+        val sceneRect = IntRect(0, consumerBase.height, consumerScene.width, consumerBase.height + consumerScene.height)
+        NativeControlConsumerPacking(
+            baseSize = consumerBase,
+            cropInset = cropInset,
+            rawRect = rawRect,
+            sceneRect = sceneRect,
+            storageSize = IntSize(max(rawRect.right, sceneRect.right), sceneRect.bottom),
+        )
+    } else null
     val corners = glassCornerRadii(shape, size, layoutDirection, this)
     val fieldPlane = if (tab && !fullyResting && !small && separateSceneOutput &&
         scope.supportsNativeControlLensConsumerSharing && scope.supportsNativeGlassHardwareLinearSampling &&
         scope.nativeGlassHardwareRendering && scope.samplingScale == 1f) {
-        scope.nativeControlLensFieldPlane(shape, size, corners, density, padding, opticalProgress,
-            base, sceneTop, requireNotNull(rects.getOrNull(3)), storageSize)
+        scope.nativeControlLensFieldPlane(
+            shape, size, corners, density, padding, opticalProgress,
+            base, sceneTop, requireNotNull(rects.getOrNull(3)), storageSize,
+            fieldSourceMargin = sceneSupportMargin,
+            consumerSceneBottom = consumerPacking?.sceneRect?.bottom ?: requireNotNull(rects.getOrNull(3)).bottom,
+            consumerStorageSize = consumerPacking?.storageSize ?: storageSize,
+        )
     } else null
-    val atlas = NativeGlassMipAtlas(base, fieldPlane?.consumerSize ?: storageSize, rects,
+    val atlas = NativeGlassMipAtlas(base, fieldPlane?.consumerSize ?: consumerPacking?.storageSize ?: storageSize, rects,
         producer, scope.colorManagedNativeGlass,
         producerStages = stages,
         controlBlurPlane = rects.getOrNull(2).takeIf { planeOnlyBlur && stagedBlur },
         controlScenePlane = rects.getOrNull(3).takeIf { separateSceneOutput },
+        controlConsumerPacking = consumerPacking,
         controlFieldPlane = fieldPlane,
         controlUnwarpedBlurSource = fusedExtract,
         allowHardwareLinearSampling = scope.supportsNativeGlassHardwareLinearSampling)
-    val builtInConsumer = scope.supportsNativeControlLensConsumerSharing
-    val sampledTabConsumer = tab && separateSceneOutput && builtInConsumer
     val sampledField = fieldPlane != null
     val uniformRoundedTab = sampledTabConsumer && !sampledField && corners[0] > .000001f &&
         corners.all { it == corners[0] }
@@ -192,19 +219,22 @@ fun BackdropEffectScope.nativeControlLens(
             hardwareLinear = scope.supportsNativeGlassHardwareLinearSampling)
     }
     fun configureLens(shader: android.graphics.RuntimeShader, highlight: Boolean, scenePass: Boolean = false) {
-        atlas.configure(shader)
+        if (!scenePass && consumerPacking != null) {
+            consumerPacking.configure(shader)
+            shader.setFloatUniform("lensOrigin", padding - consumerPacking.cropInset, padding - consumerPacking.cropInset)
+        } else {
+            atlas.configure(shader)
+            shader.setFloatUniform("lensOrigin", padding, padding)
+        }
         shader.setFloatUniform("size", size.width, size.height)
         shader.setFloatUniform("cornerRadii", corners)
         fieldPlane?.configure(shader, scenePass)
         if (scenePass && tab && builtInConsumer && separateSceneOutput) {
             // The consumer is bounded in physical pixels. Keep every possible color
             // sample, including the original seven chromatic rays and bilinear neighbors.
-            val guard = ceil(25.dp.toPx() / scope.samplingScale)
-            val margin = guard * scope.samplingScale + height / 19f * opticalProgress * 2f + 4f
-            shader.setFloatUniform("lensSceneSupport", padding - margin, padding - margin,
-                padding + size.width + margin, padding + size.height + margin)
+            shader.setFloatUniform("lensSceneSupport", padding - sceneSupportMargin, padding - sceneSupportMargin,
+                padding + size.width + sceneSupportMargin, padding + size.height + sceneSupportMargin)
         }
-        shader.setFloatUniform("lensOrigin", padding, padding)
         shader.setFloatUniform("lensDensity", density)
         shader.setFloatUniform("lensScale", scope.samplingScale)
         shader.setFloatUniform("lensSmall", if (small) 1f else 0f)
@@ -234,8 +264,8 @@ fun BackdropEffectScope.nativeControlLens(
             NativeControlLensShadowFillCache()
         }.resolve(if (tint.isSpecified) tint else Color.Black) else NativeControlLensBlackShadow
         shader.setFloatUniform("lensShadowColor", shadowColor)
-        val idleMatrix = if (isDark) NativeTabIdleDark else NativeTabIdleLight
-        for (row in 0..2) shader.setFloatUniform("lensIdleRow$row", idleMatrix.copyOfRange(row * 4, row * 4 + 4))
+        val idleRows = if (isDark) NativeTabIdleDarkRows else NativeTabIdleLightRows
+        for (row in 0..2) shader.setFloatUniform("lensIdleRow$row", idleRows[row])
         if (highlight) NativeVibrantColorMatrix.RegularHighlight.configure(shader::setFloatUniform)
     }
     if (precomposedScene) {
@@ -260,7 +290,6 @@ fun BackdropEffectScope.nativeControlLens(
     fun snapshotConsumer(shader: android.graphics.RuntimeShader): RenderEffect {
         configureLens(shader, highlight = !fullyResting)
         scope.materializeNativeGlassAtlas(atlas)
-        val guard = ceil(25.dp.toPx() / scope.samplingScale)
         scope.materialOutputOrigin = Offset(guard, guard)
         scope.materialOutputSize = IntSize(ceil(scope.fullSize.width + guard * 2f).toInt(), ceil(scope.fullSize.height + guard * 2f).toInt())
         scope.nativeMaterialCompleted = true
@@ -511,15 +540,15 @@ internal fun nativeControlLensShadowFill(
     return output
 }
 
-private val NativeTabIdleLight = floatArrayOf(
-    1.1850999594f, -.0502000004f, -.0049999999f, -.1999999881f,
-    -.0148999998f, 1.1498999596f, -.0050999997f, -.1999999881f,
-    -.0148999998f, -.0499999970f, 1.1948999166f, -.1999999881f,
+private val NativeTabIdleLightRows = arrayOf(
+    floatArrayOf(1.1850999594f, -.0502000004f, -.0049999999f, -.1999999881f),
+    floatArrayOf(-.0148999998f, 1.1498999596f, -.0050999997f, -.1999999881f),
+    floatArrayOf(-.0148999998f, -.0499999970f, 1.1948999166f, -.1999999881f),
 )
-private val NativeTabIdleDark = floatArrayOf(
-    1.1297999620f, -.2360999882f, -.0236999989f, -.0700000003f,
-    -.0700999945f, .9639999866f, -.0237999987f, -.0700000003f,
-    -.0701999962f, -.2360000014f, 1.1761999130f, -.0700000003f,
+private val NativeTabIdleDarkRows = arrayOf(
+    floatArrayOf(1.1297999620f, -.2360999882f, -.0236999989f, -.0700000003f),
+    floatArrayOf(-.0700999945f, .9639999866f, -.0237999987f, -.0700000003f),
+    floatArrayOf(-.0701999962f, -.2360000014f, 1.1761999130f, -.0700000003f),
 )
 
 /** Role structure removes unreachable geometry; identity channels use the owned linear sampler. */

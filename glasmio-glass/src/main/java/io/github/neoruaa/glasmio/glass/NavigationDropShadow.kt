@@ -93,7 +93,7 @@ class NavigationDropShadowRenderer(
     }
     private val nativeShaders = mutableMapOf<String?, RuntimeShader>()
     private val useNativeShader = useNativeProfile && isRuntimeShaderSupported()
-    private val nativePaint = if (useNativeShader) Paint(Paint.ANTI_ALIAS_FLAG) else null
+    private val nativePaint = if (useNativeShader) Paint() else null
     private var outlinePath = android.graphics.Path()
     private var key: GeometryKey? = null
     private var blurDensity = Float.NaN
@@ -297,7 +297,13 @@ class NavigationDropShadowRenderer(
             recording.scale(renderScale, renderScale)
             recording.translate(padding, padding)
             if (nativePaint != null) {
-                recording.drawRect(-padding, -padding, size.width + padding, size.height + padding, nativePaint)
+                recording.drawRect(
+                    -padding,
+                    -padding,
+                    -padding + requiredWidth / renderScale,
+                    -padding + requiredHeight / renderScale,
+                    nativePaint,
+                )
             } else recording.drawPath(outlinePath, fill)
         } finally {
             mask.endRecording()

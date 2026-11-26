@@ -62,6 +62,9 @@ internal fun BackdropEffectScopeImpl.nativeControlLensFieldPlane(
     sceneTop: Int,
     scene: IntRect,
     storageSize: IntSize,
+    fieldSourceMargin: Float = sourcePadding,
+    consumerSceneBottom: Int = scene.bottom,
+    consumerStorageSize: IntSize = storageSize,
 ): NativeControlLensFieldPlane? {
     if (shape !is Capsule && shape !is ContinuousRoundedRectangle) return null
     if (!nativeGlassHardwareRendering || samplingScale != 1f) return null
@@ -69,13 +72,14 @@ internal fun BackdropEffectScopeImpl.nativeControlLensFieldPlane(
         surfaceSize.width <= 0f || surfaceSize.height <= 0f ||
         !sourceDensity.isFinite() || sourceDensity <= 0f ||
         !sourcePadding.isFinite() || sourcePadding < 0f ||
+        !fieldSourceMargin.isFinite() || fieldSourceMargin < 0f ||
         !opticalProgress.isFinite() || opticalProgress < 0f || corners.size != 4) return null
     val radius = corners[0]
     if (!radius.isFinite() || radius < 0f || corners.any { it != radius }) return null
     val inner = -.15f * surfaceSize.height * opticalProgress
     val portal = -.2f * surfaceSize.height * opticalProgress
     val support = max(8f * sourceDensity, max(abs(inner), abs(portal) + 7f * sourceDensity * opticalProgress)) + 1f
-    val margin = sourcePadding + support + 1f
+    val margin = minOf(sourcePadding, fieldSourceMargin) + support + 1f
     val width = ceil(surfaceSize.width + margin * 2f)
     val height = ceil(surfaceSize.height + margin * 2f)
     if (!support.isFinite() || !margin.isFinite() || !width.isFinite() || !height.isFinite() ||
@@ -91,15 +95,15 @@ internal fun BackdropEffectScopeImpl.nativeControlLensFieldPlane(
     val distanceRange = ceil(2f * (max(surfaceSize.width, surfaceSize.height) + margin + 1f))
     if (!distanceRange.isFinite() || distanceRange <= 0f) return null
     val sceneRect = IntRect(0, sceneTop, extent.width, sceneTop + extent.height)
-    val consumerRect = IntRect(0, scene.bottom, extent.width, scene.bottom + extent.height)
-    val consumerSize = IntSize(max(storageSize.width, consumerRect.right), max(storageSize.height, consumerRect.bottom))
+    val consumerRect = IntRect(0, consumerSceneBottom, extent.width, consumerSceneBottom + extent.height)
+    val consumerSize = IntSize(max(consumerStorageSize.width, consumerRect.right), max(consumerStorageSize.height, consumerRect.bottom))
     val sceneInputSize = IntSize(max(base.width, sceneRect.right), max(sceneTop, sceneRect.bottom))
     if (consumerSize.width > 4096 || consumerSize.height > 4096 ||
         sceneInputSize.width > 4096 || sceneInputSize.height > 4096 ||
         consumerSize.width.toLong() * consumerSize.height > 8_388_608L ||
         sceneInputSize.width.toLong() * sceneInputSize.height > 8_388_608L) return null
     val origin = Offset(-margin, -margin)
-    val key = NativeControlLensFieldKey(surfaceSize, radius, sourceDensity, sourcePadding,
+    val key = NativeControlLensFieldKey(surfaceSize, radius, sourceDensity, minOf(sourcePadding, fieldSourceMargin),
         support, extent, origin, distanceRange, sceneRect, consumerRect)
     val producer = obtainRuntimeShader("Glasmio.ControlLens.fieldPlane.producer",
         GlassSdfShader + NativeControlLensFieldProducerMain).asAndroidRuntimeShader()
