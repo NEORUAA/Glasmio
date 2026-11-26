@@ -505,7 +505,7 @@ private class SharedGlassBackdrop(
         if (ready != null) {
             with(ready) { drawBackdrop(density, coordinates, layerBlock) }
         } else {
-            with(base) { drawBackdrop(density, coordinates, layerBlock) }
+            if (base !== source) with(base) { drawBackdrop(density, coordinates, layerBlock) }
             with(sample(density, coordinates, 0f)) { drawBackdrop(density, coordinates, layerBlock) }
         }
     }
@@ -519,7 +519,7 @@ private class SharedGlassBackdrop(
         if (ready != null) {
             with(ready) { drawViewport(density, coordinates, viewport) }
         } else {
-            with(base) { drawBackdrop(density, coordinates, null) }
+            if (base !== source) with(base) { drawBackdrop(density, coordinates, null) }
             with(sample(density, coordinates, viewport.top)) { drawBackdrop(density, coordinates, null) }
         }
     }

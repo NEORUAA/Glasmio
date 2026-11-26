@@ -22,7 +22,11 @@ internal object HeaderSprings {
 }
 
 /** Exact damped oscillator integration; retargeting preserves both position and velocity. */
-internal class HeaderTrack(initial: Float) {
+internal class HeaderTrack(
+    initial: Float,
+    private val positionTolerance: Float = .001f,
+    private val velocityTolerance: Float = .015f,
+) {
     var value by mutableFloatStateOf(initial)
         private set
     var velocity = 0f
@@ -30,7 +34,7 @@ internal class HeaderTrack(initial: Float) {
     var target = initial
     var spring = HeaderSprings.geometry
     var delay = 0f
-    val settled get() = abs(value - target) < .0005f && abs(velocity) < .005f && delay <= 0f
+    val settled get() = abs(value - target) < positionTolerance && abs(velocity) < velocityTolerance && delay <= 0f
 
     fun snap(value: Float, velocity: Float = 0f) {
         this.value = value

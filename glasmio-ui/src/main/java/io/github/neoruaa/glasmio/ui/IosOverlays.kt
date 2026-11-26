@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -91,13 +92,20 @@ internal fun GlasmioSheetSurface(
     glassFractionProvider: (() -> Float)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    val resolvedGlassFraction = glassFractionProvider?.invoke() ?: glassFraction
     val materialContext = rememberGlassMaterialContext(inheritLuminance = false)
     val colors = materialContext.colors
     val appearance = LocalGlassAppearance.current
+    val opaqueSheet by remember(glassFractionProvider, glassFraction, appearance.usesBackdrop) {
+        derivedStateOf {
+            !appearance.usesBackdrop || (glassFractionProvider?.invoke() ?: glassFraction) <= 0.001f
+        }
+    }
     val inheritedMaterial = LocalIosSheetMaterialContext.current
         ?: IosSheetMaterialContext(
-            colors.isDark, if (resolvedGlassFraction >= 0.5f) 1f else 0f,
+            colors.isDark,
+            if (glassFractionProvider != null) {
+                if (opaqueSheet) 0f else 1f
+            } else if (glassFraction >= 0.5f) 1f else 0f,
             LocalGlasmioSheetGroupedListStyle.current,
         )
     val resolvedMaterial = if (materialContext.adaptive) inheritedMaterial.copy(isDark = materialContext.isDark) else inheritedMaterial
@@ -106,7 +114,7 @@ internal fun GlasmioSheetSurface(
     val secondaryContent = if (colors.secondaryContent == semanticDefaults.secondaryContent)
         contentMaterial.secondaryLabelColor else colors.secondaryContent
     val materialBackdrop = rememberLayerBackdrop()
-    val glass = resolvedGlassFraction.coerceIn(0f, 1f)
+    val staticGlass = glassFraction.coerceIn(0f, 1f)
     val systemBackground = if (materialContext.isDark) Color(0xFF1C1C1E) else Color.White
     val innerShadows = rememberNavigationInnerShadows(true)
     val animationScope = rememberCoroutineScope()
@@ -134,27 +142,39 @@ internal fun GlasmioSheetSurface(
     } else {
         emptyBackdrop()
     }
+    val liveOverlayColor: (() -> Color)? = remember(glassFractionProvider, appearance.usesBackdrop, systemBackground) {
+        if (appearance.usesBackdrop && glassFractionProvider != null) {
+            {
+                val g = glassFractionProvider().coerceIn(0f, 1f)
+                if (g < 1f) systemBackground.copy(alpha = 1f - g) else Color.Transparent
+            }
+        } else null
+    }
     Box(
         modifier
             .fillMaxWidth()
                 .navigationGlassBackground(
                     backdrop = backdropRenderer,
                     shape = shapeProvider,
-                    containerColor = if (appearance.reduceTransparency) systemBackground else colors.container,
+                    containerColor = if (appearance.reduceTransparency || opaqueSheet) systemBackground else colors.container,
+                    containerAlphaMultiplier = if (opaqueSheet) 1f else 1.25f,
                     navigationMaterial = true,
                     innerShadows = innerShadows,
                     isDark = colors.isDark,
                     materialContext = materialContext,
                     appearance = appearance,
                     material = NavigationGlassMaterial.RegularLarge,
-                    exportedBackdrop = materialBackdrop,
+                    sampleBackdrop = !opaqueSheet,
+                    exportedBackdrop = if (contentMaterial.vibrancy > 0f && !opaqueSheet) materialBackdrop else null,
                     pressProgressState = pressProgress,
-                    highlightAlphaMultiplier = glass,
-                    innerShadowAlpha = glass,
-                    materialPaintAlpha = glass,
-                    overlayColor = if (appearance.usesBackdrop && glass < 1f) {
-                        systemBackground.copy(alpha = 1f - glass)
+                    highlightAlphaMultiplier = if (opaqueSheet) 0f else staticGlass,
+                    innerShadowAlpha = if (opaqueSheet) 0f else staticGlass,
+                    materialPaintAlpha = if (opaqueSheet) 0f else staticGlass,
+                    overlayColor = if (appearance.usesBackdrop && !opaqueSheet && glassFractionProvider == null && staticGlass < 1f) {
+                        systemBackground.copy(alpha = 1f - staticGlass)
                     } else Color.Transparent,
+                    glassFractionProvider = if (!opaqueSheet) glassFractionProvider else null,
+                    overlayColorProvider = if (!opaqueSheet) liveOverlayColor else null,
                     layerBlock = sheetLayerBlock,
                 )
                 .then(if (interactive) activeInteractiveHighlight.modifier else Modifier)

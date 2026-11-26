@@ -568,15 +568,15 @@ private data class LayerKey(val action: Any, val visual: Any)
 private class HeaderLayer(var action: GlasmioHeaderAction, visible: Float) {
     var content = action.content
     val visibility = HeaderTrack(visible)
-    val x = HeaderTrack(0f)
+    val x = HeaderTrack(0f, positionTolerance = .1f, velocityTolerance = 1f)
     var width = 0
     var positioned = false
 }
 private class HeaderGroupPresentation {
-    val width = HeaderTrack(0f)
+    val width = HeaderTrack(0f, positionTolerance = .1f, velocityTolerance = 1f)
     val presence = HeaderTrack(0f)
     val pulse = HeaderPulse()
-    val kick = HeaderTrack(0f)
+    val kick = HeaderTrack(0f, positionTolerance = .1f, velocityTolerance = 1f)
     var kickRequested = false
     var returnIn = 0f
     val layers = linkedMapOf<LayerKey, HeaderLayer>()
@@ -797,6 +797,7 @@ private fun HeaderGroup(
     var structureRevision by remember { mutableIntStateOf(0) }
     var motionRevision by remember { mutableIntStateOf(0) }
     var widthRevision by remember { mutableIntStateOf(0) }
+    var placementRevision by remember { mutableIntStateOf(0) }
     var layoutRevision by remember { mutableIntStateOf(0) }
     val targetActions = to?.actions.orEmpty()
     val fromKeys = from?.actions.orEmpty().map { LayerKey(it.key, it.visualKey) }
@@ -845,9 +846,14 @@ private fun HeaderGroup(
         do {
             withFrameNanos { now ->
                 val prevWidth = state.width.value.roundToInt()
+                var prevXHash = 1
+                state.layers.values.forEach { prevXHash = prevXHash * 31 + it.x.value.roundToInt() }
                 val removed = state.tick(now, reduced.value)
                 motionRevision++
                 if (state.width.value.roundToInt() != prevWidth) widthRevision++
+                var nextXHash = 1
+                state.layers.values.forEach { nextXHash = nextXHash * 31 + it.x.value.roundToInt() }
+                if (removed || nextXHash != prevXHash) placementRevision++
                 if (removed || (state.initialized && state.settled && state.presence.target == 0f)) {
                     structureRevision++
                 }
@@ -1063,7 +1069,7 @@ private fun HeaderGroup(
             layer to placeable
         }
         layout(state.width.value.roundToInt().coerceIn(0, constraints.maxWidth), height.roundToInt()) {
-            motionRevision
+            placementRevision
             visualPlaceables.forEachIndexed { index, placeable ->
                 val layer = layerEntries[index].second
                 placeable.placeRelative(layer.x.value.roundToInt(), 0)

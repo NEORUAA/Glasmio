@@ -412,7 +412,8 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
                 nativeGlassAtlasColorFunctions(atlas.colorManaged) +
                 NativeTwoRateCompletionSamplingFunctions +
                 (if (!atlas.colorManaged && stageBTopology.hasPressGlow) GlassColorSpaceShaderFunctions else "") +
-                nativeGlassCompletionShader(stageBTopology, twoRateSample = true)
+                nativeGlassCompletionShader(stageBTopology, twoRateSample = true,
+                    customShadowDistance = functions.contains("navigationGlassShadowDistance("))
         }
         val stageBShader = obtainRuntimeShader(
             "Glasmio.NativeAtlas.twoRateComplete.${atlas.colorManaged}.${stageBTopology.cacheKey}.${functions.hashCode()}",
@@ -457,7 +458,11 @@ private fun BackdropEffectScope.nativeAtlasNavigationFilter(
             atlas.samplingFunctions + NativeAtlasMaterialFunctions + if (completionTopology == null) NativeAtlasMaterialMain
         else (if (!atlas.colorManaged && !atlas.nativeGammaStorage && completionTopology.hasPressGlow)
             GlassColorSpaceShaderFunctions else "") +
-            nativeGlassCompletionShader(completionTopology, if (shareOptics) NativeAtlasOpticalStage else "")
+            nativeGlassCompletionShader(
+                completionTopology,
+                sharedOpticalStage = shareOptics,
+                customShadowDistance = functions.contains("navigationGlassShadowDistance("),
+            )
     }
     val shader = obtainRuntimeShader("Glasmio.NativeAtlas.material.${atlas.colorManaged}.${atlas.nativeGammaStorage}.${completion != null}.${completionTopology?.cacheKey ?: 0}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
         program).asAndroidRuntimeShader()
@@ -625,19 +630,15 @@ internal val OrdinaryAtlasCompletion = NativeGlassCompletionTopology(
 )
 
 // A negative last level identifies the retained pair. Each member has a full base grid.
-// Optical draws still use hardware-linear mips; the stored completion uses four manual taps.
+// Share the hardware-linear sampler across regular mips and stored-pair levels.
 private fun buildRetainedCompletionProgram(samplingFunctions: String): String =
     nativeGlassCompletionFieldFunctions(NativeDefaultFieldShader) + samplingFunctions +
-        NativeAtlasMaterialFunctions + NativeStoredPairHardwareLinear + """
+        NativeAtlasMaterialFunctions + """
 float4 nativeStoredOrOptical(float2 coordinate, float3 field) {
-    if (nativeAtlasLastLevel < 0.0) return nativeStoredPairBilinear(coordinate, nativeAtlasRects[1]);
+    if (nativeAtlasLastLevel < 0.0) return nativeAtlasBilinear(coordinate, 1);
     return nativeAtlasFiltered(coordinate, field);
 }
-float4 nativeStoredOrOriginal(float2 coordinate) {
-    if (nativeAtlasLastLevel < 0.0) return nativeStoredPairBilinear(coordinate, nativeAtlasRects[0]);
-    return nativeAtlasBilinear(coordinate, 0);
-}
-""" + nativeGlassCompletionShader(OrdinaryAtlasCompletion, NativeAtlasOpticalStage, retainedPair = true)
+""" + nativeGlassCompletionShader(OrdinaryAtlasCompletion, retainedPair = true, sharedOpticalStage = true, customShadowDistance = false)
 
 internal val NativeRetainedCompletionProgram: String by lazy {
     buildRetainedCompletionProgram(nativeRegularHardwareSdrSampling)

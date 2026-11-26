@@ -336,6 +336,38 @@ private const val NativeGlassCompletionShapeWithShadow = """    if (coordinate.x
     }
 """
 
+private const val NativeGlassCompletionShapeWithShadowUnified = """    if (coordinate.x < 0.0 || coordinate.y < 0.0 ||
+        coordinate.x >= nativeOutputSize.x + nativeOutputOrigin.x * 2.0 ||
+        coordinate.y >= nativeOutputSize.y + nativeOutputOrigin.y * 2.0) return half4(0.0);
+    float2 p = coordinate - nativeOutputOrigin;
+    float3 rawShapeField = float3(0.0);
+    float3 field = float3(0.0);
+    float coverage = 0.0;
+    float key = 0.0;
+    float ring = 0.0, shadow = 0.0;
+    bool needsRing = false, needsShadow = false;
+    // Single navigationGlassShapeField call site keeps the SDF tree from being inlined twice.
+    for (int sp = 0; sp < 2; ++sp) {
+        float2 query = (sp == 0 ? p : p - float2(0.0, nativeShadow.z)) * nativeOutputScale;
+        float3 sampled = navigationGlassShapeField(query);
+        if (sp == 0) {
+            rawShapeField = sampled;
+            field = float3(rawShapeField.x / nativeOutputScale, rawShapeField.yz);
+            coverage = nativeGlassShapeCoverage(field, 1.0);
+            key = coverage < 1.0 && nativeEdgeAlpha > 0.0
+                ? nativeGlassStrokeKeyFill(field, nativeOutputDensity, 1.0, nativeKeyThreshold) * nativeEdgeAlpha : 0.0;
+            needsRing = coverage > 0.0 && nativeClearFraction < 1.0 && nativeEdgeAlpha > 0.0 &&
+                field.x >= -36.0 * nativeOutputDensity;
+            needsShadow = nativeShadow.x > 0.0 && nativeShadow.y > 0.0;
+            if (!needsRing && !needsShadow) break;
+        } else {
+            float dist = sampled.x / nativeOutputScale;
+            if (needsRing) ring = nativeGlassRingCoverage(dist, coverage, nativeOutputDensity, nativeClearFraction) * nativeEdgeAlpha;
+            if (needsShadow) shadow = nativeGaussianTail(dist / nativeShadow.x) * nativeShadow.y;
+        }
+    }
+"""
+
 private const val NativeGlassCompletionShapeWithoutShadow = """    if (coordinate.x < 0.0 || coordinate.y < 0.0 ||
         coordinate.x >= nativeOutputSize.x + nativeOutputOrigin.x * 2.0 ||
         coordinate.y >= nativeOutputSize.y + nativeOutputOrigin.y * 2.0) return half4(0.0);
@@ -362,6 +394,65 @@ private const val NativeGlassCompletionShapeWithoutShadow = """    if (coordinat
             ring = nativeGlassRingCoverage(sampled.x / nativeOutputScale, coverage, nativeOutputDensity, nativeClearFraction) * nativeEdgeAlpha;
         }
     }
+"""
+
+private const val NativeGlassCompletionSharedOpticalMainPrefix = """    bool opticalOnly = nativeOutputScale < 0.0;
+    if (opticalOnly) {
+        if (coordinate.x < 0.0 || coordinate.y < 0.0 || coordinate.x >= nativeAtlasBaseSize.x
+            || coordinate.y >= nativeAtlasBaseSize.y) return half4(0.0);
+    } else if (coordinate.x < 0.0 || coordinate.y < 0.0 ||
+        coordinate.x >= nativeOutputSize.x + nativeOutputOrigin.x * 2.0 ||
+        coordinate.y >= nativeOutputSize.y + nativeOutputOrigin.y * 2.0) return half4(0.0);
+    float2 p = coordinate - nativeOutputOrigin;
+    float3 rawShapeField = float3(0.0);
+    float3 field = float3(0.0);
+    float coverage = 0.0;
+    float key = 0.0;
+    float ring = 0.0;
+    // Single navigationGlassShapeField call site shared by optical-only and completion modes.
+    for (int sp = 0; sp < 2; ++sp) {
+        float2 query = opticalOnly ? (coordinate - captureOrigin)
+            : (sp == 0 ? p : p - float2(0.0, 8.0 * nativeOutputDensity)) * nativeOutputScale;
+        float3 sampled = navigationGlassShapeField(query);
+        if (sp == 0) {
+            rawShapeField = sampled;
+            if (opticalOnly) break;
+            field = float3(rawShapeField.x / nativeOutputScale, rawShapeField.yz);
+            coverage = nativeGlassShapeCoverage(field, 1.0);
+            key = coverage < 1.0 && nativeEdgeAlpha > 0.0
+                ? nativeGlassStrokeKeyFill(field, nativeOutputDensity, 1.0, nativeKeyThreshold) * nativeEdgeAlpha : 0.0;
+            bool needsRing = coverage > 0.0 && nativeClearFraction < 1.0 && nativeEdgeAlpha > 0.0 &&
+                field.x >= -36.0 * nativeOutputDensity;
+            if (!needsRing) break;
+        } else {
+            ring = nativeGlassRingCoverage(sampled.x / nativeOutputScale, coverage, nativeOutputDensity, nativeClearFraction) * nativeEdgeAlpha;
+        }
+    }
+    if (!opticalOnly && coverage <= 0.0 && key <= .000001 && ring <= .000001) return half4(0.0);
+    float2 samplePoint = opticalOnly ? coordinate : nativeTextureOrigin + p * nativeOutputScale;
+    float4 filtered = float4(0.0);
+    if (opticalOnly || coverage > 0.0) filtered = """
+
+private const val NativeGlassCompletionSharedOpticalArguments = """(samplePoint,
+        navigationGlassOpticalFieldFromShape(opticalOnly ? (coordinate - captureOrigin) : p * nativeOutputScale, rawShapeField));
+    float4 originalRaw = float4(0.0);
+    float4 completed = filtered;
+    if (!opticalOnly) {
+        float tintMask = 0.0;
+        float highlightMask = nativeTopHighlight.x > 0.0 && -field.x < 8.0 * nativeOutputDensity + 1.0
+            ? nativeCasdfHighlightCoverage(field.x, field.yz, nativeOutputDensity,
+                nativeTopHighlight.y, .75) * nativeTopHighlight.x : 0.0;
+        float3 original = float3(0.0);
+        if (coverage != 1.0 || filtered.a != 1.0 || highlightMask > 0.0 || key > .000001) {
+            originalRaw = nativeAtlasBilinear(samplePoint, 0);
+            original = nativeAtlasFlush(originalRaw.rgb / max(originalRaw.a, .000001));
+        }
+        if (coverage <= 0.0) filtered = float4(original, 1.0);
+        completed = nativeCompletionAppearance(filtered, original,
+            coverage, key, ring, tintMask, highlightMask, false, false);
+    }
+    return half4(nativeAtlasEncodeRelative(completed, originalRaw));
+}
 """
 
 private const val NativeGlassCompletionSourceShadowBlock = """
@@ -465,6 +556,8 @@ internal fun nativeGlassCompletionShader(topology: NativeGlassCompletionTopology
     opticalStage: String = "",
     retainedPair: Boolean = false,
     twoRateSample: Boolean = false,
+    sharedOpticalStage: Boolean = false,
+    customShadowDistance: Boolean = true,
 ): String {
     val sourceFace = if (topology.hasSourceRecipe) {
         val face = if (topology.hasSourceAppearance) "source_navigationMaterialFaceRawForAppearance(sampled, sourceAlternate)"
@@ -492,7 +585,7 @@ internal fun nativeGlassCompletionShader(topology: NativeGlassCompletionTopology
     } else {
         "filtered, original,\n        coverage, key, ring, tintMask, highlightMask"
     }
-    return navigationMaterialNativeShaderFunctions(
+    val header = navigationMaterialNativeShaderFunctions(
         topology.hasTargetFills,
         hasAppearance = topology.hasTargetAppearance,
         hasTint = topology.hasTargetTintMatrix,
@@ -515,9 +608,19 @@ float4 nativeCompletionTint(float4 destination, float3 original, float mask, flo
         : $targetTint;
 }
 """ + (if (needsTintMask) NativeGlassCompletionTintMask else "") +
-        (if (hasShadow) NativeGlassCompletionShaderBodyPrefix else NativeGlassCompletionShaderBodyPrefixWithoutShadow) +
+        (if (hasShadow) NativeGlassCompletionShaderBodyPrefix else NativeGlassCompletionShaderBodyPrefixWithoutShadow)
+    if (sharedOpticalStage && !hasShadow && !needsTintMask && !topology.hasPressGlow &&
+        !topology.hasTargetAppearance && !topology.hasSourceRecipe
+    ) {
+        return header + NativeGlassCompletionSharedOpticalMainPrefix +
+            (if (retainedPair) "nativeStoredOrOptical" else "nativeAtlasFiltered") +
+            NativeGlassCompletionSharedOpticalArguments
+    }
+    val shapeWithShadow = if (customShadowDistance) NativeGlassCompletionShapeWithShadow
+        else NativeGlassCompletionShapeWithShadowUnified
+    return header +
         opticalStage +
-        (if (hasShadow) NativeGlassCompletionShapeWithShadow else NativeGlassCompletionShapeWithoutShadow) +
+        (if (hasShadow) shapeWithShadow else NativeGlassCompletionShapeWithoutShadow) +
         (if (hasShadow && topology.hasSourceShadow) NativeGlassCompletionSourceShadowBlock else "") +
         (if (hasShadow) NativeGlassCompletionShaderBodySuffixWithShadow else NativeGlassCompletionShaderBodySuffixWithoutShadow) +
         (if (twoRateSample) "nativeTwoRateFiltered(samplePoint);\n"
@@ -527,7 +630,6 @@ float4 nativeCompletionTint(float4 destination, float3 original, float mask, flo
         else "    float tintMask = 0.0;\n") +
         (if (hasShadow) NativeGlassCompletionAfterTintMask else NativeGlassCompletionAfterTintMaskWithoutShadow) +
         (if (twoRateSample) "nativeTwoRateOriginal(samplePoint)"
-         else if (retainedPair) "nativeStoredOrOriginal(samplePoint)"
          else "nativeAtlasBilinear(samplePoint, 0)") +
         (if (hasShadow) NativeGlassCompletionOriginalSuffixWithShadow else NativeGlassCompletionOriginalSuffixWithoutShadow) +
         buildString {

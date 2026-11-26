@@ -1219,11 +1219,23 @@ float4 nativeAtlasEncodeRelative(float4 relative, float4 backdrop) { return rela
 private const val NativeAtlasManagedEncodeFunctions = """
 float4 nativeAtlasEncode(float4 value) { return glassNativeGammaToWorkingPremul(value); }
 float4 nativeAtlasEncodeRelative(float4 relative, float4 backdrop) {
-    if (relative.a == 1.0) return nativeAtlasEncode(relative);
-    // A signed backdrop-relative operator is not a color under a nonlinear transform.
-    float4 actual = relative + backdrop * (1.0 - relative.a);
-    float4 actualWorking = nativeAtlasEncode(actual);
-    float4 backdropWorking = nativeAtlasEncode(backdrop);
+    // Share one managed encode site across the opaque, actual and backdrop paths.
+    bool singlePass = relative.a == 1.0 ||
+        (backdrop.r == 0.0 && backdrop.g == 0.0 && backdrop.b == 0.0 && backdrop.a == 0.0);
+    float4 actualWorking = float4(0.0);
+    float4 backdropWorking = float4(0.0);
+    for (int i = 0; i < 2; ++i) {
+        float4 sampleInput = i == 0
+            ? (singlePass ? relative : relative + backdrop * (1.0 - relative.a))
+            : backdrop;
+        float4 encoded = nativeAtlasEncode(sampleInput);
+        if (i == 0) {
+            if (singlePass) return encoded;
+            actualWorking = encoded;
+        } else {
+            backdropWorking = encoded;
+        }
+    }
     return float4(actualWorking.rgb - backdropWorking.rgb * (1.0 - relative.a), relative.a);
 }
 """
@@ -1528,6 +1540,7 @@ private val NativeAtlasRegularSamplingFunctions: Array<Array<Lazy<String>>> by l
     val lookup = """
 float4 nativeAtlasRect(int level) {
     if (level == 0) return nativeAtlasRects[0];
+    if (level == 1 && nativeAtlasLastLevel < 0.0) return nativeAtlasRects[1];
     if (level < 0 || float(level) > nativeAtlasLastLevel) return float4(0.0);
     float scale = exp2(-float(level));
     // For integer extents and level >= 1, the half-texel guard preserves the exact floor

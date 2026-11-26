@@ -84,6 +84,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.conditionalLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.backdrops.rememberLayerBackdrop
 import io.github.neoruaa.glasmio.glass.render.drawDirectBackdrop
 import io.github.neoruaa.glasmio.glass.render.drawPlainBackdrop
@@ -566,7 +567,12 @@ fun GlasmioBottomSheet(
                                 Box(Modifier.fillMaxWidth()) {
                                     Box(
                                         (if (contentSized) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
-                                            .then(if (appearance.usesBackdrop) Modifier.glassBackdropSource(chromeBackdrop, maxCaptureHeight = headerHeight + 48.dp) else Modifier)
+                                            .conditionalLayerBackdrop(
+                                                chromeBackdrop,
+                                                captureEnabled = appearance.usesBackdrop,
+                                                maxCaptureHeight = headerHeight + 48.dp,
+                                                reuseContent = true,
+                                            )
                                             .trackBackdropPosition(chromeBackdrop),
                                     ) {
                                         Box(
