@@ -176,9 +176,13 @@ fun LiquidMenuMorphSurface(
             drawCache.recordedSource = retainedPortal
             drawCache.recordedSourceBounds = crop
         }
-        sourceContents.renderEffect = if (frame.sourceBlur > 0.01f) RenderEffect.createBlurEffect(
-            frame.sourceBlur, frame.sourceBlur, Shader.TileMode.CLAMP,
-        ).asComposeRenderEffect() else null
+        sourceContents.renderEffect = if (frame.sourceBlur > 0.01f) {
+            createAnimatedBlurComposeRenderEffect(
+                frame.sourceBlur,
+                Shader.TileMode.CLAMP,
+                androidx.compose.ui.geometry.Size(sourceContents.size.width.toFloat(), sourceContents.size.height.toFloat()),
+            )
+        } else null
         sourceContents.alpha = frame.sourceOpacity
         withTransform({
             translate(target.center.x, target.center.y)
@@ -418,6 +422,9 @@ fun LiquidMenuMorphSurface(
                             maxOf(old.right, needed.right), maxOf(old.bottom, needed.bottom),
                         )
                         drawCache.foregroundCapture = capture
+                        // Bound RuntimeShader RenderEffects (portal blur + warp) to the padded
+                        // capture rectangle so Skia never allocates full-window intermediates.
+                        foreground.clip = true
                         foreground.record(IntSize(ceil(capture.width).toInt(), ceil(capture.height).toInt())) {
                             withTransform({ translate(-capture.left, -capture.top) }) {
                                 this@drawWithContent.drawContent()
@@ -439,9 +446,8 @@ fun LiquidMenuMorphSurface(
                         bindLiquidMenuField(portal, fieldTexture)
                         val warp = RenderEffect.createRuntimeShaderEffect(portal, "content")
                         foreground.renderEffect = (if (frame.portalBlur > 0.01f) {
-                            RenderEffect.createChainEffect(warp, RenderEffect.createBlurEffect(
-                                frame.portalBlur, frame.portalBlur, Shader.TileMode.DECAL,
-                            ))
+                            val portalBlurEffect = createAnimatedBlurRenderEffect(frame.portalBlur, Shader.TileMode.DECAL)
+                            if (portalBlurEffect != null) RenderEffect.createChainEffect(warp, portalBlurEffect) else warp
                         } else warp).asComposeRenderEffect()
                         withTransform({ translate(capture.left, capture.top) }) { drawLayer(foreground) }
                     }
@@ -468,9 +474,9 @@ fun LiquidMenuMorphSurface(
                 translationY = bounds.top + bounds.height * 0.5f * (1f - frame.contentZoom)
                 alpha = frame.contentProgress
                 val blur = frame.contentBlur
+                clip = blur > 0.01f
                 renderEffect = if (blur > 0.01f) {
-                    RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP)
-                        .asComposeRenderEffect()
+                    createAnimatedBlurComposeRenderEffect(blur, Shader.TileMode.CLAMP, size)
                 } else null
             }.padding(10.dp).then(contentModifier),
         ) {

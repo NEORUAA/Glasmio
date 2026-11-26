@@ -22,6 +22,7 @@ import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.node.GlobalPositionAwareModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.invalidateDraw
+import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -57,9 +58,10 @@ fun Modifier.conditionalLayerBackdrop(
     backdrop: LayerBackdrop,
     captureEnabled: Boolean,
     maxCaptureHeight: Dp = Dp.Unspecified,
+    reuseContent: Boolean = false,
 ): Modifier = this then LayerBackdropElement(
     backdrop,
-    reuseContent = false,
+    reuseContent = reuseContent,
     captureEnabled = captureEnabled,
     maxCaptureHeight = maxCaptureHeight,
 )
@@ -117,6 +119,7 @@ private class LayerBackdropNode(
 ) : DrawModifierNode, GlobalPositionAwareModifierNode, Modifier.Node() {
 
     private var registeredLayer: GraphicsLayer? = null
+    private var contentLayer: GraphicsLayer? = null
 
     fun updateBackdrop(value: LayerBackdrop) {
         if (backdrop === value) return
@@ -154,15 +157,33 @@ private class LayerBackdropNode(
         }
         val layer = backdrop.graphicsLayer
         if (maxCaptureHeight.value.isFinite()) {
-            drawContent()
             val full = size.toIntSize()
-            if (full.width > 0 && full.height > 0) {
+            val canReuse = reuseContent && backdrop.recordsContent && CaptureOwners[layer]?.size == 1
+            if (canReuse && full.width > 0 && full.height > 0) {
+                // Record the full page display list once, replay on screen, and feed the capped
+                // scroll-edge blur backdrop from the same live display list without executing
+                // every child DrawModifierNode twice per frame.
+                val cached = contentLayer ?: requireGraphicsContext().createGraphicsLayer().also { contentLayer = it }
+                recordLayer(this@LayerBackdropNode, cached) { backdrop.onDraw(this@draw) }
+                drawLayer(cached)
                 val maxHeightPx = ceil(maxCaptureHeight.toPx()).toInt().coerceAtLeast(1)
                 val captureSize = IntSize(full.width, minOf(full.height, maxHeightPx))
                 layer.clip = true
                 recordLayer(this@LayerBackdropNode, layer, captureSize) {
                     clipRect(0f, 0f, captureSize.width.toFloat(), captureSize.height.toFloat()) {
-                        backdrop.onDraw(this@draw)
+                        drawLayer(cached)
+                    }
+                }
+            } else {
+                drawContent()
+                if (full.width > 0 && full.height > 0) {
+                    val maxHeightPx = ceil(maxCaptureHeight.toPx()).toInt().coerceAtLeast(1)
+                    val captureSize = IntSize(full.width, minOf(full.height, maxHeightPx))
+                    layer.clip = true
+                    recordLayer(this@LayerBackdropNode, layer, captureSize) {
+                        clipRect(0f, 0f, captureSize.width.toFloat(), captureSize.height.toFloat()) {
+                            backdrop.onDraw(this@draw)
+                        }
                     }
                 }
             }
@@ -191,6 +212,10 @@ private class LayerBackdropNode(
     }
 
     override fun onDetach() {
+        contentLayer?.let {
+            requireGraphicsContext().releaseGraphicsLayer(it)
+            contentLayer = null
+        }
         unregisterCapture()
         backdrop.clearRecordingCoordinates()
     }

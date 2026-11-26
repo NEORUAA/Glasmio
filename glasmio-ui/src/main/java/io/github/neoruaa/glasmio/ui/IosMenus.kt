@@ -439,12 +439,13 @@ fun GlasmioContextMenu(
             // Keep the transition RenderEffect on the stable Popup host. A blur modifier
             // creates a bounded layer even with Unbounded edge treatment, so it must stay
             // outside the spring-sized menu to avoid exposing a menu-sized rectangle.
-            .blur(
-                if (morphMotion == null) (8.dp * (1f - progress)).coerceAtLeast(0.dp) else 0.dp,
-                BlurredEdgeTreatment.Unbounded,
-            )
             .graphicsLayer {
                 alpha = if (morphMotion != null && (!morphMotion.initialized || !morphSourceAcquired)) 0f else menuAlpha.coerceIn(0f, 1f)
+                val blurPx = if (morphMotion == null) (8.dp * (1f - progress)).coerceAtLeast(0.dp).toPx() else 0f
+                clip = blurPx > 0.01f
+                renderEffect = if (blurPx > 0.01f) {
+                    createAnimatedBlurComposeRenderEffect(blurPx, android.graphics.Shader.TileMode.DECAL)
+                } else null
             },
     ) {
         Box(

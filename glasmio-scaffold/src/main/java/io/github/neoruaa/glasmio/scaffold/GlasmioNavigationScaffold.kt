@@ -534,7 +534,7 @@ fun GlasmioPageBody(
     Box(modifier.fillMaxSize()) {
         Box(
             Modifier.fillMaxSize()
-                .conditionalLayerBackdrop(pageBackdrop, captureEnabled, maxCaptureHeight)
+                .conditionalLayerBackdrop(pageBackdrop, captureEnabled, maxCaptureHeight, reuseContent = backdrop == null)
                 .trackBackdropPosition(pageBackdrop),
         ) {
             Box(
@@ -585,7 +585,7 @@ private class HeaderGroupPresentation {
     var signature: List<LayerKey>? = null
     var lastTick = 0L
     var durationScale = 1f
-    fun tick(now: Long, reduced: Boolean) {
+    fun tick(now: Long, reduced: Boolean): Boolean {
         // The shared Compose frame clock is monotonic. Navigation playTimeNanos is a seek
         // coordinate (and may ease or reverse), so it must never be integrated as elapsed time.
         val dt = (if (lastTick == 0L) 0f else (now - lastTick) / 1e9f / durationScale.coerceAtLeast(.01f)).coerceIn(0f, 1f)
@@ -602,7 +602,7 @@ private class HeaderGroupPresentation {
             if (returnIn <= 0f) { kick.target = 0f; kick.spring = HeaderSprings.returning; kick.delay = 0f }
         }
         layers.values.forEach { it.visibility.advance(dt, reduced); it.x.advance(dt, reduced) }
-        layers.entries.removeAll { it.value.visibility.target == 0f && it.value.visibility.settled }
+        return layers.entries.removeAll { it.value.visibility.target == 0f && it.value.visibility.settled }
     }
     val settled get() = width.settled && presence.settled && pulse.settled && kick.settled && returnIn <= 0f && layers.values.all { it.visibility.settled && it.x.settled }
 }
@@ -794,7 +794,9 @@ private fun HeaderGroup(
     progress: Float, tracking: Boolean, onEndpoints: (Int, Int) -> Unit, onGone: () -> Unit,
 ) {
     val state = remember { HeaderGroupPresentation() }
-    var revision by remember { mutableIntStateOf(0) }
+    var structureRevision by remember { mutableIntStateOf(0) }
+    var motionRevision by remember { mutableIntStateOf(0) }
+    var widthRevision by remember { mutableIntStateOf(0) }
     var layoutRevision by remember { mutableIntStateOf(0) }
     val targetActions = to?.actions.orEmpty()
     val fromKeys = from?.actions.orEmpty().map { LayerKey(it.key, it.visualKey) }
@@ -841,81 +843,166 @@ private fun HeaderGroup(
         state.durationScale = scale
         reduced.value = scale == 0f
         do {
-            withFrameNanos { now -> state.tick(now, reduced.value); revision++ }
+            withFrameNanos { now ->
+                val prevWidth = state.width.value.roundToInt()
+                val removed = state.tick(now, reduced.value)
+                motionRevision++
+                if (state.width.value.roundToInt() != prevWidth) widthRevision++
+                if (removed || (state.initialized && state.settled && state.presence.target == 0f)) {
+                    structureRevision++
+                }
+            }
         } while (!state.settled)
         state.lastTick = 0L
     }
-    revision // Recompose shell, foreground and geometry from one presentation frame.
+    structureRevision // Recompose only on layer membership or exit completion; continuous motion stays in draw/placement.
     val layerEntries = state.layers.toList()
+    val hitActions = owner?.actions ?: (to ?: from ?: fallback).actions
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
     val pointLimit = with(density) { 16.dp.toPx() }
     val height = with(density) { 44.dp.toPx() }
-    val presence = state.presence.value.coerceIn(0f, 1f)
-    val sx = if (reduced.value) 1f else state.pulse.scale(state.width.value, pointLimit, true)
-    val sy = if (reduced.value) 1f else state.pulse.scale(height, pointLimit, false)
-    val appearScale = if (reduced.value) 1f else 1.2f - .2f * presence
     val search = owner?.search
     val searchOwnsSurface by remember(search) {
         derivedStateOf { search != null && (search.configuration.value.active || search.progress.value > 0f) }
+    }
+    val presentationBoundsProvider = remember(state, height) {
+        {
+            motionRevision
+            Rect(0f, 0f, state.width.value.coerceAtLeast(0f), height)
+        }
+    }
+    val presentationTransformProvider = remember(state, height, pointLimit, direction, reduced) {
+        {
+            motionRevision
+            val presence = state.presence.value.coerceIn(0f, 1f)
+            val sx = if (reduced.value) 1f else state.pulse.scale(state.width.value, pointLimit, true)
+            val sy = if (reduced.value) 1f else state.pulse.scale(height, pointLimit, false)
+            val appearScale = if (reduced.value) 1f else 1.2f - .2f * presence
+            val xScale = sx * appearScale
+            val yScale = sy * appearScale
+            ToolbarActionTransform(
+                xScale,
+                yScale,
+                state.width.value * (1f - xScale) / 2f + (if (reduced.value) 0f else state.kick.value * if (direction == LayoutDirection.Rtl) -1f else 1f),
+                height * (1f - yScale) / 2f,
+            )
+        }
     }
     GlasmioToolbarActionHost(
         modifier = Modifier.testTag("GlasmioHeaderGroup:${fallback.key}")
             .onGloballyPositioned { coordinates -> search?.sourceBounds = coordinates.boundsInWindow() }
             .then(if (searchOwnsSurface) Modifier.clearAndSetSemantics {} else Modifier)
             .graphicsLayer {
-            alpha = if (searchOwnsSurface) 0f else presence
-            // Group opacity allocates an offscreen layer. Preserve the enlarged shell and
-            // its shadow outside the layout slot throughout appearance and disappearance.
-            outsets = LayerOutsets(64.dp, 64.dp, 64.dp, 64.dp)
-        },
+                motionRevision
+                alpha = if (searchOwnsSurface) 0f else state.presence.value.coerceIn(0f, 1f)
+                // Group opacity allocates an offscreen layer. Preserve the enlarged shell and
+                // its shadow outside the layout slot throughout appearance and disappearance.
+                outsets = LayerOutsets(64.dp, 64.dp, 64.dp, 64.dp)
+            },
         style = (owner ?: to ?: from ?: fallback).style,
-        presentationBounds = { Rect(0f, 0f, state.width.value.coerceAtLeast(0f), height) },
-        presentationTransform = {
-            val xScale = sx * appearScale
-            val yScale = sy * appearScale
-            ToolbarActionTransform(xScale, yScale,
-                state.width.value * (1f - xScale) / 2f + (if (reduced.value) 0f else state.kick.value * if (direction == LayoutDirection.Rtl) -1f else 1f),
-                height * (1f - yScale) / 2f)
-        },
+        presentationBounds = presentationBoundsProvider,
+        presentationTransform = presentationTransformProvider,
     ) {
     val toolbarGroup = LocalIosToolbarActionGroup.current
-    SubcomposeLayout { constraints ->
-        revision // Observe all physical tracks in measurement and drawing in the same frame.
-        val visualPlaceables = layerEntries.map { (identity, layer) ->
-            subcompose(identity) {
-                val foreground = rememberGraphicsLayer()
-                val recorded = remember { booleanArrayOf(false) }
-                Box(Modifier
-                    .defaultMinSize(minWidth = 44.dp).height(44.dp).padding(horizontal = 10.dp)
-                    .graphicsLayer {
-                        val member = toolbarGroup?.members?.firstOrNull()
-                        if (member != null) {
-                            val x = if (direction == LayoutDirection.Rtl) state.width.value - layer.x.value - layer.width else layer.x.value
-                            toolbarGroup.applyTransform(this, Rect(x, 0f, x + layer.width, height), toolbarGroup.pressTransform(member))
+    val visualCount = layerEntries.size
+    Layout(
+        content = {
+            layerEntries.forEach { (identity, layer) ->
+                key("vis", identity) {
+                    val foreground = rememberGraphicsLayer()
+                    val recorded = remember { booleanArrayOf(false) }
+                    val blurPadPx = with(density) { 32.dp.roundToPx() }
+                    Box(Modifier
+                        .defaultMinSize(minWidth = 44.dp).height(44.dp).padding(horizontal = 10.dp)
+                        .graphicsLayer {
+                            motionRevision
+                            val member = toolbarGroup?.members?.firstOrNull()
+                            if (member != null) {
+                                val x = if (direction == LayoutDirection.Rtl) state.width.value - layer.x.value - layer.width else layer.x.value
+                                toolbarGroup.applyTransform(this, Rect(x, 0f, x + layer.width, height), toolbarGroup.pressTransform(member))
+                            }
                         }
-                    }
-                    .graphicsLayer {
-                        // RenderEffect also needs room for the glyph's blur outside its slot.
-                        outsets = LayerOutsets(32.dp, 32.dp, 32.dp, 32.dp)
-                        val p = layer.visibility.value
-                        alpha = p.coerceIn(0f, 1f)
-                        scaleX = if (reduced.value) 1f else .2f + .8f * p
-                        scaleY = if (reduced.value) 1f else .2f + .8f * p
-                        val blur = if (reduced.value) 0f else 10.dp.toPx() * (1f - p).coerceIn(0f, 1f)
-                        renderEffect = if (blur > .01f) RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.DECAL).asComposeRenderEffect() else null
-                    }.drawWithContent {
-                        if (!recorded[0] || layer.visibility.target > 0f) {
-                            foreground.record { this@drawWithContent.drawContent() }
-                            recorded[0] = true
+                        .graphicsLayer {
+                            motionRevision
+                            val p = layer.visibility.value
+                            alpha = p.coerceIn(0f, 1f)
+                            scaleX = if (reduced.value) 1f else .2f + .8f * p
+                            scaleY = if (reduced.value) 1f else .2f + .8f * p
+                        }.drawWithContent {
+                            motionRevision
+                            val p = layer.visibility.value
+                            val blur = if (reduced.value) 0f else 10.dp.toPx() * (1f - p).coerceIn(0f, 1f)
+                            val pad = if (blur > .01f) blurPadPx else 0
+                            val targetSize = IntSize(
+                                size.width.roundToInt().coerceAtLeast(1) + pad * 2,
+                                size.height.roundToInt().coerceAtLeast(1) + pad * 2,
+                            )
+                            if (!recorded[0] || layer.visibility.target > 0f || foreground.size != targetSize) {
+                                // Clip the padded icon buffer so the RuntimeShader blur stays bounded
+                                // to ~350x350 instead of expanding to the full screen.
+                                foreground.clip = pad > 0
+                                foreground.record(size = targetSize) {
+                                    if (pad > 0) {
+                                        drawContext.transform.translate(pad.toFloat(), pad.toFloat())
+                                        try {
+                                            this@drawWithContent.drawContent()
+                                        } finally {
+                                            drawContext.transform.translate(-pad.toFloat(), -pad.toFloat())
+                                        }
+                                    } else {
+                                        this@drawWithContent.drawContent()
+                                    }
+                                }
+                                recorded[0] = true
+                            }
+                            foreground.renderEffect = if (blur > .01f) {
+                                createAnimatedBlurComposeRenderEffect(blur, Shader.TileMode.DECAL)
+                            } else null
+                            if (pad > 0) {
+                                drawContext.transform.translate(-pad.toFloat(), -pad.toFloat())
+                                try {
+                                    drawLayer(foreground)
+                                } finally {
+                                    drawContext.transform.translate(pad.toFloat(), pad.toFloat())
+                                }
+                            } else {
+                                drawLayer(foreground)
+                            }
+                        }.clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
+                        CompositionLocalProvider(LocalSfToolbarSymbols provides true, LocalGlassContentColor provides LocalGlassColors.current.content) {
+                            layer.content()
                         }
-                        drawLayer(foreground)
-                    }.clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
-                    CompositionLocalProvider(LocalSfToolbarSymbols provides true, LocalGlassContentColor provides LocalGlassColors.current.content) {
-                        layer.content()
                     }
                 }
-            }.single().measure(if (layer.visibility.target == 0f && layer.width > 0) {
+            }
+            hitActions.forEach { action ->
+                key("hit", action.key) {
+                    val ownsInteraction = owner?.actions?.any { it.key == action.key } == true &&
+                        !searchOwnsSurface
+                    GlassSurface(
+                        modifier = Modifier.fillMaxSize()
+                            .then(
+                                if (ownsInteraction) {
+                                    action.menuAnchor?.let { anchor ->
+                                        Modifier.glasmioMenuAnchor(anchor, action.onClick.takeIf { action.enabled })
+                                    } ?: Modifier
+                                } else Modifier,
+                            )
+                            .then(if (ownsInteraction) Modifier else Modifier.clearAndSetSemantics {}),
+                        style = GlassSurfaceStyle.Navigation,
+                        enabled = ownsInteraction && action.enabled,
+                        onClick = if (ownsInteraction) action.onClick else null,
+                    ) {
+                        if (ownsInteraction) Box(Modifier.matchParentSize().semantics { contentDescription = action.contentDescription })
+                    }
+                }
+            }
+        },
+    ) { measurables, constraints ->
+        widthRevision // Re-measure only when the rounded pill width actually changes or structure recomposes.
+        val visualPlaceables = layerEntries.mapIndexed { index, (identity, layer) ->
+            measurables[index].measure(if (layer.visibility.target == 0f && layer.width > 0) {
                 Constraints.fixed(layer.width, height.roundToInt())
             } else Constraints(maxWidth = constraints.maxWidth, maxHeight = height.roundToInt()))
                 .also { layer.width = it.width; state.measuredWidths[identity] = it.width }
@@ -968,37 +1055,22 @@ private fun HeaderGroup(
             state.initialized = true
         }
         if (layoutChanged) layoutRevision++
-        val hitActions = owner?.actions ?: (to ?: from ?: fallback).actions
-        val hits = hitActions.map { action ->
+        val hitPlaceables = hitActions.mapIndexed { index, action ->
             val layer = state.layers[LayerKey(action.key, action.visualKey)]
-            val ownsInteraction = owner?.actions?.any { it.key == action.key } == true &&
-                !searchOwnsSurface
-            val hit = subcompose("hit" to action.key) {
-                GlassSurface(
-                    modifier = Modifier.fillMaxSize()
-                        .then(
-                            if (ownsInteraction) {
-                                action.menuAnchor?.let { anchor ->
-                                    Modifier.glasmioMenuAnchor(anchor, action.onClick.takeIf { action.enabled })
-                                } ?: Modifier
-                            } else Modifier,
-                        )
-                        .then(if (ownsInteraction) Modifier else Modifier.clearAndSetSemantics {}),
-                    style = GlassSurfaceStyle.Navigation,
-                    enabled = ownsInteraction && action.enabled,
-                    onClick = if (ownsInteraction) action.onClick else null,
-                ) {
-                    if (ownsInteraction) Box(Modifier.matchParentSize().semantics { contentDescription = action.contentDescription })
-                }
-            }.single().measure(Constraints.fixed(layer?.width ?: 44.dp.roundToPx(), height.roundToInt()))
-            (layer?.x?.value ?: 0f) to hit
+            val placeable = measurables[visualCount + index].measure(
+                Constraints.fixed(layer?.width ?: 44.dp.roundToPx(), height.roundToInt()),
+            )
+            layer to placeable
         }
         layout(state.width.value.roundToInt().coerceIn(0, constraints.maxWidth), height.roundToInt()) {
+            motionRevision
             visualPlaceables.forEachIndexed { index, placeable ->
                 val layer = layerEntries[index].second
                 placeable.placeRelative(layer.x.value.roundToInt(), 0)
             }
-            hits.forEach { (x, placeable) -> placeable.placeRelative(x.roundToInt(), 0) }
+            hitPlaceables.forEach { (layer, placeable) ->
+                placeable.placeRelative((layer?.x?.value ?: 0f).roundToInt(), 0)
+            }
         }
     }
     }

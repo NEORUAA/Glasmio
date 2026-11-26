@@ -60,6 +60,7 @@ import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.icons.SfIcon
 import io.github.neoruaa.glasmio.glass.GlassSurface
 import io.github.neoruaa.glasmio.glass.GlassSurfaceStyle
+import io.github.neoruaa.glasmio.glass.createAnimatedBlurComposeRenderEffect
 import io.github.neoruaa.glasmio.glass.LiquidContactCapsule
 import io.github.neoruaa.glasmio.glass.LocalBlurBackdrop
 import io.github.neoruaa.glasmio.glass.LocalBottomControlContact
@@ -143,8 +144,15 @@ internal fun GlasmioMessageReactionBar(
             ) {
                 Row(
                     Modifier.fillMaxWidth().height(pillHeight.dp)
-                        .graphicsLayer { alpha = progress[MessageContextMotion.Channel.Content.ordinal].coerceIn(0f, 1f) }
-                        .blur((3f * (1f - progress[MessageContextMotion.Channel.Content.ordinal]).coerceIn(0f, 1f)).dp, BlurredEdgeTreatment.Unbounded)
+                        .graphicsLayer {
+                            val p = progress[MessageContextMotion.Channel.Content.ordinal].coerceIn(0f, 1f)
+                            alpha = p
+                            val blurPx = (3f * (1f - p)).dp.toPx()
+                            clip = blurPx > 0.01f
+                            renderEffect = if (blurPx > 0.01f) {
+                                createAnimatedBlurComposeRenderEffect(blurPx, android.graphics.Shader.TileMode.DECAL)
+                            } else null
+                        }
                         .horizontalScroll(rememberScrollState()).padding(horizontal = (10.12f * scale).dp),
                     horizontalArrangement = Arrangement.spacedBy((5f * scale).dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -179,11 +187,15 @@ internal fun GlasmioMessageReactionBar(
                 Box(
                     Modifier.offset { IntOffset(with(density) { (geometry.emoji.x - 22f).dp.roundToPx() }, with(density) { (geometry.emoji.y - 22f).dp.roundToPx() }) }
                         .size(44.dp).clip(CircleShape)
-                        .blur((3f * (1f - progress[MessageContextMotion.Channel.EmojiBlur.ordinal]).coerceIn(0f, 1f)).dp, BlurredEdgeTreatment.Unbounded)
                         .graphicsLayer {
                             val p = progress[MessageContextMotion.Channel.EmojiSize.ordinal]
                             scaleX = (.5f + .5f * p).coerceAtLeast(0f); scaleY = scaleX
                             alpha = progress[MessageContextMotion.Channel.EmojiAlpha.ordinal].coerceIn(0f, 1f)
+                            val blurPx = (3f * (1f - progress[MessageContextMotion.Channel.EmojiBlur.ordinal]).coerceIn(0f, 1f)).dp.toPx()
+                            clip = blurPx > 0.01f
+                            renderEffect = if (blurPx > 0.01f) {
+                                createAnimatedBlurComposeRenderEffect(blurPx, android.graphics.Shader.TileMode.DECAL)
+                            } else null
                         }
                         .then(if (onMoreReactions != null) Modifier.clickable(enabled = expanded, role = Role.Button, onClickLabel = "More reactions", onClick = onMoreReactions).semantics { contentDescription = "More reactions" } else Modifier),
                     contentAlignment = Alignment.Center,

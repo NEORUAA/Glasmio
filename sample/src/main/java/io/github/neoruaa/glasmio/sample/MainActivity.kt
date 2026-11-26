@@ -334,9 +334,16 @@ private fun SampleNavigation(
 ) {
     val layoutDirection = LocalLayoutDirection.current
     val navigationDensity = LocalDensity.current.density
+    val topLevelKeys = rememberSaveable(
+        saver = listSaver<Map<String, String>, String>(
+            save = { map -> map.entries.flatMap { listOf(it.key, it.value) } },
+            restore = { list -> list.chunked(2).associate { (k, v) -> k to v } },
+        ),
+    ) { topLevelRoutes.associateWith { sampleEntryKey(it) } }
+    val retainedTopLevelKeys = remember(topLevelKeys) { topLevelKeys.values.toSet() }
     val backStack = rememberSaveable(
         saver = listSaver<SnapshotStateList<String>, String>(save = { it.toList() }, restore = { it.toMutableStateList() }),
-    ) { mutableStateListOf(sampleEntryKey("Home")) }
+    ) { mutableStateListOf(topLevelKeys.getValue("Home")) }
     val homeListState = rememberLazyListState()
     val materialsListState = rememberLazyListState()
     val settingsListState = rememberLazyListState()
@@ -379,8 +386,8 @@ private fun SampleNavigation(
     val selectTab: (String) -> Unit = { route ->
         if (backStack.lastOrNull()?.sampleRouteName() != route) {
             backStack.clear()
-            backStack.add(sampleEntryKey("Home"))
-            if (route != "Home") backStack.add(sampleEntryKey(route))
+            backStack.add(topLevelKeys.getValue("Home"))
+            if (route != "Home") backStack.add(topLevelKeys[route] ?: sampleEntryKey(route))
         }
     }
     val navigationBackdrop = rememberLayerBackdrop()
@@ -396,7 +403,7 @@ private fun SampleNavigation(
     }
     SideEffect {
         val frame = headerMotion.frame.value
-        headerEntries.keys.retainAll(backStack.toSet() + setOf(frame.fromEntryKey, frame.toEntryKey))
+        headerEntries.keys.retainAll(backStack.toSet() + retainedTopLevelKeys + setOf(frame.fromEntryKey, frame.toEntryKey))
     }
     val bottomBackdrop = rememberSharedGlassBackdrop(navigationBackdrop, navigationBackdrop)
     val adaptiveNavigation = rememberGlasmioAdaptiveNavigationState()
@@ -479,6 +486,7 @@ private fun SampleNavigation(
                         motion = headerMotion,
                         backStack = backStack,
                         modifier = Modifier.fillMaxSize(),
+                        retainedTabKeys = retainedTopLevelKeys,
                         onBack = navigateBack,
                         transitionSpec = {
                             if (usesRootTabTransition()) rootTabTransition()
@@ -502,10 +510,11 @@ private fun SampleNavigation(
                                         val isTopLevel = route in topLevelRoutes
                                         val navigationInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                                         val bottomPadding = navigationInset + if (!topTabs && (isTopLevel || route == "Search")) NavigationBarSurfaceHeight + 8.dp else 0.dp
-                                        val pageBackdrop = rememberLayerBackdrop()
-                                        CompositionLocalProvider(LocalBlurBackdrop provides pageBackdrop) {
+                                        // Reuse GlasmioNavigationScaffold's navigationBackdrop directly for modal blur consumers
+                                        // instead of nesting an extra full-screen LayerBackdrop inside every page.
+                                        CompositionLocalProvider(LocalBlurBackdrop provides navigationBackdrop) {
                                             Box(Modifier.fillMaxSize()) {
-                                                Box(Modifier.fillMaxSize().glassBackdropSource(pageBackdrop).trackBackdropPosition(pageBackdrop)) {
+                                                Box(Modifier.fillMaxSize()) {
                                                     if (route == "Adaptive Glass") {
                                                         AdaptiveGlassDemo(bottomPadding)
                                                     } else if (route == "Lists") {
@@ -742,24 +751,29 @@ private fun SamplePinnedPage(
 }
 
 @Composable
-private fun SampleLargeTitle(title: String, collapse: State<Float>) {
-    SampleLargeTitle(title, collapse.value)
+private fun SampleLargeTitle(title: String, collapseProgress: Float) {
+    SampleLargeTitle(title, rememberUpdatedState(collapseProgress))
 }
 
 @Composable
-private fun SampleLargeTitle(title: String, collapseProgress: Float) {
+private fun SampleLargeTitle(title: String, collapse: State<Float>) {
     Text(
         title,
         style = IosTypography.largeTitle,
         fontWeight = FontWeight.Bold,
         modifier = Modifier.fillMaxWidth()
             .graphicsLayer {
+                val collapseProgress = collapse.value.coerceIn(0f, 1f)
                 alpha = 1f - collapseProgress
                 scaleX = 1f - 0.04f * collapseProgress
                 scaleY = scaleX
                 transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                val blurPx = 6.dp.toPx() * collapseProgress
+                clip = blurPx >= 0.5f
+                renderEffect = if (blurPx >= 0.5f) {
+                    createAnimatedBlurComposeRenderEffect(blurPx, android.graphics.Shader.TileMode.CLAMP, size)
+                } else null
             }
-            .blur(6.dp * collapseProgress)
             .offset(y = (-10).dp)
             .padding(horizontal = 4.dp, vertical = 6.dp),
     )

@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.kyant.shapes.RoundedRectangle
+import io.github.neoruaa.glasmio.glass.createAnimatedBlurComposeRenderEffect
 import io.github.neoruaa.glasmio.ui.GlasmioTabBarPresentation
 import io.github.neoruaa.glasmio.core.GlassColors
 import io.github.neoruaa.glasmio.core.GlassAppearance
@@ -83,6 +84,7 @@ internal fun TabSidebarContentPreview(
         // Keep a reference to the owned endpoint layer. Its display list can update without
         // recording this padding wrapper again for every spring frame.
         if (source != null && endpoint.width > 0 && endpoint.height > 0) {
+            rendered.clip = true
             rendered.record(size = IntSize(endpoint.width + padding * 2, endpoint.height + padding * 2)) {
                 translate(padding.toFloat(), padding.toFloat()) { drawLayer(source) }
             }
@@ -96,7 +98,7 @@ internal fun TabSidebarContentPreview(
             if (frame.width <= 0f || frame.height <= 0f) return@onDrawWithContent
             val blur = (1f - p) * with(density) { 4.dp.toPx() }
             rendered.alpha = p
-            rendered.renderEffect = if (blur > .01f) RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.DECAL).asComposeRenderEffect() else null
+            rendered.renderEffect = if (blur > .01f) createAnimatedBlurComposeRenderEffect(blur, Shader.TileMode.DECAL) else null
             val shape = RoundedRectangle(with(density) { cornerRadius().coerceAtLeast(0f).toDp() })
             val outline = shape.createOutline(Size(frame.width, frame.height), layoutDirection, density)
             clip.rewind()

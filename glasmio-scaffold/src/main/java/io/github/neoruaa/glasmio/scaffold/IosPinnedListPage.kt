@@ -320,8 +320,7 @@ fun GlasmioPinnedListPage(
                                         val blurPx = 6.dp.toPx() * collapse
                                         clip = blurPx >= 0.5f
                                         renderEffect = if (blurPx >= 0.5f) {
-                                            AndroidRenderEffect.createBlurEffect(blurPx, blurPx, Shader.TileMode.CLAMP)
-                                                .asComposeRenderEffect()
+                                            createAnimatedBlurComposeRenderEffect(blurPx, Shader.TileMode.CLAMP, size)
                                         } else null
                                     }
                                 }
