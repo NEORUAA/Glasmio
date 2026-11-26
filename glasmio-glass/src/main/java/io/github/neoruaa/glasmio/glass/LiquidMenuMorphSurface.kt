@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
@@ -217,15 +218,26 @@ fun LiquidMenuMorphSurface(
                 if (incoming.isEmpty) return@drawWithContent
                 // Only an actual glass source contributes a second material lobe.
                 // Plain controls still return their pixels through the source portal below.
-                val outgoing = frame.sourceLobe?.takeIf { sourceHasGlassBackground }?.translate(-screenOrigin)
+                val rawOutgoing = frame.sourceLobe?.takeIf { sourceHasGlassBackground }?.translate(-screenOrigin)
+                val outgoing = rawOutgoing?.takeUnless {
+                    isOutgoingBuried(it, incoming, frame.radiusX, frame.radiusY, frame.smoothing)
+                }
+                val minRadius = minOf(frame.radiusX, frame.radiusY)
+                // Skip the dense Gaussian field grid when there is no secondary glass lobe, or
+                // once a glass source orb is buried deep inside the menu and corner blur is subpixel.
+                val effectiveSmoothing = when {
+                    rawOutgoing == null -> 0f
+                    outgoing == null && frame.smoothing * frame.smoothing <= minRadius -> 0f
+                    else -> frame.smoothing
+                }
                 val worldContour = LiquidMenuContour(
                     incoming, Offset(frame.radiusX, frame.radiusY), outgoing,
-                    Offset(frame.sourceRadiusX, frame.sourceRadiusY), frame.smoothing,
+                    Offset(frame.sourceRadiusX, frame.sourceRadiusY), effectiveSmoothing,
                 )
                 val bounds = worldContour.exteriorBounds()
                 val shape = LiquidMenuContour(
                     incoming.translate(-bounds.topLeft), Offset(frame.radiusX, frame.radiusY),
-                    outgoing?.translate(-bounds.topLeft), Offset(frame.sourceRadiusX, frame.sourceRadiusY), frame.smoothing,
+                    outgoing?.translate(-bounds.topLeft), Offset(frame.sourceRadiusX, frame.sourceRadiusY), effectiveSmoothing,
                     contourWorkspace,
                 )
                 val path = contourPath.apply {
@@ -271,7 +283,10 @@ fun LiquidMenuMorphSurface(
                         Offset(frame.sourceRadiusX, frame.sourceRadiusY), null, Offset.Zero, 0f)
                     sourceShadow.draw(this, sourceShape, outgoing, alpha = 1f - frame.contentProgress)
                 }
-                fun DrawScope.drawMaterial() {
+                fun DrawScope.drawMaterial(
+                    outputAlpha: Float = 1f,
+                    directDropShadowAlpha: Float? = null,
+                ) {
                     val glowPosition = highlight.highlightPosition(size)
                     val retainedMaterialEffect = if (knownSourceMaterial == null && Build.VERSION.SDK_INT < 36 && sourceHasGlassBackground &&
                         sourceMaterialEffect != null && appearance.usesBackdrop && isRuntimeShaderSupported()) {
@@ -290,7 +305,7 @@ fun LiquidMenuMorphSurface(
                         lensBounds = incoming,
                         secondaryLensBounds = outgoing,
                         secondaryLensRadii = Offset(frame.sourceRadiusX, frame.sourceRadiusY),
-                        lensSmoothing = frame.smoothing,
+                        lensSmoothing = effectiveSmoothing,
                         menuField = fieldTexture,
                         shape = shape,
                         outlinePath = path,
@@ -315,7 +330,7 @@ fun LiquidMenuMorphSurface(
                         pressTint = highlight.materialTint,
                         pressClear = highlight.materialClear,
                         pressIsDark = context.isDark,
-                        dropShadowAlpha = if (sourceHasGlassBackground) frame.contentProgress
+                        dropShadowAlpha = directDropShadowAlpha ?: if (sourceHasGlassBackground) frame.contentProgress
                             else if (frame.contentProgress < 1f) 0f else 1f,
                         materialEffect = retainedMaterialEffect,
                         materialPaint = if (retainedMaterialEffect != null) null else if (sourceHasGlassBackground) {
@@ -350,9 +365,19 @@ fun LiquidMenuMorphSurface(
                         } else null,
                         isDark = context.isDark,
                         sampleScale = sampleScale,
+                        outputAlpha = outputAlpha,
                     )
                 }
-                if (!sourceHasGlassBackground && frame.contentProgress < 1f) {
+                if (!sourceHasGlassBackground && frame.contentProgress < 1f &&
+                    highlight.glowProgress <= 0f &&
+                    renderer.canCompleteDirectlyWithAlpha(
+                        context.isDark, drawContext.canvas.nativeCanvas.isHardwareAccelerated,
+                    )
+                ) {
+                    // Apply fade opacity directly inside the completion shader targeting the popup
+                    // window so RenderThread never compiles the menu pipeline twice across alpha=1.
+                    drawMaterial(outputAlpha = frame.contentProgress, directDropShadowAlpha = frame.contentProgress)
+                } else if (!sourceHasGlassBackground && frame.contentProgress < 1f) {
                     // Fade the plain menu as one material group; opaque completion owns
                     // its final shadow without retaining an extra full-opacity layer.
                     renderer.drawDropShadow(this, shape, bounds, frame.contentProgress)
@@ -440,7 +465,7 @@ fun LiquidMenuMorphSurface(
                         portal.setFloatUniform("secondaryCenter", second.center.x, second.center.y)
                         portal.setFloatUniform("secondaryHalfSize", second.width / 2f, second.height / 2f)
                         portal.setFloatUniform("secondaryRadii", frame.sourceRadiusX, frame.sourceRadiusY)
-                        portal.setFloatUniform("smoothing", frame.smoothing)
+                        portal.setFloatUniform("smoothing", effectiveSmoothing)
                         portal.setFloatUniform("height", frame.lensHeight)
                         portal.setFloatUniform("amount", frame.lensAmount)
                         bindLiquidMenuField(portal, fieldTexture)
@@ -483,6 +508,22 @@ fun LiquidMenuMorphSurface(
             ProvideGlassMaterialContext(context) { content(childBackdrop) }
         }
     }
+}
+
+/** Returns true when [outgoing] lies far enough inside [incoming] that union blending cannot reach it. */
+private fun isOutgoingBuried(
+    outgoing: Rect,
+    incoming: Rect,
+    radiusX: Float,
+    radiusY: Float,
+    smoothing: Float,
+): Boolean {
+    if (outgoing.isEmpty || incoming.isEmpty) return false
+    val field = RoundedMenuField(incoming, Offset(radiusX, radiusY))
+    val centerDistance = field.distance(outgoing.center.x, outgoing.center.y)
+    val halfDiagonal = kotlin.math.hypot(outgoing.width * 0.5f, outgoing.height * 0.5f)
+    val safetyMargin = halfDiagonal * field.cornerAspect + maxOf(smoothing * 4f, 4f)
+    return centerDistance <= -safetyMargin
 }
 
 /** Draw-local recordings must not invalidate composition when their capture bands grow. */

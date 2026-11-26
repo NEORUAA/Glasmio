@@ -200,7 +200,8 @@ internal fun BackdropEffectScope.completeNativeMenuFilteredGlass(
             (if (!atlas.colorManaged && !atlas.nativeGammaStorage && topology.hasPressGlow) GlassColorSpaceShaderFunctions else "") +
             NativeMenuTransitionFilteredFunctions +
             nativeGlassCompletionShader(topology,
-                customShadowDistance = functions.contains("navigationGlassShadowDistance("))
+                customShadowDistance = functions.contains("navigationGlassShadowDistance("),
+                hasOutputAlpha = true)
     }
     val shader = obtainRuntimeShader("Glasmio.NativeControl.menuComplete.${atlas.colorManaged}.${topology.cacheKey}.layout=${atlas.samplingLayoutKey}.${functions.hashCode()}",
         source).asAndroidRuntimeShader()
@@ -208,7 +209,7 @@ internal fun BackdropEffectScope.completeNativeMenuFilteredGlass(
     field.configure(shader)
     transitionRefraction.configure(shader)
     storage.materializeNativeGlassAtlas(atlas)
-    configureNativeGlassCompletion(shader, completion, storage, origin)
+    configureNativeGlassCompletion(shader, completion, storage, origin, setOutputAlpha = true)
     return RenderEffect.createRuntimeShaderEffect(shader, "content").also { renderEffect = it.asComposeRenderEffect() }
 }
 

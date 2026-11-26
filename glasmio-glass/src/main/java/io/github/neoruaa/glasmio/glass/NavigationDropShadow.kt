@@ -123,10 +123,11 @@ class NavigationDropShadowRenderer(
         alpha: Float,
         field: NativeGlassFilterField?,
         profileOverride: NativeNavigationShadowProfile? = null,
+        uniformCornerRadius: Float = Float.NaN,
     ) {
         val canvas = scope.drawContext.canvas.nativeCanvas
         if (!canvas.isHardwareAccelerated || bounds.isEmpty || alpha <= 0f) return
-        prepare(scope, shape, bounds.size, field, profileOverride)
+        prepare(scope, shape, bounds.size, field, profileOverride, uniformCornerRadius)
         if (activeAlpha <= 0f) return
         val shadow = prepareShadowNode()
         if (shadow !== mask || !maskCompositingConfigured) {
@@ -211,9 +212,11 @@ class NavigationDropShadowRenderer(
         size: Size,
         fieldOverride: NativeGlassFilterField? = null,
         profileOverride: NativeNavigationShadowProfile? = null,
+        uniformCornerRadius: Float = Float.NaN,
     ) {
         val nextKey = GeometryKey(shape, size, scope.layoutDirection, scope.density, scope.fontScale,
-            fieldOverride?.shaderFunctions, profileOverride, (shape as? LiquidContactShape)?.nativeUnion)
+            fieldOverride?.shaderFunctions, profileOverride, (shape as? LiquidContactShape)?.nativeUnion,
+            if (uniformCornerRadius.isFinite()) uniformCornerRadius.toRawBits() else 0)
         if (nextKey == key && mask.hasDisplayList()) return
         if (!useNativeShader) {
             val outline = shape.createOutline(size, scope.layoutDirection, scope)
@@ -267,7 +270,12 @@ class NavigationDropShadowRenderer(
             }
             if (field == null) {
                 shader.setFloatUniform("size", size.width, size.height)
-                shader.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, scope.layoutDirection, scope))
+                if (uniformCornerRadius.isFinite()) {
+                    shader.setFloatUniform("cornerRadii", uniformCornerRadius, uniformCornerRadius,
+                        uniformCornerRadius, uniformCornerRadius)
+                } else {
+                    shader.setFloatUniform("cornerRadii", glassCornerRadii(shape, size, scope.layoutDirection, scope))
+                }
             } else field.configure(shader)
             shader.setFloatUniform("shadowOffset", horizontalOffset, verticalOffset)
             shader.setFloatUniform("shadowInvRadius", if (radiusPoints > 0f) 1f / (radiusPoints * scope.density) else 0f)
@@ -366,6 +374,7 @@ class NavigationDropShadowRenderer(
         val fieldFunctions: String?,
         val profileOverride: NativeNavigationShadowProfile?,
         val union: NavigationNativeUnion?,
+        val uniformCornerRadiusBits: Int = 0,
     )
 
 }

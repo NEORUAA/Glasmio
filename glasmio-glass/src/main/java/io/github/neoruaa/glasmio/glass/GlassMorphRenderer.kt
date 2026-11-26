@@ -306,6 +306,17 @@ class GlassMorphRenderer(
         packedMaterialRecording = null
     }
 
+    internal fun canCompleteDirectlyWithAlpha(
+        isDark: Boolean,
+        isHardwareAccelerated: Boolean,
+    ): Boolean {
+        if (!isRuntimeShaderSupported() || !appearance.usesBackdrop || !appearance.usesRefraction ||
+            NativeGlassAtlasBackingCopy || atlasProducer == null || atlasBacking == null ||
+            !isHardwareAccelerated
+        ) return false
+        return !resolveRecipe(isDark, null, 1.25f).hasTintMatrix()
+    }
+
     fun draw(
         scope: DrawScope,
         coordinates: LayoutCoordinates,
@@ -346,6 +357,7 @@ class GlassMorphRenderer(
         pressIsDark: Boolean? = null,
         additionalOptics: Boolean = false,
         sourceNativeMaterial: GlassMaterialSource? = null,
+        outputAlpha: Float = 1f,
     ) = with(scope) {
         if (bounds.isEmpty || viewport.isEmpty) return@with
         val customOptics = refractionHeight.value.isFinite() || refractionAmount.value.isFinite()
@@ -426,7 +438,14 @@ class GlassMorphRenderer(
             }
             if (dropShadowAlpha > 0f) {
                 val targetProfile = navigationNativeShadowProfile(bounds.size.minDimension / scope.density, materialPreset)
-                dropShadow.draw(this, shape, bounds, dropShadowAlpha, edgeField, profileOverride = targetProfile)
+                val rx = cornerRadii?.x ?: radius
+                val ry = cornerRadii?.y ?: radius
+                if (secondaryLensBounds == null && abs(rx - ry) <= 0.01f) {
+                    dropShadow.draw(this, shape, lensBounds ?: bounds, dropShadowAlpha,
+                        field = null, profileOverride = targetProfile, uniformCornerRadius = rx)
+                } else {
+                    dropShadow.draw(this, shape, bounds, dropShadowAlpha, edgeField, profileOverride = targetProfile)
+                }
             }
         }
         val settledSource = (backdrop as? SettledBackdrop)?.takeIf { it.isSettled }
@@ -732,7 +751,7 @@ class GlassMorphRenderer(
                 outputSize = Size(bounds.width * sampleScale.x, bounds.height * sampleScale.y),
                 outputDensity = scope.density * minOf(sampleScale.x, sampleScale.y),
                 textureScale = renderScale, highlightAlpha = highlightOpacity, sourceShadow = sourceShadow,
-                specializeMenuTint = menuField != null)
+                specializeMenuTint = menuField != null, outputAlpha = outputAlpha)
             val outLogical = requireNotNull(completion.outputSize)
             val outDensity = requireNotNull(completion.outputDensity)
             val tintGuard = if (resolvedTargetRecipe.hasTintMatrix() || sourceRecipe?.hasTintMatrix() == true)
