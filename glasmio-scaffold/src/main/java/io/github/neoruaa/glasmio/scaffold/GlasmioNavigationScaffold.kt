@@ -946,7 +946,7 @@ private fun HeaderGroup(
                     val recorded = remember { booleanArrayOf(false) }
                     val blurPadPx = with(density) { 32.dp.roundToPx() }
                     Box(Modifier
-                        .defaultMinSize(minWidth = 44.dp).height(44.dp).padding(horizontal = 10.dp)
+                        .defaultMinSize(minWidth = 44.dp).height(44.dp)
                         .graphicsLayer {
                             motionRevision
                             val member = toolbarGroup?.members?.firstOrNull()
@@ -958,12 +958,12 @@ private fun HeaderGroup(
                         .graphicsLayer {
                             motionRevision
                             val p = layer.visibility.value
-                            alpha = p.coerceIn(0f, 1f)
                             scaleX = if (reduced.value) 1f else .2f + .8f * p
                             scaleY = if (reduced.value) 1f else .2f + .8f * p
                         }.drawWithContent {
                             motionRevision
                             val p = layer.visibility.value
+                            val alpha = p.coerceIn(0f, 1f)
                             val blur = if (reduced.value) 0f else 10.dp.toPx() * (1f - p).coerceIn(0f, 1f)
                             val pad = if (blur > .01f) blurPadPx else 0
                             val targetSize = IntSize(
@@ -988,6 +988,10 @@ private fun HeaderGroup(
                                 }
                                 recorded[0] = true
                             }
+                            // Apply visibility opacity on the padded foreground layer directly so the
+                            // outer scale graphicsLayer never allocates an unpadded offscreen layer
+                            // that clips overflowing avatars or blur halos.
+                            foreground.alpha = alpha
                             foreground.renderEffect = if (blur > .01f) {
                                 createAnimatedBlurComposeRenderEffect(blur, Shader.TileMode.DECAL)
                             } else null
@@ -1001,7 +1005,7 @@ private fun HeaderGroup(
                             } else {
                                 drawLayer(foreground)
                             }
-                        }.clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
+                        }.padding(horizontal = 10.dp).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
                         CompositionLocalProvider(LocalSfToolbarSymbols provides true, LocalGlassContentColor provides LocalGlassColors.current.content) {
                             layer.content()
                         }
