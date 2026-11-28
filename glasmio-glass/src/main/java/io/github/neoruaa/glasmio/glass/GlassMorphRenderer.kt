@@ -258,9 +258,9 @@ class GlassMorphRenderer(
     internal fun materialEffect(isDark: Boolean, alpha: Float = 1f): RenderEffect =
         innerShadows.materialEffect(resolveRecipe(isDark, null, 1.25f), alpha)
 
-    internal fun drawDropShadow(scope: DrawScope, shape: Shape, bounds: Rect, alpha: Float) {
+    internal fun drawDropShadow(scope: DrawScope, shape: Shape, bounds: Rect, alpha: Float, cutout: Path? = null) {
         val field = if (isRuntimeShaderSupported()) nativeMorphShadowField(shape) else null
-        dropShadow.draw(scope, shape, bounds, alpha, field)
+        dropShadow.draw(scope, shape, bounds, alpha, field, cutout = cutout)
     }
 
     internal fun paintMaterial(scope: DrawScope, isDark: Boolean, material: NavigationGlassMaterial?, alpha: Float) {
@@ -382,8 +382,8 @@ class GlassMorphRenderer(
             (sourceNativeMaterial != null || (recipe != null && materialEffect == null))
         val targetRecipe = if (completeNativeMaterial) (recipe ?: resolveRecipe(isDark, materialTint, tintMultiplier)) else null
         val sourceRecipe = sourceNativeMaterial?.recipe
-        val decoupleCompleteShadow = completeNativeMaterial &&
-            targetRecipe?.hasTintMatrix() != true && sourceRecipe?.hasTintMatrix() != true
+        val decoupleCompleteShadow = completeNativeMaterial && (menuField != null ||
+            (targetRecipe?.hasTintMatrix() != true && sourceRecipe?.hasTintMatrix() != true))
         val progress = sourceFilterProgress?.coerceIn(0f, 1f) ?: 1f
         // The last part of the morph resolves back to the button's native edge
         // normals. The radial mix belongs to the moving menu, not to the idle control.
@@ -430,25 +430,20 @@ class GlassMorphRenderer(
         }
         val filterField = if (isRuntimeShaderSupported() && contourField) fieldAdapter(effectScale, effectOffset, effectOrigin) else null
         val edgeField = if (isRuntimeShaderSupported() && contourField) fieldAdapter(Offset(1f, 1f), Offset.Zero, bounds.topLeft) else null
-        val progress = sourceFilterProgress?.coerceIn(0f, 1f) ?: 1f
+        // The analytic shadow field is sampled over a larger region. Its interior
+        // is not the visible outline when the menu contour is rounded or smoothed.
+        val shadowCutout = path.takeIf { menuField != null }
         if (!completeNativeMaterial) {
-            if (dropShadowAlpha > 0f) drawDropShadow(this, shape, bounds, dropShadowAlpha)
+            if (dropShadowAlpha > 0f) drawDropShadow(this, shape, bounds, dropShadowAlpha, shadowCutout)
         } else if (decoupleCompleteShadow) {
-            if (sourceRecipe != null && secondaryLensBounds != null && 1f - progress > 0f) {
+            if (sourceRecipe != null && secondaryLensBounds != null && progress < 1f) {
                 val originalExtent = sourceNativeMaterial.minimumDimension.takeIf { it.isFinite() }
                     ?: secondaryLensBounds.size.minDimension / scope.density
                 val sourceProfile = navigationNativeShadowProfile(originalExtent, sourceFilterMaterial)
                 if (sourceProfile.radius > 0f && sourceProfile.opacity > 0f) {
                     val radii = secondaryLensRadii ?: Offset(radius, radius)
                     val sourceShape = androidx.compose.foundation.shape.RoundedCornerShape(minOf(radii.x, radii.y))
-                    val canvas = drawContext.canvas.nativeCanvas
-                    val save = canvas.save()
-                    try {
-                        canvas.clipOutPath(path.asAndroidPath())
-                        sourceDropShadow.draw(this, sourceShape, secondaryLensBounds, 1f - progress, null, sourceProfile)
-                    } finally {
-                        canvas.restoreToCount(save)
-                    }
+                    sourceDropShadow.draw(this, sourceShape, secondaryLensBounds, 1f - progress, null, sourceProfile, cutout = path)
                 }
             }
             if (dropShadowAlpha > 0f) {
@@ -457,9 +452,9 @@ class GlassMorphRenderer(
                 val ry = cornerRadii?.y ?: radius
                 if (secondaryLensBounds == null && abs(rx - ry) <= 0.01f) {
                     dropShadow.draw(this, shape, lensBounds ?: bounds, dropShadowAlpha,
-                        field = null, profileOverride = targetProfile, uniformCornerRadius = rx)
+                        field = null, profileOverride = targetProfile, uniformCornerRadius = rx, cutout = shadowCutout)
                 } else {
-                    dropShadow.draw(this, shape, bounds, dropShadowAlpha, edgeField, profileOverride = targetProfile)
+                    dropShadow.draw(this, shape, bounds, dropShadowAlpha, edgeField, profileOverride = targetProfile, cutout = shadowCutout)
                 }
             }
         }

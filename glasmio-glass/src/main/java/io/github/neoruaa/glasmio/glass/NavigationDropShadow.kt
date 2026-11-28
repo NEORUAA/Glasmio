@@ -124,10 +124,11 @@ class NavigationDropShadowRenderer(
         field: NativeGlassFilterField?,
         profileOverride: NativeNavigationShadowProfile? = null,
         uniformCornerRadius: Float = Float.NaN,
+        cutout: Path? = null,
     ) {
         val canvas = scope.drawContext.canvas.nativeCanvas
         if (!canvas.isHardwareAccelerated || bounds.isEmpty || alpha <= 0f) return
-        prepare(scope, shape, bounds.size, field, profileOverride, uniformCornerRadius)
+        prepare(scope, shape, bounds.size, field, profileOverride, uniformCornerRadius, useShapeCutout = cutout == null)
         if (activeAlpha <= 0f) return
         val shadow = prepareShadowNode()
         if (shadow !== mask || !maskCompositingConfigured) {
@@ -137,8 +138,9 @@ class NavigationDropShadowRenderer(
         shadow.alpha = activeAlpha * alpha.coerceIn(0f, 1f)
         val save = canvas.save()
         try {
+            if (cutout != null) canvas.clipOutPath(cutout.asAndroidPath())
             canvas.translate(bounds.left, bounds.top)
-            drawMask(canvas, shadow)
+            drawMask(canvas, shadow, useShapeCutout = cutout == null)
         } finally {
             canvas.restoreToCount(save)
         }
@@ -213,10 +215,11 @@ class NavigationDropShadowRenderer(
         fieldOverride: NativeGlassFilterField? = null,
         profileOverride: NativeNavigationShadowProfile? = null,
         uniformCornerRadius: Float = Float.NaN,
+        useShapeCutout: Boolean = true,
     ) {
         val nextKey = GeometryKey(shape, size, scope.layoutDirection, scope.density, scope.fontScale,
             fieldOverride?.shaderFunctions, profileOverride, (shape as? LiquidContactShape)?.nativeUnion,
-            if (uniformCornerRadius.isFinite()) uniformCornerRadius.toRawBits() else 0)
+            if (uniformCornerRadius.isFinite()) uniformCornerRadius.toRawBits() else 0, useShapeCutout)
         if (nextKey == key && mask.hasDisplayList()) return
         if (!useNativeShader) {
             val outline = shape.createOutline(size, scope.layoutDirection, scope)
@@ -279,7 +282,7 @@ class NavigationDropShadowRenderer(
             } else field.configure(shader)
             shader.setFloatUniform("shadowOffset", horizontalOffset, verticalOffset)
             shader.setFloatUniform("shadowInvRadius", if (radiusPoints > 0f) 1f / (radiusPoints * scope.density) else 0f)
-            shader.setFloatUniform("shadowCutScale", renderScale)
+            shader.setFloatUniform("shadowCutScale", if (useShapeCutout) renderScale else 0f)
             nativePaint.shader = shader
         }
         val requiredWidth = ceil((size.width + padding * 2f) * renderScale).toInt()
@@ -334,12 +337,12 @@ class NavigationDropShadowRenderer(
         return node
     }
 
-    private fun drawMask(canvas: Canvas, shadow: RenderNode) {
+    private fun drawMask(canvas: Canvas, shadow: RenderNode, useShapeCutout: Boolean = true) {
         val save = canvas.save()
         try {
             // Non-native fallback masks clip out the body at native resolution after blur;
             // native SDF masks perform the exact subpixel interior cut inside NativeExteriorShadowMain.
-            if (!useNativeShader) canvas.clipOutPath(outlinePath)
+            if (!useNativeShader && useShapeCutout) canvas.clipOutPath(outlinePath)
             // The native SDF already includes the physical offset in shadowOffset.
             canvas.translate(
                 (if (useNativeProfile) 0f else horizontalOffset) - padding,
@@ -381,6 +384,7 @@ class NavigationDropShadowRenderer(
         val profileOverride: NativeNavigationShadowProfile?,
         val union: NavigationNativeUnion?,
         val uniformCornerRadiusBits: Int = 0,
+        val useShapeCutout: Boolean,
     )
 
 }
@@ -394,6 +398,7 @@ half4 main(float2 p) {
     float d = 0.0;
     // Single nativeShadowDistance call site avoids duplicating morph/union SDF trees twice.
     for (int pass = 0; pass < 2; ++pass) {
+        if (pass == 0 && shadowCutScale <= 0.0) continue;
         float dist = nativeShadowDistance(pass == 0 ? p : p - shadowOffset);
         if (pass == 0) {
             body = dist;
@@ -402,7 +407,7 @@ half4 main(float2 p) {
             d = dist;
         }
     }
-    float cut = clamp(body * shadowCutScale + 0.5, 0.0, 1.0);
+    float cut = shadowCutScale > 0.0 ? clamp(body * shadowCutScale + 0.5, 0.0, 1.0) : 1.0;
     float coverage = shadowInvRadius > 0.0 ? nativeGaussianTail(d * shadowInvRadius) : 0.0;
     return half4(0.0, 0.0, 0.0, coverage * cut);
 }

@@ -295,7 +295,7 @@ fun LiquidMenuMorphSurface(
                 if (sourceHasGlassBackground && knownSourceMaterial == null && frame.contentProgress < 1f && outgoing != null) {
                     val sourceShape = LiquidMenuContour(Rect(Offset.Zero, outgoing.size),
                         Offset(frame.sourceRadiusX, frame.sourceRadiusY), null, Offset.Zero, 0f)
-                    sourceShadow.draw(this, sourceShape, outgoing, alpha = 1f - frame.contentProgress)
+                    sourceShadow.draw(this, sourceShape, outgoing, alpha = 1f - frame.contentProgress, field = null, cutout = path)
                 }
                 fun DrawScope.drawMaterial(
                     outputAlpha: Float = 1f,
@@ -395,7 +395,7 @@ fun LiquidMenuMorphSurface(
                 } else if (!sourceHasGlassBackground && frame.contentProgress < 1f) {
                     // Fade the plain menu as one material group; opaque completion owns
                     // its final shadow without retaining an extra full-opacity layer.
-                    renderer.drawDropShadow(this, shape, bounds, frame.contentProgress)
+                    renderer.drawDropShadow(this, shape, bounds, frame.contentProgress, cutout = path)
                     val preset = NavigationGlassMaterial.RegularMedium
                     val shadowPadding = ceil(preset.shadowRadius.toPx() * 1.5f) + 1.dp.toPx()
                     val shadowOffset = preset.shadowOffsetY.toPx()

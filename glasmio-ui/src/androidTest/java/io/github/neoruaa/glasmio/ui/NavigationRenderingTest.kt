@@ -5289,6 +5289,41 @@ half4 main(half4 src, half4 dst) {
     }
 
     @Test
+    fun menuShadowUsesTheVisibleContourForItsCutout() {
+        org.junit.Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 33)
+        val useVisibleContour = mutableStateOf(false)
+        var fringe = Offset.Zero
+        var interior = Offset.Zero
+        compose.setContent {
+            val shadow = remember {
+                NavigationDropShadowRenderer(
+                    renderScale = .5f, useNativeProfile = true, nativeMaterial = NavigationGlassMaterial.RegularMedium,
+                )
+            }
+            DisposableEffect(shadow) { onDispose { shadow.release() } }
+            Box(Modifier.size(240.dp, 200.dp).background(Color.White).testTag("menu-shadow-cutout")
+                .drawWithContent {
+                    val bounds = Rect(24.dp.toPx(), 40.dp.toPx(), 216.dp.toPx(), 160.dp.toPx())
+                    val visibleFace = androidx.compose.ui.graphics.Path().apply { addOval(bounds.deflate(12.dp.toPx())) }
+                    fringe = Offset(bounds.left + 8.dp.toPx(), bounds.center.y)
+                    interior = Offset(bounds.left + 18.dp.toPx(), bounds.center.y)
+                    shadow.draw(this, ContinuousRoundedRectangle(36.dp), bounds, 1f, field = null,
+                        cutout = visibleFace.takeIf { useVisibleContour.value })
+                })
+        }
+        val scene = compose.onNodeWithTag("menu-shadow-cutout")
+        val legacy = scene.captureToImage().toPixelMap()
+        compose.runOnIdle { useVisibleContour.value = true }
+        val corrected = scene.captureToImage().toPixelMap()
+        val x = fringe.x.roundToInt()
+        val y = fringe.y.roundToInt()
+        assertEquals("The larger analytic cutout leaves an unshadowed exterior band", 1f, legacy[x, y].red, 2f / 255f)
+        assertTrue("The real contour keeps the shadow over the exterior band", corrected[x, y].red < .98f)
+        assertEquals("The face itself stays clear of the shadow", 1f,
+            corrected[interior.x.roundToInt(), interior.y.roundToInt()].red, 2f / 255f)
+    }
+
+    @Test
     fun plainMenuClosingOpacityPreservesShadowBeyondEveryLogicalEdge() {
         val motion = LiquidMenuMorphMotion()
         val glassSourceReference = mutableStateOf(false)
