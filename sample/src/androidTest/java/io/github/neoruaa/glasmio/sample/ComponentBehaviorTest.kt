@@ -54,6 +54,9 @@ import io.github.neoruaa.glasmio.core.LocalGlassColors
 import io.github.neoruaa.glasmio.glass.GlassEmphasis
 import io.github.neoruaa.glasmio.core.defaultGlassColors
 import io.github.neoruaa.glasmio.glass.GlasmioBackdropHost
+import io.github.neoruaa.glasmio.glass.GlasmioMenuAnchorState
+import io.github.neoruaa.glasmio.glass.GlassSurface
+import io.github.neoruaa.glasmio.glass.glasmioMenuAnchor
 import io.github.neoruaa.glasmio.scaffold.rememberGlasmioHeaderScrollEdge
 import io.github.neoruaa.glasmio.scaffold.GlasmioNavigationBarWithTrailingItem
 import io.github.neoruaa.glasmio.icons.SfSymbol
@@ -1140,6 +1143,49 @@ class ComponentBehaviorTest {
         rule.waitUntil(10_000) { rule.onAllNodesWithText("Default").fetchSemanticsNodes().isEmpty() }
         rule.onNodeWithText("Recent").assertIsDisplayed()
         rule.runOnIdle { assertEquals(1, commits) }
+    }
+
+    @Test fun glassMenuAcquiresThePressedBoundsAndReturnsToTheRestingButton() {
+        val anchor = GlasmioMenuAnchorState()
+        var expanded by mutableStateOf(false)
+        var drawnWidth = 0f
+        content {
+            GlassSurface(
+                modifier = Modifier.size(44.dp).testTag("menu-anchor").glasmioMenuAnchor(anchor),
+                onVisualBoundsChanged = { bounds, _ -> drawnWidth = bounds.width },
+                onClick = { expanded = true },
+            ) {}
+            GlasmioMenu(
+                expanded = expanded,
+                onExpandedChange = { expanded = it },
+                itemCount = 1,
+                externalAnchorBounds = anchor.bounds,
+                menuAnchorState = anchor,
+                anchor = {},
+            ) { backdrop, close ->
+                GlasmioMenuItem("Close menu", close, backdrop = backdrop)
+            }
+        }
+        val resting = rule.runOnIdle { requireNotNull(anchor.liveBounds) }
+        val button = rule.onNodeWithTag("menu-anchor")
+        rule.mainClock.autoAdvance = false
+        val pressed = try {
+            button.performTouchInput { down(center) }
+            rule.mainClock.advanceTimeBy(160)
+            rule.runOnIdle {
+                requireNotNull(anchor.liveBounds).also {
+                    assertTrue(it.width > resting.width + 1f)
+                    assertEquals(drawnWidth, it.width, 0.5f)
+                }
+            }.also { button.performTouchInput { up() } }
+        } finally {
+            rule.mainClock.autoAdvance = true
+        }
+        rule.waitUntil(10_000) { anchor.isLiveSourceHidden }
+        rule.runOnIdle { assertEquals(pressed, anchor.bounds) }
+        rule.onNodeWithText("Close menu").performClick()
+        rule.waitUntil(10_000) { !anchor.isAcquired }
+        rule.runOnIdle { assertEquals(resting, anchor.liveBounds) }
     }
 
     @Test fun popupContentChangesKeepTheSameInkAsAFreshMenu() {

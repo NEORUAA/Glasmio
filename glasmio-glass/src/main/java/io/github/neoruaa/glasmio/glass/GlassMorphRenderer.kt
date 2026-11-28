@@ -44,6 +44,8 @@ import androidx.compose.ui.graphics.GraphicsLayerScope
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Paint as ComposePaint
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.asAndroidPath
@@ -199,6 +201,9 @@ class GlassMorphRenderer(
     private var materialWidth = 0
     private var materialHeight = 0
     private var recordedViewport: Rect? = null
+    private var recordedAnchorBackdrop: Backdrop? = null
+    private var recordedBackdropProgress = 1f
+    private val backdropBlendPaint by lazy(LazyThreadSafetyMode.NONE) { ComposePaint() }
     private val sourceColorEffect = if (appearance.usesBackdrop) {
         RenderEffect.createColorFilterEffect(
             ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(1.5f) }),
@@ -358,6 +363,7 @@ class GlassMorphRenderer(
         additionalOptics: Boolean = false,
         sourceNativeMaterial: GlassMaterialSource? = null,
         outputAlpha: Float = 1f,
+        anchorBackdrop: Backdrop? = null,
     ) = with(scope) {
         if (bounds.isEmpty || viewport.isEmpty) return@with
         val customOptics = refractionHeight.value.isFinite() || refractionAmount.value.isFinite()
@@ -378,6 +384,14 @@ class GlassMorphRenderer(
         val sourceRecipe = sourceNativeMaterial?.recipe
         val decoupleCompleteShadow = completeNativeMaterial &&
             targetRecipe?.hasTintMatrix() != true && sourceRecipe?.hasTintMatrix() != true
+        val progress = sourceFilterProgress?.coerceIn(0f, 1f) ?: 1f
+        // The last part of the morph resolves back to the button's native edge
+        // normals. The radial mix belongs to the moving menu, not to the idle control.
+        val menuStyle = if (menuField != null && sourceRecipe != null) (progress / .1f).coerceIn(0f, 1f) else 1f
+        val sourceDarkFraction = sourceRecipe?.darkFraction ?: presentationDarkFraction
+        val opticalDarkFraction = if (menuStyle < 1f) {
+            sourceDarkFraction + (presentationDarkFraction - sourceDarkFraction) * menuStyle
+        } else presentationDarkFraction
         val recordedLayoutDirection = layoutDirection
         val path = outlinePath ?: reusableOutlinePath.apply {
             rewind()
@@ -410,6 +424,7 @@ class GlassMorphRenderer(
                 program.setFloatUniform("secondaryHalfSize", secondary.width * scale.x * .5f, secondary.height * scale.y * .5f)
                 program.setFloatUniform("secondaryRadii", (secondaryLensRadii?.x ?: radius) * scale.x, (secondaryLensRadii?.y ?: radius) * scale.y)
                 program.setFloatUniform("smoothing", lensSmoothing * minOf(scale.x, scale.y))
+                program.setFloatUniform("shapeNormalMix", .5f * menuStyle)
                 bindLiquidMenuField(program, menuField, scale, offset)
             }
         }
@@ -453,7 +468,10 @@ class GlassMorphRenderer(
         // custom draw callbacks subscribe to their own state without polling.
         settledSource?.revision
         val viewportChanged = recordedViewport != viewport
-        if (appearance.usesBackdrop && (viewportChanged || settledSource != null)) {
+        val anchorSample = anchorBackdrop?.takeIf { progress < 1f }
+        val backdropProgress = if (anchorSample == null) 1f else progress
+        val backdropChanged = recordedAnchorBackdrop !== anchorSample || recordedBackdropProgress != backdropProgress
+        if (appearance.usesBackdrop && (viewportChanged || backdropChanged || settledSource != null)) {
             val bufferSize = IntSize(
                 ceil(viewport.width * renderScale).toInt(),
                 ceil(viewport.height * renderScale).toInt(),
@@ -478,10 +496,37 @@ class GlassMorphRenderer(
                     val previousSize = drawContext.size
                     drawContext.size = Size(root.size.width.toFloat(), root.size.height.toFloat())
                     try {
-                        if (backdrop is ViewportBackdrop) {
-                            with(backdrop) { drawViewport(this@GlassMorphRenderer.density, root, viewport) }
-                        } else {
-                            with(backdrop) { drawBackdrop(this@GlassMorphRenderer.density, root, null) }
+                        fun DrawScope.drawSample(sample: Backdrop) {
+                            if (sample is ViewportBackdrop) {
+                                with(sample) { drawViewport(this@GlassMorphRenderer.density, root, viewport) }
+                            } else {
+                                with(sample) { drawBackdrop(this@GlassMorphRenderer.density, root, null) }
+                            }
+                        }
+                        when {
+                            anchorSample == null -> drawSample(backdrop)
+                            backdropProgress == 0f -> drawSample(anchorSample)
+                            else -> {
+                                // Interpolate the raw premultiplied samples in the
+                                // existing capture band, then apply one glass filter.
+                                val canvas = drawContext.canvas
+                                backdropBlendPaint.alpha = 1f - backdropProgress
+                                backdropBlendPaint.blendMode = BlendMode.SrcOver
+                                canvas.saveLayer(viewport, backdropBlendPaint)
+                                try {
+                                    drawSample(anchorSample)
+                                } finally {
+                                    canvas.restore()
+                                }
+                                backdropBlendPaint.alpha = backdropProgress
+                                backdropBlendPaint.blendMode = BlendMode.Plus
+                                canvas.saveLayer(viewport, backdropBlendPaint)
+                                try {
+                                    drawSample(backdrop)
+                                } finally {
+                                    canvas.restore()
+                                }
+                            }
                         }
                     } finally {
                         drawContext.size = previousSize
@@ -496,6 +541,8 @@ class GlassMorphRenderer(
                 ) { drawLayer(source) }
             }
             recordedViewport = viewport
+            recordedAnchorBackdrop = anchorSample
+            recordedBackdropProgress = backdropProgress
         }
         val clearFraction = if (sourceFilterProgress == null) {
             if (materialPreset == NavigationGlassMaterial.Clear) 1f else 0f
@@ -518,7 +565,7 @@ class GlassMorphRenderer(
                 nativeNavigationGlassFilter(
                     profile = geometry,
                     isDark = isDark,
-                    darkFraction = presentationDarkFraction,
+                    darkFraction = opticalDarkFraction,
                     blurRadius = with(scope) { sourceEffectRadius.toPx() } * transformScale * renderScale,
                     refractionEnabled = appearance.usesRefraction && (!customOptics || additionalOptics),
                     clear = sourceFilterProgress == null && materialPreset == NavigationGlassMaterial.Clear,
@@ -742,7 +789,7 @@ class GlassMorphRenderer(
                         (secondaryLensRadii?.y ?: radius) * sampleScale.y), 1f - progress)
             } else null
             val resolvedTargetRecipe = requireNotNull(targetRecipe)
-            val completion = NativeGlassCompletion(resolvedTargetRecipe, isDark, clearFraction, darkFraction = presentationDarkFraction,
+            val completion = NativeGlassCompletion(resolvedTargetRecipe, isDark, clearFraction, darkFraction = opticalDarkFraction,
                 materialAlpha = if (sourceRecipe != null) progress else 1f,
                 edgeAlpha = innerShadowProgress,
                 shadow = if (decoupleCompleteShadow) null else navigationNativeShadowProfile(bounds.size.minDimension / scope.density, materialPreset),
@@ -857,8 +904,6 @@ class GlassMorphRenderer(
                 translate(bounds.left - outputOrigin.x / sampleScale.x, bounds.top - outputOrigin.y / sampleScale.y)
                 scale(1f / sampleScale.x, 1f / sampleScale.y, Offset.Zero)
             }) {
-                // Keep both sampled regions available while bounding the filter's otherwise
-                // unbounded output; this is a consumer rectangle, never a shape clip.
                 clipRect(0f, 0f, packedSize.width.toFloat(), packedSize.height.toFloat()) { drawLayer(completed) }
             }
             if (Build.VERSION.SDK_INT >= 36 && glow != null) {
@@ -1161,18 +1206,15 @@ uniform float2 fieldExtent;
 // QuartzCore supercircle_sdf_sampler (24A434, 0x1c39c8dd0).
 // Oversized radii are intentional during overrounding; the native builder's
 // curvature terms handle them before the two fields are combined.
-float3 roundedFieldGradient(float2 point, float2 origin, float2 extent, float2 radii) {
-    return nativeGlassRoundedField(point - origin, extent, radii, 0.5);
-}
-float3 liquidAnalyticFieldGradient(float2 point) {
+float3 liquidAnalyticFieldGradient(float2 point, float normalMix) {
     float3 a = float3(0.0);
     float3 b = float3(0.0);
-    // Single roundedFieldGradient call site avoids duplicating the supercircle SDF twice per contour query.
+    // Keep one supercircle SDF call site for both lobes.
     for (int lobe = 0; lobe < 2; ++lobe) {
         float2 c = lobe == 0 ? center : secondaryCenter;
         float2 hs = lobe == 0 ? halfSize : secondaryHalfSize;
         float2 cr = lobe == 0 ? cornerRadii : secondaryRadii;
-        float3 f = roundedFieldGradient(point, c, hs, cr);
+        float3 f = nativeGlassRoundedField(point - c, hs, cr, normalMix);
         if (lobe == 0) {
             a = f;
             if (secondaryEnabled < 0.5) return a;
@@ -1187,7 +1229,10 @@ float3 liquidAnalyticFieldGradient(float2 point) {
     float h = clamp(0.5 + 0.5 * (a.x - b.x) / k, 0.0, 1.0);
     return float3(mix(a.x, b.x, h) - k * h * (1.0 - h), mix(a.yz, b.yz, h));
 }
-float3 liquidFieldGradient(float2 point) {
+float3 liquidAnalyticFieldGradient(float2 point) {
+    return liquidAnalyticFieldGradient(point, 0.5);
+}
+float3 liquidFieldGradient(float2 point, float normalMix) {
     if (smoothedFieldEnabled > 0.5) {
         float2 pixel = point * fieldCoordinateScale + fieldCoordinateOffset;
         // The Gaussian grid covers a narrow skin band. Clamping its exterior distance
@@ -1198,13 +1243,17 @@ float3 liquidFieldGradient(float2 point) {
             return field * float3(fieldDistanceScale, fieldGradientScale);
         }
     }
-    return liquidAnalyticFieldGradient(point);
+    return liquidAnalyticFieldGradient(point, normalMix);
+}
+float3 liquidFieldGradient(float2 point) {
+    return liquidFieldGradient(point, 0.5);
 }
 
 """
 
 private const val MorphGlassFieldShader = """
 uniform float2 nativeFieldOrigin;
+uniform float shapeNormalMix;
 uniform float2 center;
 uniform float2 halfSize;
 uniform float2 cornerRadii;
@@ -1214,7 +1263,7 @@ uniform float2 secondaryHalfSize;
 uniform float2 secondaryRadii;
 uniform float smoothing;
 $LiquidMorphFieldShader
-float3 navigationGlassField(float2 point) { return liquidFieldGradient(point + nativeFieldOrigin); }
+float3 navigationGlassField(float2 point) { return liquidFieldGradient(point + nativeFieldOrigin, shapeNormalMix); }
 float navigationGlassShadowDistance(float2 point) { return liquidAnalyticFieldGradient(point + nativeFieldOrigin).x; }
 """
 
@@ -1226,6 +1275,7 @@ private fun nativeMorphShadowField(shape: Shape): NativeGlassFilterField? {
         val primary = contour.incoming
         val secondary = contour.outgoing ?: primary
         shader.setFloatUniform("nativeFieldOrigin", 0f, 0f)
+        shader.setFloatUniform("shapeNormalMix", .5f)
         shader.setFloatUniform("center", primary.center.x, primary.center.y)
         shader.setFloatUniform("halfSize", primary.width * .5f, primary.height * .5f)
         shader.setFloatUniform("cornerRadii", contour.incomingRadii.x, contour.incomingRadii.y)

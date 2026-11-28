@@ -4237,17 +4237,19 @@ half4 main(half4 src, half4 dst) {
                         .onGloballyPositioned { hostOrigin = it.localToScreen(Offset.Zero) },
                     sampledContent = { Box(Modifier.fillMaxSize().background(Color(0xFF315473))) },
                     overlayContent = { backdrop ->
+                        val menuBackdrop = rememberCanvasBackdrop(Color(0xFFC08A63))
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             GlassSurface(
                                 modifier = Modifier.size(144.dp, 44.dp).glasmioMenuAnchor(anchor)
                                     .onGloballyPositioned { source = Rect(it.localToScreen(Offset.Zero), Size(it.size.width.toFloat(), it.size.height.toFloat())) },
+                                backdrop = backdrop,
                                 material = material,
                                 navigationSurfaceColor = if (scene.value == 4) Color(0xFF337CCC) else null,
                                 emphasis = if (scene.value == 5) GlassEmphasis.Prominent else GlassEmphasis.Regular,
                             ) {}
                             if (showMorph.value) GlasmioContextMenu(
                                 visible = true, compact = true, menuWidth = 160.dp, heightOverride = 100.dp,
-                                backdrop = backdrop, exportChildBackdrop = false, morphMotion = motion,
+                                backdrop = menuBackdrop, exportChildBackdrop = false, morphMotion = motion,
                                 morphSourceHasGlassBackground = anchor.sourceHasGlassBackground,
                                 morphSourceMaterial = anchor.sourceMaterial,
                                 morphSourceFrostRadius = anchor.sourceFrostRadius,
@@ -4255,6 +4257,8 @@ half4 main(half4 src, half4 dst) {
                                 morphSourceMaterialEffect = anchor.sourceMaterialEffect,
                                 morphSourceUsesShadowLift = anchor.sourceUsesShadowLift,
                                 morphSourceUsesInnerShadows = anchor.sourceUsesInnerShadows,
+                                morphSourceNativeMaterial = anchor.sourceNativeMaterial,
+                                morphSourceBackdrop = anchor.sourceBackdrop,
                                 onMenuBoundsChanged = { target = it },
                             ) {}
                         }
@@ -4278,26 +4282,28 @@ half4 main(half4 src, half4 dst) {
                 val from = requireNotNull(source)
                 sample = from.translate(-hostOrigin)
                 motion.initialize(from, requireNotNull(target), 22f * density, density)
-                motion.retarget(true); motion.advanceBy(3f)
             }
-            compose.onNodeWithTag("source-tint-handoff").captureToImage()
+            val opening = compose.onNodeWithTag("source-tint-handoff").captureToImage().toPixelMap()
+            compose.runOnIdle { motion.retarget(true); motion.advanceBy(3f) }
             compose.runOnIdle { motion.retarget(false); motion.advanceBy(3f) }
             val closing = compose.onNodeWithTag("source-tint-handoff").captureToImage().toPixelMap()
-            var error = 0.0
-            var maximum = 0f
-            var count = 0
-            for (y in (sample.top + 16f * density).roundToInt() until (sample.bottom - 16f * density).roundToInt()) {
-                for (x in (sample.left + 28f * density).roundToInt() until (sample.right - 28f * density).roundToInt()) {
-                    val a = static[x, y]
-                    val b = closing[x, y]
-                    val difference = maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
-                    error += difference
-                    maximum = maxOf(maximum, difference)
-                    count++
+            for ((endpoint, pixels) in listOf("opening" to opening, "closing" to closing)) {
+                var error = 0.0
+                var maximum = 0f
+                var count = 0
+                for (y in (sample.top + 16f * density).roundToInt() until (sample.bottom - 16f * density).roundToInt()) {
+                    for (x in (sample.left + 28f * density).roundToInt() until (sample.right - 28f * density).roundToInt()) {
+                        val a = static[x, y]
+                        val b = pixels[x, y]
+                        val difference = maxOf(abs(a.red - b.red), abs(a.green - b.green), abs(a.blue - b.blue))
+                        error += difference
+                        maximum = maxOf(maximum, difference)
+                        count++
+                    }
                 }
+                assertTrue("$name $endpoint must use the live anchor's backdrop and tint: max=$maximum mean=${error / count}",
+                    maximum < 4f / 255f && error / count < 2.0 / 255.0)
             }
-            assertTrue("$name tint must match its live anchor before release: max=$maximum mean=${error / count}",
-                maximum < 4f / 255f && error / count < 2.0 / 255.0)
         }
         compose.runOnIdle { anchor.release() }
     }
@@ -5248,6 +5254,15 @@ half4 main(half4 src, half4 dst) {
             compose.runOnIdle { gaussian.value = false }
             compose.waitForIdle()
             val reference = scene.captureToImage().toPixelMap()
+            // At this density the native key strip covers the first pixel outside
+            // the bottom edge. Clipping the complete material to the face loses it.
+            val edgeX = menu.center.x.toInt()
+            val edgeY = menu.bottom.toInt()
+            val backgroundRed = actual[edgeX, edgeY + 16].red
+            assertTrue("The menu must keep its exterior key strip: scale=$scale, sigma=$sigma",
+                backgroundRed - actual[edgeX, edgeY].red > 2f / 255f)
+            assertEquals("Gaussian motion must preserve the native stroke",
+                reference[edgeX, edgeY].red, actual[edgeX, edgeY].red, 2f / 255f)
             // Compare the same native material and geometry. Only its bounded Gaussian
             // texture is disabled in the reference; the unbounded analytic field is exact
             // along these straight exterior edges. Keep real shadows out of this key test.

@@ -48,8 +48,18 @@ class InteractiveHighlight(
     private var pressCancelled by mutableStateOf(false)
     var isPressed by mutableStateOf(false)
         private set
-    val pressProgress: Float get() = if (pressCancelled) 0f else pressProgressAnimation.value
-    val offset: Offset get() = if (pressCancelled) Offset.Zero else positionAnimation.value - startPosition
+    private var menuPress by mutableStateOf<Pair<Float, Offset>?>(null)
+    internal val hasRetainedMenuPress: Boolean get() = menuPress != null
+    val pressProgress: Float get() = menuPress?.first ?: if (pressCancelled) 0f else pressProgressAnimation.value
+    val offset: Offset get() = menuPress?.second ?: if (pressCancelled) Offset.Zero else positionAnimation.value - startPosition
+
+    internal fun retainMenuPress() {
+        if (menuPress == null) menuPress = pressProgress to offset
+    }
+
+    internal fun releaseMenuPress() {
+        menuPress = null
+    }
 
     fun startPress(position: Offset) {
         isPressed = true
@@ -77,6 +87,7 @@ class InteractiveHighlight(
     fun cancelPress() {
         isPressed = false
         pressCancelled = true
+        releaseMenuPress()
         animationScope.launch(start = CoroutineStart.UNDISPATCHED) {
             pressProgressAnimation.snapTo(0f)
             glowProgressAnimation.snapTo(0f)

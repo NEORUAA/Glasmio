@@ -81,6 +81,7 @@ fun LiquidMenuMorphSurface(
     sourceMaterialEffect: ((Float) -> RenderEffect)? = null,
     materialContext: GlassMaterialContext? = null,
     sourceNativeMaterial: GlassMaterialSource? = null,
+    sourceBackdrop: Backdrop? = null,
     contentModifier: Modifier = Modifier,
     panelTransform: (GraphicsLayerScope.() -> Unit)? = null,
     menuScaleOrigin: TransformOrigin = transformOrigin,
@@ -96,6 +97,7 @@ fun LiquidMenuMorphSurface(
             GlassMaterialSource(NavigationMaterialRecipe.resolve(context.darkFraction, sourceMaterial)) else null
     }
     val source = rememberCrossWindowBackdrop(backdrop)
+    val anchorBackdrop = sourceBackdrop?.let { rememberCrossWindowBackdrop(it) }
     val renderer = rememberGlassMorphRenderer(
         source, active = true, blurRadius = NavigationGlassMaterial.RegularMedium.frostRadius,
         programs = shaderPrograms, materialPreset = NavigationGlassMaterial.RegularMedium, isDark = context.isDark,
@@ -205,6 +207,18 @@ fun LiquidMenuMorphSurface(
             .drawWithContent {
                 val host = coordinates ?: return@drawWithContent
                 val frame = motion.frame
+                // The handoff frame uses the button's lens. Fade the extra menu
+                // displacement as the glass leaves or returns to the source.
+                val transitionOptics = if (sourceHasGlassBackground) {
+                    (frame.contentProgress / .1f).coerceIn(0f, 1f)
+                } else 1f
+                val lensHeight = frame.lensHeight * transitionOptics
+                val lensAmount = frame.lensAmount * transitionOptics
+                val portalBlur = frame.portalBlur * transitionOptics
+                val atSource = sourceHasGlassBackground && frame.contentProgress == 0f &&
+                    frame.sourceOpacity == 1f && frame.lensProgress == 0f && frame.portalBlur == 0f
+                if (atSource && !drawCache.atSource) renderer.invalidateRecording()
+                drawCache.atSource = atSource
                 val sourceExtent = motion.sourceBounds.size.minDimension
                 val knownSourceMaterial = sourceNativeMaterial ?: standardSourceMaterial?.takeIf { sourceExtent > 0f }
                     ?.forSize(sourceExtent / density)
@@ -263,7 +277,7 @@ fun LiquidMenuMorphSurface(
                 // The native lens reaches 75 pt; dispersion can sample twice its
                 // displacement. Reserve the complete optical range before the first frame.
                 val sampleGuard = 56.dp.toPx()
-                val opticalGuard = 2f * kotlin.math.abs(frame.lensAmount) * maxOf(1f, sampleScale.x, sampleScale.y) + 50.dp.toPx()
+                val opticalGuard = 2f * kotlin.math.abs(lensAmount) * maxOf(1f, sampleScale.x, sampleScale.y) + 50.dp.toPx()
                 val required = visualBounds.inflate(opticalGuard)
                 val previousCapture = drawCache.viewport
                 val capture = if (previousCapture == null) Rect(
@@ -311,8 +325,8 @@ fun LiquidMenuMorphSurface(
                         outlinePath = path,
                         tint = colors.container,
                         highlightAlpha = 1f,
-                        refractionHeight = frame.lensHeight.toDp(),
-                        refractionAmount = (-frame.lensAmount).toDp(),
+                        refractionHeight = lensHeight.toDp(),
+                        refractionAmount = (-lensAmount).toDp(),
                         additionalOptics = true,
                         navigationMaterial = true,
                         shadowLiftProgress = if (sourceHasGlassBackground && !sourceUsesShadowLift) frame.contentProgress else 1f,
@@ -366,6 +380,7 @@ fun LiquidMenuMorphSurface(
                         isDark = context.isDark,
                         sampleScale = sampleScale,
                         outputAlpha = outputAlpha,
+                        anchorBackdrop = anchorBackdrop,
                     )
                 }
                 if (!sourceHasGlassBackground && frame.contentProgress < 1f &&
@@ -424,7 +439,7 @@ fun LiquidMenuMorphSurface(
                 // squeeze its corners and make the initial capsule rectangular.
                 clipPath(path) {
                     if (!isRuntimeShaderSupported() || portal == null ||
-                        (frame.lensHeight <= 0.01f && frame.portalBlur <= 0.01f)) {
+                        (lensHeight <= 0.01f && portalBlur <= 0.01f)) {
                         this@drawWithContent.drawContent()
                     } else {
                         // AnimationKit filters the shared portal container: Gaussian first,
@@ -436,7 +451,7 @@ fun LiquidMenuMorphSurface(
                             minOf(0f, bounds.left) - initialGuard, minOf(0f, bounds.top) - initialGuard,
                             maxOf(size.width, bounds.right) + initialGuard, maxOf(size.height, bounds.bottom) + initialGuard,
                         )
-                        val guard = kotlin.math.abs(frame.lensAmount) + 4f * frame.portalBlur + 1f
+                        val guard = kotlin.math.abs(lensAmount) + 4f * portalBlur + 1f
                         val needed = Rect(
                             minOf(0f, bounds.left) - guard, minOf(0f, bounds.top) - guard,
                             maxOf(size.width, bounds.right) + guard, maxOf(size.height, bounds.bottom) + guard,
@@ -466,12 +481,12 @@ fun LiquidMenuMorphSurface(
                         portal.setFloatUniform("secondaryHalfSize", second.width / 2f, second.height / 2f)
                         portal.setFloatUniform("secondaryRadii", frame.sourceRadiusX, frame.sourceRadiusY)
                         portal.setFloatUniform("smoothing", effectiveSmoothing)
-                        portal.setFloatUniform("height", frame.lensHeight)
-                        portal.setFloatUniform("amount", frame.lensAmount)
+                        portal.setFloatUniform("height", lensHeight)
+                        portal.setFloatUniform("amount", lensAmount)
                         bindLiquidMenuField(portal, fieldTexture)
                         val warp = RenderEffect.createRuntimeShaderEffect(portal, "content")
-                        foreground.renderEffect = (if (frame.portalBlur > 0.01f) {
-                            val portalBlurEffect = createAnimatedBlurRenderEffect(frame.portalBlur, Shader.TileMode.DECAL)
+                        foreground.renderEffect = (if (portalBlur > 0.01f) {
+                            val portalBlurEffect = createAnimatedBlurRenderEffect(portalBlur, Shader.TileMode.DECAL)
                             if (portalBlurEffect != null) RenderEffect.createChainEffect(warp, portalBlurEffect) else warp
                         } else warp).asComposeRenderEffect()
                         withTransform({ translate(capture.left, capture.top) }) { drawLayer(foreground) }
@@ -528,6 +543,7 @@ private fun isOutgoingBuried(
 
 /** Draw-local recordings must not invalidate composition when their capture bands grow. */
 private class LiquidMenuDrawCache {
+    var atSource = false
     var recordedSource: ToolbarMenuPortal? = null
     var recordedSourceBounds: Rect? = null
     var foregroundCapture: Rect? = null

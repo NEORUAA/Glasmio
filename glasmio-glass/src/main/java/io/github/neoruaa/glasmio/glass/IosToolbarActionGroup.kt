@@ -6,6 +6,8 @@ import io.github.neoruaa.glasmio.icons.*
 import io.github.neoruaa.glasmio.glass.render.sampleBackdropLuminance
 import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
+import io.github.neoruaa.glasmio.glass.render.Backdrop
+import io.github.neoruaa.glasmio.glass.render.backdrops.emptyBackdrop
 
 import android.graphics.RenderEffect
 import androidx.annotation.RestrictTo
@@ -29,11 +31,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.neverEqualPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.structuralEqualityPolicy
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -61,6 +65,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.modifier.modifierLocalConsumer
 import androidx.compose.ui.modifier.modifierLocalOf
@@ -79,6 +84,8 @@ import com.kyant.shapes.Capsule
 import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 import io.github.neoruaa.glasmio.glass.PressHighlightRenderer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.abs
@@ -108,7 +115,13 @@ class GlasmioMenuAnchorState constructor() {
     private var triggerBounds by mutableStateOf<Rect?>(null)
     private var acquiredBounds by mutableStateOf<Rect?>(null)
     private var acquiredGroup: ToolbarActionGroup? = null
+    private var acquiredRun: List<ToolbarActionMember> = emptyList()
+    private var standaloneBounds by mutableStateOf<(() -> Rect?)?>(null)
+    private var standaloneHighlight: InteractiveHighlight? = null
+    private var openingHighlight: InteractiveHighlight? = null
+    private var openingPressExpiry: Job? = null
     private var standalonePortal: ToolbarMenuPortal? = null
+    private var standaloneBackdrop: Backdrop? = null
     private var standaloneContentPortal: ToolbarMenuPortal? = null
     private var standaloneMaterial: NavigationGlassMaterial? = null
     private var standaloneFrostRadius: Dp? = null
@@ -148,6 +161,9 @@ class GlasmioMenuAnchorState constructor() {
     /** A known native recipe is transferred explicitly, independently of custom callbacks. */
     var sourceNativeMaterial by mutableStateOf<GlassMaterialSource?>(null)
         private set
+    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    var sourceBackdrop by mutableStateOf<Backdrop?>(null)
+        private set
     var sourceUsesShadowLift by mutableStateOf(true)
         private set
     var sourceUsesInnerShadows by mutableStateOf(true)
@@ -156,21 +172,24 @@ class GlasmioMenuAnchorState constructor() {
     internal val hasStandaloneForeground: Boolean get() = standalonePortal != null
     var isAcquired by mutableStateOf(false)
         private set
+    @get:RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    var isLiveSourceHidden by mutableStateOf(false)
+        private set
 
     /** Window coordinates, shared by the trigger and the popup position provider. */
     val bounds: Rect?
-        get() = acquiredBounds ?: liveBounds
+        get() = acquiredBounds ?: triggerBounds?.let { group?.menuSourceBounds(it) ?: it }
 
     /** Follow the source's live press transform while the popup keeps its placement frozen. */
     val liveBounds: Rect?
         get() = triggerBounds?.let { source ->
-            group?.menuSourceBounds(source) ?: source
+            group?.menuSourceBounds(source) ?: standaloneBounds?.invoke() ?: source
         }
 
     /** The native through item is the trigger, while the source may be its entire fused run. */
     val previewBounds: Rect?
         get() = triggerBounds?.let { source ->
-            group?.menuPreviewBounds(source) ?: source
+            group?.menuPreviewBounds(source) ?: standaloneBounds?.invoke() ?: source
         }
 
     fun bind(group: ToolbarActionGroup?, bounds: Rect) {
@@ -178,10 +197,58 @@ class GlasmioMenuAnchorState constructor() {
         triggerBounds = bounds
     }
 
+    internal fun bindStandaloneGeometry(highlight: InteractiveHighlight, bounds: () -> Rect?) {
+        standaloneHighlight = highlight
+        standaloneBounds = bounds
+    }
+
+    internal fun clearStandaloneGeometry(highlight: InteractiveHighlight) {
+        if (standaloneHighlight !== highlight) return
+        if (openingHighlight === highlight) releaseOpeningPress()
+        standaloneHighlight = null
+        standaloneBounds = null
+    }
+
+    private fun retainSourcePress(): InteractiveHighlight? {
+        return (openingHighlight ?: (triggerBounds?.let { group?.menuSourceHighlight(it) }
+            ?: standaloneHighlight))?.also {
+            openingHighlight = it
+            it.retainMenuPress()
+        }
+    }
+
+    internal fun captureOpeningPress() {
+        if (isAcquired || openingHighlight != null) return
+        val highlight = retainSourcePress() ?: return
+        // An activation with no morphing popup must still release its press feedback.
+        openingPressExpiry = highlight.animationScope.launch {
+            withFrameNanos { }
+            withFrameNanos { }
+            openingPressExpiry = null
+            releaseOpeningPress()
+        }
+    }
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    fun retainOpeningPress() {
+        openingPressExpiry?.cancel()
+        openingPressExpiry = null
+        retainSourcePress()
+    }
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    fun releaseOpeningPress() {
+        openingPressExpiry?.cancel()
+        openingPressExpiry = null
+        openingHighlight?.releaseMenuPress()
+        openingHighlight = null
+    }
+
     internal fun bindStandaloneForeground(
         layer: GraphicsLayer,
         size: Size,
         density: Float,
+        backdrop: Backdrop,
         material: NavigationGlassMaterial?,
         frostRadius: Dp?,
         materialPaint: DrawScope.(Float) -> Unit,
@@ -191,6 +258,7 @@ class GlasmioMenuAnchorState constructor() {
         sourceNativeMaterial: GlassMaterialSource? = null,
     ) {
         if (!isStandaloneAnchor || size.isEmpty()) return
+        standaloneBackdrop = backdrop
         standaloneMaterial = material
         standaloneFrostRadius = frostRadius
         standaloneMaterialPaint = materialPaint
@@ -205,6 +273,7 @@ class GlasmioMenuAnchorState constructor() {
         }
         if (isAcquired && acquiredGroup == null) {
             portal = standalonePortal
+            sourceBackdrop = backdrop
             sourceHasGlassBackground = true
             sourceMaterial = material
             sourceFrostRadius = frostRadius
@@ -225,6 +294,7 @@ class GlasmioMenuAnchorState constructor() {
         if (isAcquired && acquiredGroup == null) {
             portal = standalonePortal ?: standaloneContentPortal
             sourceHasGlassBackground = standalonePortal != null
+            sourceBackdrop = standaloneBackdrop.takeIf { sourceHasGlassBackground }
             sourceMaterial = standaloneMaterial.takeIf { sourceHasGlassBackground }
             sourceFrostRadius = standaloneFrostRadius.takeIf { sourceHasGlassBackground }
             sourceMaterialPaint = standaloneMaterialPaint.takeIf { sourceHasGlassBackground }
@@ -238,6 +308,7 @@ class GlasmioMenuAnchorState constructor() {
     internal fun clearStandaloneForeground(layer: GraphicsLayer) {
         if (standalonePortal?.layer === layer) {
             standalonePortal = null
+            standaloneBackdrop = null
             standaloneMaterial = null
             standaloneFrostRadius = null
             standaloneMaterialPaint = null
@@ -253,14 +324,24 @@ class GlasmioMenuAnchorState constructor() {
         if (standaloneContentPortal?.layer === layer) standaloneContentPortal = null
     }
 
-    fun acquire(): Rect? {
-        if (isAcquired) return acquiredBounds
+    fun acquire(): Rect? = acquire(hideSource = true)
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    fun acquire(hideSource: Boolean): Rect? {
+        if (isAcquired) {
+            if (hideSource) hideLiveSource()
+            return acquiredBounds
+        }
         val source = triggerBounds?.takeUnless { it.isEmpty } ?: return null
         val sourceGroup = group
         val run = sourceGroup?.menuSourceRun(source).orEmpty()
-        acquiredBounds = if (run.isEmpty()) source else sourceGroup!!.visualBoundsInWindow(run)
+        acquiredBounds = if (run.isEmpty()) standaloneBounds?.invoke() ?: source else sourceGroup!!.visualBoundsInWindow(run)
         acquiredGroup = sourceGroup.takeIf { run.isNotEmpty() }
+        acquiredRun = run
         sourceHasGlassBackground = acquiredGroup != null || standalonePortal != null
+        sourceBackdrop = acquiredGroup?.let { group ->
+            if (run.first().material.sampleBackdrop) group.backdrop else emptyBackdrop()
+        } ?: standaloneBackdrop.takeIf { standalonePortal != null }
         sourceMaterial = standaloneMaterial.takeIf { acquiredGroup == null && standalonePortal != null }
         sourceFrostRadius = standaloneFrostRadius.takeIf { acquiredGroup == null && standalonePortal != null }
         sourceMaterialPaint = if (acquiredGroup != null) {
@@ -293,14 +374,32 @@ class GlasmioMenuAnchorState constructor() {
         portal = acquiredGroup?.foregroundPortal(run) ?:
             (standalonePortal ?: standaloneContentPortal).takeIf { sourceGroup == null }
         isAcquired = true
-        acquiredGroup?.hideMenuSource(this, run)
+        if (hideSource) hideLiveSource()
         return acquiredBounds
     }
 
-    fun release() {
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    fun hideLiveSource() {
+        if (!isAcquired || isLiveSourceHidden) return
+        acquiredGroup?.hideMenuSource(this, acquiredRun)
+        isLiveSourceHidden = true
+    }
+
+    /** Restore the live draw while the closing window still holds its last preview. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    fun restoreLiveSource() {
+        if (!isLiveSourceHidden) return
         acquiredGroup?.restoreMenuSource(this)
+        isLiveSourceHidden = false
+    }
+
+    fun release() {
+        restoreLiveSource()
+        releaseOpeningPress()
         acquiredGroup = null
+        acquiredRun = emptyList()
         portal = null
+        sourceBackdrop = null
         sourceHasGlassBackground = false
         sourceMaterial = null
         sourceFrostRadius = null
@@ -345,7 +444,7 @@ fun Modifier.glasmioMenuAnchor(
         .modifierLocalProvider(ModifierLocalMenuAnchor) { state }
         .graphicsLayer {
             // The live anchor is hidden only after its foreground has a portal owner.
-            alpha = if (state.isAcquired && !state.isGroupedSource && state.portal != null) 0f else 1f
+            alpha = if (state.isLiveSourceHidden && !state.isGroupedSource && state.portal != null) 0f else 1f
         }
         .drawWithContent {
             if (!state.isStandaloneAnchor || state.hasStandaloneForeground) {
@@ -360,9 +459,42 @@ fun Modifier.glasmioMenuAnchor(
         }
 }
 
+/** Map a standalone surface's press transform through its actual untransformed placement. */
+@Composable
+internal fun rememberMenuAnchorGeometry(
+    anchor: GlasmioMenuAnchorState?,
+    highlight: InteractiveHighlight,
+    pressTransform: GraphicsLayerScope.() -> Unit,
+): Modifier {
+    if (anchor?.isStandaloneAnchor != true) return Modifier
+    val density = LocalDensity.current
+    val transform by rememberUpdatedState(pressTransform)
+    val scope = remember { GraphicsLayerBlockScope() }
+    var coordinates by remember(anchor) { mutableStateOf<LayoutCoordinates?>(null, neverEqualPolicy()) }
+    DisposableEffect(anchor, highlight, density) {
+        anchor.bindStandaloneGeometry(highlight) {
+            coordinates?.takeIf { it.isAttached }?.let { placed ->
+                val size = Size(placed.size.width.toFloat(), placed.size.height.toFloat())
+                scope.reset(density, size)
+                scope.transform()
+                val x = size.width * scope.transformOrigin.pivotFractionX * (1f - scope.scaleX) + scope.translationX
+                val y = size.height * scope.transformOrigin.pivotFractionY * (1f - scope.scaleY) + scope.translationY
+                Rect(
+                    placed.localToWindow(Offset(x, y)),
+                    placed.localToWindow(Offset(x + size.width * scope.scaleX, y + size.height * scope.scaleY)),
+                ).takeUnless { it.isEmpty }
+            }
+        }
+        onDispose { anchor.clearStandaloneGeometry(highlight) }
+    }
+    return Modifier.onPlaced { coordinates = it }
+}
+
 /** Retain only a standalone surface's foreground; its material remains owned by the morph. */
 @Composable
 internal fun rememberMenuAnchorForeground(
+    anchor: GlasmioMenuAnchorState?,
+    backdrop: Backdrop,
     material: NavigationGlassMaterial?,
     frostRadius: Dp?,
     materialPaint: DrawScope.(Float) -> Unit,
@@ -371,24 +503,19 @@ internal fun rememberMenuAnchorForeground(
     materialEffect: ((Float) -> RenderEffect)? = null,
     sourceNativeMaterial: GlassMaterialSource? = null,
 ): Modifier {
-    var anchor by remember { mutableStateOf<GlasmioMenuAnchorState?>(null) }
     val foreground = if (anchor?.isStandaloneAnchor == true) rememberGraphicsLayer() else null
     DisposableEffect(anchor, foreground) {
         val state = anchor
         onDispose { if (foreground != null) state?.clearStandaloneForeground(foreground) }
     }
-    return Modifier
-        .modifierLocalConsumer { anchor = ModifierLocalMenuAnchor.current }
-        // A nested surface must not replace its enclosing button's retained foreground.
-        .modifierLocalProvider(ModifierLocalMenuAnchor) { null }
-        .then(if (foreground != null) Modifier.drawWithContent {
-            foreground.record { this@drawWithContent.drawContent() }
-            anchor?.bindStandaloneForeground(
-                foreground, size, density, material, frostRadius, materialPaint, usesShadowLift, usesInnerShadows, materialEffect,
-                sourceNativeMaterial,
-            )
-            drawLayer(foreground)
-        } else Modifier)
+    return if (foreground != null) Modifier.drawWithContent {
+        foreground.record { this@drawWithContent.drawContent() }
+        anchor?.bindStandaloneForeground(
+            foreground, size, density, backdrop, material, frostRadius, materialPaint, usesShadowLift, usesInnerShadows, materialEffect,
+            sourceNativeMaterial,
+        )
+        drawLayer(foreground)
+    } else Modifier
 }
 
 /** Shares only the material; each action retains its own hit target and interaction state. */
@@ -435,6 +562,7 @@ fun GlasmioToolbarActionHost(
     val colors = materialContext.environmentColors
     group.appearance = appearance
     val backdrop = LocalGlassBackdrop.current
+    group.backdrop = backdrop
     val runs = group.sharedRuns()
     val luminance = materialContext.probe
     val materialDark = materialContext.isDark
@@ -660,6 +788,7 @@ class ToolbarActionGroup(
     internal var materialEffect: ((ToolbarActionMaterial, Float) -> RenderEffect?)? = null
     internal var nativeMaterialSource: GlassMaterialSource? = null
     internal var appearance = GlassAppearance()
+    internal var backdrop: Backdrop? = null
     private val pressScope = GraphicsLayerBlockScope()
     private val pressRenderer = PressHighlightRenderer()
     private val refractionField = NavigationContactField()
@@ -743,6 +872,9 @@ class ToolbarActionGroup(
 
     fun menuSourceRun(source: Rect): List<ToolbarActionMember> =
         menuSourceMember(source)?.let(::connectedRun).orEmpty()
+
+    internal fun menuSourceHighlight(source: Rect): InteractiveHighlight? =
+        menuSourceRun(source).takeIf { it.isNotEmpty() }?.let(::activePressHighlight)
 
     fun menuPreviewBounds(source: Rect): Rect? =
         menuSourceMember(source)?.let { visualBoundsInWindow(listOf(it)) }
@@ -835,11 +967,13 @@ class ToolbarActionGroup(
         )
     }
 
+    private fun activePressHighlight(run: List<ToolbarActionMember>): InteractiveHighlight =
+        run.maxBy { if (it.highlight.hasRetainedMenuPress) Float.POSITIVE_INFINITY else it.highlight.glowProgress }.highlight
+
     fun pressTransform(member: ToolbarActionMember): ToolbarActionTransform {
         val base = member.bounds ?: return ToolbarActionTransform()
         val run = connectedRun(member)
-        val active = run.maxBy { it.highlight.glowProgress }
-        return transform(if (run.size > 1 || hasPresentationBounds) bounds(run) else base, active.highlight)
+        return transform(if (run.size > 1 || hasPresentationBounds) bounds(run) else base, activePressHighlight(run))
             .followedBy(resolvedPresentationTransform.value)
     }
 

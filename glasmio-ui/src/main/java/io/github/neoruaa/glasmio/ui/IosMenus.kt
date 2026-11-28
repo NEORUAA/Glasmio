@@ -8,7 +8,11 @@ import io.github.neoruaa.glasmio.glass.render.ProvideGlassMaterialContext
 import io.github.neoruaa.glasmio.glass.render.rememberGlassMaterialContext
 import io.github.neoruaa.glasmio.icons.*
 
+import android.os.Build
+import android.view.SurfaceControl
 import android.view.View
+import android.window.SurfaceSyncGroup
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -42,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -52,6 +57,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -108,6 +114,9 @@ import io.github.neoruaa.glasmio.glass.InteractiveHighlight
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 
 internal val LocalIosPopupMenuInteractive = staticCompositionLocalOf { true }
@@ -311,6 +320,7 @@ fun GlasmioContextMenu(
     morphSourceUsesShadowLift: Boolean = true,
     morphSourceUsesInnerShadows: Boolean = true,
     morphSourceNativeMaterial: GlassMaterialSource? = null,
+    morphSourceBackdrop: Backdrop? = null,
     content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
 ) {
     if (!visible) return
@@ -488,6 +498,7 @@ fun GlasmioContextMenu(
                         sourceUsesShadowLift = morphSourceUsesShadowLift,
                         sourceUsesInnerShadows = morphSourceUsesInnerShadows,
                         sourceNativeMaterial = morphSourceNativeMaterial,
+                        sourceBackdrop = morphSourceBackdrop?.takeUnless { it === backdrop },
                         materialContext = materialContext,
                         shaderPrograms = morphShaderPrograms,
                         menuScale = menuScale,
@@ -644,6 +655,7 @@ fun GlasmioMenu(
         }
     }
     val hostView = LocalView.current
+    var popupView by remember { mutableStateOf<View?>(null) }
     val density = LocalDensity.current
     val liquidMotion = remember { LiquidMenuMorphMotion() }
     val usesAnchorMorph = morphFromAnchor
@@ -652,6 +664,7 @@ fun GlasmioMenu(
     val morphSourceBounds = remember { arrayOfNulls<Rect>(1) }
     var usesMorph by remember { mutableStateOf(false) }
     var surfaceReady by remember { mutableStateOf(false) }
+    var previewComposed by remember { mutableStateOf(false) }
     var measuredMorphTarget by remember { mutableStateOf<Rect?>(null) }
     var positionAnchorBounds by remember { mutableStateOf<Rect?>(null) }
     val resolvedFullScreen = fullScreen || usesMorph
@@ -661,9 +674,11 @@ fun GlasmioMenu(
             transitionStarted = true
             if (!popupAlive) {
                 surfaceReady = false
+                previewComposed = false
                 measuredMorphTarget = null
                 positionAnchorBounds = externalAnchorBounds
                 if (usesAnchorMorph) {
+                    sourceAnchor.retainOpeningPress()
                     val source = snapshotFlow { sourceAnchor.bounds?.takeUnless { it.isEmpty } }.first { it != null }!!
                     val screen = IntArray(2)
                     val window = IntArray(2)
@@ -677,15 +692,31 @@ fun GlasmioMenu(
             popupAlive = true
             if (morphSourceBounds[0] != null) {
                 snapshotFlow { surfaceReady }.first { it }
+                // The previous close may have restored the button while its last frame
+                // was being submitted. Reacquire it before showing the popup again.
+                if (sourceAnchor.isAcquired && !sourceAnchor.isLiveSourceHidden) {
+                    popupView?.alpha = 0f
+                    sourceAnchor.release()
+                }
                 if (!sourceAnchor.isAcquired || !liquidMotion.initialized) {
-                    morphSourceBounds[0] = sourceAnchor.acquire()?.translate(windowScreenOffset) ?: morphSourceBounds[0]
-                    liquidMotion.initialize(
-                        morphSourceBounds[0]!!,
-                        requireNotNull(measuredMorphTarget),
-                        with(density) { 34.dp.toPx() },
-                        density.density,
-                        through = sourceAnchor.previewBounds?.translate(windowScreenOffset) ?: morphSourceBounds[0]!!,
-                    )
+                    try {
+                        morphSourceBounds[0] = sourceAnchor.acquire(hideSource = false)?.translate(windowScreenOffset)
+                            ?: morphSourceBounds[0]
+                        liquidMotion.initialize(
+                            morphSourceBounds[0]!!,
+                            requireNotNull(measuredMorphTarget),
+                            with(density) { 34.dp.toPx() },
+                            density.density,
+                            through = sourceAnchor.previewBounds?.translate(windowScreenOffset) ?: morphSourceBounds[0]!!,
+                        )
+                        if (sourceAnchor.isAcquired) {
+                            snapshotFlow { previewComposed }.first { it }
+                            val view = snapshotFlow { popupView }.first { it != null }!!
+                            showMenuAnchorPreview(hostView, view, sourceAnchor)
+                        }
+                    } finally {
+                        sourceAnchor.releaseOpeningPress()
+                    }
                 }
                 // Reopening during collapse retains the live contour and every velocity.
                 // Its content may have changed while the source lease remained acquired.
@@ -708,7 +739,8 @@ fun GlasmioMenu(
                 }
             }
         } else {
-            if (popupAlive) coroutineScope {
+            sourceAnchor.releaseOpeningPress()
+            if (popupAlive && (morphSourceBounds[0] == null || sourceAnchor.isLiveSourceHidden)) coroutineScope {
                 if (morphSourceBounds[0] != null && liquidMotion.initialized) launch {
                     sourceAnchor.liveBounds?.let {
                         liquidMotion.updateSource(
@@ -725,11 +757,18 @@ fun GlasmioMenu(
                     launch { menuAlpha.animateTo(0f, tween(300)) }
                 }
             }
+            val closingView = popupView
+            if (closingView != null && sourceAnchor.isLiveSourceHidden &&
+                (sourceAnchor.isGroupedSource || sourceAnchor.portal != null)
+            ) {
+                restoreMenuAnchor(hostView, closingView, sourceAnchor)
+            }
             sourceAnchor.release()
             popupAlive = false
             morphSourceBounds[0] = null
             usesMorph = false
             surfaceReady = false
+            previewComposed = false
             if (transitionStarted) {
                 transitionStarted = false
                 onClosed?.invoke()
@@ -784,7 +823,7 @@ fun GlasmioMenu(
                 .drawWithContent {
                     // A local anchor's outer layer already hides its live pixels. Let
                     // the inner content update its portal when the selection changes.
-                    val alpha = if (!ownsLocalAnchor && sourceAnchor.isAcquired && !sourceAnchor.isGroupedSource && sourceAnchor.portal != null) {
+                    val alpha = if (!ownsLocalAnchor && sourceAnchor.isLiveSourceHidden && !sourceAnchor.isGroupedSource && sourceAnchor.portal != null) {
                         0f
                     } else if (keepAnchorVisible || usesMorph) {
                         1f
@@ -924,6 +963,12 @@ fun GlasmioMenu(
                 onDismissRequest = dismissPopup,
                 properties = popupProperties,
             ) {
+                val view = LocalView.current
+                DisposableEffect(view) {
+                    if (usesMorph) view.alpha = 0f
+                    popupView = view
+                    onDispose { if (popupView === view) popupView = null }
+                }
                 // The overshoot margin is invisible window area; treat taps there like
                 // outside taps (dismiss) instead of letting them vanish into the window.
                 Box(
@@ -991,6 +1036,7 @@ fun GlasmioMenu(
                                     morphSourceUsesShadowLift = sourceAnchor.sourceUsesShadowLift,
                                     morphSourceUsesInnerShadows = sourceAnchor.sourceUsesInnerShadows,
                                     morphSourceNativeMaterial = sourceAnchor.sourceNativeMaterial,
+                                    morphSourceBackdrop = sourceAnchor.sourceBackdrop,
                                     morphShaderPrograms = sourceAnchor.shaderPrograms,
                                     onMorphReady = { target ->
                                         if (usesMorph) measuredMorphTarget = target
@@ -999,12 +1045,83 @@ fun GlasmioMenu(
                                 ) { childBackdrop ->
                                     content(childBackdrop) { dismissPopup() }
                                 }
+                                if (usesMorph && sourceAnchor.isAcquired && liquidMotion.initialized) {
+                                    // The measurement host is gone and the initial preview is installed.
+                                    SideEffect { previewComposed = true }
+                                }
                             }
                             overlayContent { menuAlpha.value.coerceIn(0f, 1f) }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+private suspend fun showMenuAnchorPreview(sourceView: View, popupView: View, anchor: GlasmioMenuAnchorState) {
+    withTimeoutOrNull(250L) {
+        if (Build.VERSION.SDK_INT >= 34 && syncMenuAnchorWindows(sourceView, popupView) {
+                Snapshot.withMutableSnapshot { anchor.hideLiveSource() }
+                popupView.alpha = 1f
+            }
+        ) return@withTimeoutOrNull
+        awaitMenuWindowFrame(popupView) { popupView.alpha = 1f }
+    }
+    Snapshot.withMutableSnapshot { anchor.hideLiveSource() }
+}
+
+private suspend fun restoreMenuAnchor(sourceView: View, popupView: View, anchor: GlasmioMenuAnchorState) {
+    withTimeoutOrNull(250L) {
+        if (Build.VERSION.SDK_INT >= 34 && syncMenuAnchorWindows(sourceView, popupView) {
+                Snapshot.withMutableSnapshot { anchor.restoreLiveSource() }
+                popupView.alpha = 0f
+            }
+        ) return@withTimeoutOrNull
+        awaitMenuWindowFrame(sourceView) { Snapshot.withMutableSnapshot { anchor.restoreLiveSource() } }
+    }
+    popupView.alpha = 0f
+}
+
+private suspend fun awaitMenuWindowFrame(view: View, update: () -> Unit) {
+    val tree = view.viewTreeObserver
+    val handler = view.handler
+    if (handler == null || !view.isShown || !view.isHardwareAccelerated || !tree.isAlive) {
+        update()
+        return
+    }
+    suspendCancellableCoroutine { continuation ->
+        val committed = Runnable { continuation.resume(Unit) }
+        tree.registerFrameCommitCallback(committed)
+        continuation.invokeOnCancellation {
+            handler.post { if (tree.isAlive) tree.unregisterFrameCommitCallback(committed) }
+        }
+        update()
+        view.invalidate()
+    }
+}
+
+@RequiresApi(34)
+private suspend fun syncMenuAnchorWindows(sourceView: View, popupView: View, handoff: () -> Unit): Boolean {
+    if (!sourceView.isShown || !popupView.isShown || sourceView.rootView === popupView.rootView) return false
+    val sourceSurface = sourceView.rootSurfaceControl ?: return false
+    val popupSurface = popupView.rootSurfaceControl ?: return false
+    return suspendCancellableCoroutine { continuation ->
+        val sync = SurfaceSyncGroup("GlasmioMenuAnchor")
+        try {
+            if (sync.add(sourceSurface, null) && sync.add(popupSurface, null)) {
+                SurfaceControl.Transaction().use { transaction ->
+                    transaction.addTransactionCommittedListener(sourceView.context.mainExecutor) {
+                        continuation.resume(true)
+                    }
+                    sync.addTransaction(transaction)
+                }
+                handoff()
+                popupView.invalidate()
+            } else continuation.resume(false)
+            sourceView.invalidate()
+        } finally {
+            sync.markSyncReady()
         }
     }
 }

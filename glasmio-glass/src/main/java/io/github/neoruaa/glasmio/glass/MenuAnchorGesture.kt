@@ -108,6 +108,7 @@ fun Modifier.glasmioMenuGesture(
                     } ?: false
                     if (cancelled) return@awaitEachGesture
 
+                    state.captureOpeningPress()
                     currentOpen()
                     while (true) {
                         val changes = awaitPointerEvent(PointerEventPass.Initial).changes

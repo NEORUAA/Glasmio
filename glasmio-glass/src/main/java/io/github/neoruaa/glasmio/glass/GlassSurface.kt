@@ -34,9 +34,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -74,6 +76,8 @@ import androidx.compose.ui.node.invalidateDraw
 import androidx.compose.ui.node.requireGraphicsContext
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.modifier.modifierLocalConsumer
+import androidx.compose.ui.modifier.modifierLocalProvider
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -1118,7 +1122,7 @@ fun GlassSurface(
         }
     }
     val shapeProvider = remember(shape) { { shape } }
-    val dragScaleLayerBlock: GraphicsLayerScope.() -> Unit = remember(interactiveHighlight, toolbarMember, onClick != null, nativeNavigationFlex) {
+    val pressTransform: GraphicsLayerScope.() -> Unit = remember(interactiveHighlight, toolbarMember, onClick != null, nativeNavigationFlex) {
         {
             if (toolbarMember != null) toolbarMember.applyPressTransform(this) else applyGlassDragScale(
                 pressProgress = interactiveHighlight.pressProgress,
@@ -1126,6 +1130,11 @@ fun GlassSurface(
                 nativeButtonLift = onClick != null,
                 allowPressOvershoot = nativeNavigationFlex,
             )
+        }
+    }
+    val dragScaleLayerBlock: GraphicsLayerScope.() -> Unit = remember(pressTransform, interactiveHighlight) {
+        {
+            pressTransform()
             currentVisualBoundsChanged.value?.invoke(
                 Rect(
                     size.width * (1f - scaleX) / 2f + translationX,
@@ -1283,8 +1292,10 @@ fun GlassSurface(
             }
         }
     }
+    var menuAnchor by remember { mutableStateOf<GlasmioMenuAnchorState?>(null) }
+    val anchorGeometry = rememberMenuAnchorGeometry(menuAnchor, interactiveHighlight, pressTransform)
     val menuAnchorForeground = rememberMenuAnchorForeground(
-        material, frostRadius, sourceMaterialPaint,
+        menuAnchor, surfaceBackdrop, material, frostRadius, sourceMaterialPaint,
         materialEffect = sourceMaterialEffect,
         usesShadowLift = navigationMaterial && !preserveBackdropColors,
         usesInnerShadows = innerShadows != null && !appearance.reduceTransparency,
@@ -1301,6 +1312,7 @@ fun GlassSurface(
         )
     }
     val drawSurface: @Composable (Modifier) -> Unit = { surfaceModifier ->
+        val anchor = menuAnchor
         Box(
             modifier = surfaceModifier
                 .then(
@@ -1310,19 +1322,26 @@ fun GlassSurface(
                 )
                 .then(
                     if (onClick != null) {
+                        val clickAction = if (anchor == null) onClick else ({
+                            anchor.captureOpeningPress()
+                            onClick()
+                        })
                         val click = if (onLongClick != null) Modifier.combinedClickable(
                             enabled = enabled,
                             interactionSource = null,
                             indication = null,
                             role = Role.Button,
-                            onClick = onClick,
-                            onLongClick = onLongClick,
+                            onClick = clickAction,
+                            onLongClick = if (anchor == null) onLongClick else ({
+                                anchor.captureOpeningPress()
+                                onLongClick()
+                            }),
                         ) else Modifier.clickable(
                             enabled = enabled,
                             interactionSource = null,
                             indication = null,
                             role = Role.Button,
-                            onClick = onClick,
+                            onClick = clickAction,
                         )
                         click.then(if (enabled) interactiveHighlight.gestureModifier else Modifier)
                     } else {
@@ -1332,6 +1351,9 @@ fun GlassSurface(
                 .then(if (toolbarMember != null && !sharesToolbarSurface) {
                     Modifier.drawWithContent { toolbarMember.drawForeground(this) }
                 } else Modifier)
+                .modifierLocalConsumer { menuAnchor = ModifierLocalMenuAnchor.current }
+                // Nested surfaces cannot replace their enclosing button's foreground.
+                .modifierLocalProvider(ModifierLocalMenuAnchor) { null }
                 .then(menuAnchorForeground),
             contentAlignment = contentAlignment,
             content = {
@@ -1374,7 +1396,7 @@ fun GlassSurface(
         navigationFlexSize.value = Size(it.width.toFloat(), it.height.toFloat())
     } else modifier
     if (toolbarMember == null && contactMember == null) {
-        drawSurface(measuredModifier.then(glassModifier))
+        drawSurface(measuredModifier.then(anchorGeometry).then(glassModifier))
     } else {
         // Register an untransformed layout wrapper. The inner surface owns press scaling,
         // so a press cannot change adjacency or apply the same deformation twice.
@@ -1386,7 +1408,7 @@ fun GlassSurface(
             },
             propagateMinConstraints = true,
         ) {
-            drawSurface(glassModifier)
+            drawSurface(anchorGeometry.then(glassModifier))
         }
     }
 }
