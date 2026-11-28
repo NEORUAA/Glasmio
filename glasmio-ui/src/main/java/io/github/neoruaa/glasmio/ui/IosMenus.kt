@@ -709,6 +709,7 @@ fun GlasmioMenu(
                             density.density,
                             through = sourceAnchor.previewBounds?.translate(windowScreenOffset) ?: morphSourceBounds[0]!!,
                         )
+                        liquidMotion.setOpeningDirection(opensAbove && !forceBelowAnchor)
                         if (sourceAnchor.isAcquired) {
                             snapshotFlow { previewComposed }.first { it }
                             val view = snapshotFlow { popupView }.first { it != null }!!
@@ -742,6 +743,7 @@ fun GlasmioMenu(
             sourceAnchor.releaseOpeningPress()
             if (popupAlive && (morphSourceBounds[0] == null || sourceAnchor.isLiveSourceHidden)) coroutineScope {
                 if (morphSourceBounds[0] != null && liquidMotion.initialized) launch {
+                    liquidMotion.setOpeningDirection(opensAbove && !forceBelowAnchor)
                     sourceAnchor.liveBounds?.let {
                         liquidMotion.updateSource(
                             it.translate(windowScreenOffset),

@@ -245,6 +245,115 @@ class LiquidMenuMorphMotionTest {
     }
 
     @Test
+    fun closingContourFollowsOneTrajectoryThroughTheRestingAnchor() {
+        val toolbarSource = Rect(source.right - source.height, source.top, source.right, source.bottom)
+        val above = destination.translate(Offset(0f, toolbarSource.bottom - destination.bottom))
+        val scenes = listOf(
+            Triple(source, destination, source),
+            Triple(toolbarSource, above, toolbarSource),
+            Triple(source, above, toolbarSource),
+        )
+        for ((anchor, menu, through) in scenes) {
+            val motion = LiquidMenuMorphMotion().apply { initialize(anchor, menu, 102f, 3f, through) }
+            motion.retarget(true)
+            motion.advanceBy(3f)
+            motion.retarget(false)
+
+            val openingDirection = if (menu.center.y < anchor.center.y) -1f else 1f
+            motion.advanceBy(0.16f)
+            val positions = List(5) { index ->
+                if (index != 0) assertFalse(motion.advanceBy(0.016f))
+                val frame = motion.frame
+                val center = requireNotNull(frame.sourceLobe).center
+                (center.y - anchor.center.y) * openingDirection
+            }
+            assertTrue("Successive frames cross the resting center", positions.first() > 0f && positions.last() < 0f)
+            assertTrue("The capsule keeps moving through the crossing",
+                positions.zipWithNext().all { (previous, next) -> previous - next > 0.35f })
+
+            val originalAbsorb = LiquidMenuSpringSpec(0.8f, 0.7f * 0.7f)
+            val outlineRestTime = (PI.toFloat() - atan2(originalAbsorb.frequency, originalAbsorb.alpha)) / originalAbsorb.frequency
+            val apexTime = 0.250f
+            val frameTime = 1f / 60f
+            motion.advanceBy(apexTime - frameTime - 0.224f)
+            val beforeApex = requireNotNull(motion.frame.sourceLobe)
+            assertTrue("The outline is still returning to the button before the apex",
+                beforeApex.width < anchor.width && beforeApex.height < anchor.height)
+            assertFalse("The anchor is still hidden at the rebound apex", motion.advanceBy(frameTime))
+            val rebound = motion.frame
+            val shell = requireNotNull(rebound.sourceLobe)
+            assertTrue("The recoil travels opposite the opening edge",
+                (anchor.center.y - shell.center.y) * openingDirection > 7.5f)
+            assertTrue("The original outline is still returning at the earlier apex",
+                shell.width < anchor.width && shell.height < anchor.height)
+
+            assertFalse(motion.advanceBy(frameTime))
+            val afterApex = requireNotNull(motion.frame.sourceLobe)
+            for (neighbor in listOf(beforeApex, afterApex)) {
+                assertTrue("The vertical turning point lands at 250 ms",
+                    (neighbor.center.y - shell.center.y) * openingDirection > 0f)
+            }
+            assertTrue("The menu itself stays on its original track",
+                (motion.frame.bounds.center.y - rebound.bounds.center.y) * openingDirection < 0f)
+
+            motion.advanceBy(outlineRestTime - apexTime - frameTime)
+            val restored = requireNotNull(motion.frame.sourceLobe)
+            assertEquals(anchor.width, restored.width, 0.01f)
+            assertEquals(anchor.height, restored.height, 0.01f)
+            assertEquals(anchor.size.minDimension / 2f, motion.frame.sourceRadiusX, 0.01f)
+            motion.advanceBy(frameTime)
+            val stretched = requireNotNull(motion.frame.sourceLobe)
+            assertTrue("The existing outline stretch is preserved",
+                stretched.width > anchor.width && stretched.height > anchor.height)
+
+            motion.retarget(true)
+            assertRectEquals(stretched, requireNotNull(motion.frame.sourceLobe))
+            assertTrue(motion.advanceBy(3f))
+            assertRectEquals(menu, motion.frame.bounds)
+
+            motion.retarget(false)
+            assertFalse(motion.advanceBy(0.46f))
+            var previous = requireNotNull(motion.frame.sourceLobe)
+            var finished = false
+            for (step in 1..24) {
+                finished = motion.advanceBy(frameTime)
+                val current = requireNotNull(motion.frame.sourceLobe)
+                if (finished) {
+                    assertRectEquals(anchor, previous, 0.5f)
+                    assertRectEquals(anchor, current)
+                    break
+                }
+                val error = (current.center - anchor.center).getDistance()
+                assertTrue("The rebound keeps approaching the anchor until the subpixel landing",
+                    error < 0.5f || error < (previous.center - anchor.center).getDistance())
+                previous = current
+            }
+            assertTrue("The rebound and closing animation settle in the same tail", finished)
+            val finalFrame = motion.frame
+            assertTrue(motion.advanceBy(frameTime))
+            assertEquals(finalFrame, motion.frame)
+        }
+    }
+
+    @Test
+    fun viewportClampingDoesNotReverseTheReboundFromTheResolvedOpeningEdge() {
+        for (opensAbove in listOf(false, true)) {
+            val side = if (opensAbove) -1f else 1f
+            val menu = destination.translate(Offset(0f, source.center.y - destination.center.y - 40f * side))
+            val motion = motion(source, menu)
+            motion.setOpeningDirection(opensAbove)
+            motion.retarget(true)
+            motion.advanceBy(3f)
+            motion.retarget(false)
+            motion.advanceBy(0.25f)
+            val center = requireNotNull(motion.frame.sourceLobe).center
+            assertTrue("The button rebounds opposite the chosen opening edge", (source.center.y - center.y) * side > 7.5f)
+            assertTrue(motion.advanceBy(1f))
+            assertRectEquals(source, requireNotNull(motion.frame.sourceLobe))
+        }
+    }
+
+    @Test
     fun nativeThroughPreviewRemainsIndependentOfTheFusedSource() {
         val through = Rect(source.right - source.height, source.top, source.right, source.bottom)
         val motion = LiquidMenuMorphMotion().apply {

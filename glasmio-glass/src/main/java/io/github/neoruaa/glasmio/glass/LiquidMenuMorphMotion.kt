@@ -65,6 +65,7 @@ class LiquidMenuMorphMotion {
     private var destinationRadius = 0f
     private var portalZoomReferenceHeight = 0f
     private var density = 1f
+    private var opensAbove = false
     private var expanded = false
     private var elapsed = 0f
     private var correctionApplied = false
@@ -79,6 +80,7 @@ class LiquidMenuMorphMotion {
 
     private val x = LiquidMenuSpring()
     private val y = LiquidMenuSpring()
+    private val recoilY = LiquidMenuSpring()
     private val width = LiquidMenuSpring()
     private val height = LiquidMenuSpring()
     private val radiusX = LiquidMenuSpring()
@@ -88,6 +90,7 @@ class LiquidMenuMorphMotion {
     private val sourceWidth = LiquidMenuSpring()
     private val sourceHeight = LiquidMenuSpring()
     private val sourceScale = LiquidMenuSpring(0.0005f, 0.01f)
+    private val sourcePositionMerge = LiquidMenuSpring(0.001f, 0.01f)
     private val incomingScale = LiquidMenuSpring(0.0005f, 0.01f)
     private val kick = LiquidMenuSpring()
     private val sourceKick = LiquidMenuSpring()
@@ -97,8 +100,8 @@ class LiquidMenuMorphMotion {
     private val portalBlur = LiquidMenuSpring(0.001f, 0.01f)
     private val smoothing = LiquidMenuSpring(0.05f, 1f)
     private val channels = listOf(
-        x, y, width, height, radiusX, radiusY,
-        sourceX, sourceY, sourceWidth, sourceHeight, sourceScale, incomingScale,
+        x, y, recoilY, width, height, radiusX, radiusY,
+        sourceX, sourceY, sourceWidth, sourceHeight, sourceScale, sourcePositionMerge, incomingScale,
         kick, sourceKick, content, sourceContent, lens, portalBlur, smoothing,
     )
 
@@ -112,10 +115,12 @@ class LiquidMenuMorphMotion {
         destinationRadius = targetRadius.coerceAtMost(target.size.minDimension / 2f)
         portalZoomReferenceHeight = target.height
         this.density = density
+        opensAbove = target.center.y < source.center.y
         val diameter = initialIncomingDiameter()
         val incomingCenter = initialIncomingCenter()
         x.reset(incomingCenter.x)
         y.reset(incomingCenter.y)
+        recoilY.reset(incomingCenter.y)
         // UIKit starts from a square base item and a separate transform. Multiplying
         // the animated height by that scale keeps the growing droplet rounder than a
         // direct interpolation between the small and final physical rectangles.
@@ -129,6 +134,7 @@ class LiquidMenuMorphMotion {
         sourceWidth.reset(source.width)
         sourceHeight.reset(source.height)
         sourceScale.reset(1f)
+        sourcePositionMerge.reset(0f)
         kick.reset(0f)
         sourceKick.reset(0f)
         content.reset(0f)
@@ -146,7 +152,7 @@ class LiquidMenuMorphMotion {
         portalBlurReleased = false
         initialized = true
         isExpandedSettled = false
-        publish()
+        frame = calculateFrame()
     }
 
     /** Follow the original button's decaying press transform without restarting its springs. */
@@ -155,6 +161,11 @@ class LiquidMenuMorphMotion {
         this.source = source
         this.through = through
         if (!expanded) configureCollapse()
+    }
+
+    @androidx.annotation.RestrictTo(androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP)
+    fun setOpeningDirection(opensAbove: Boolean) {
+        this.opensAbove = opensAbove
     }
 
     suspend fun animateTo(expanded: Boolean) {
@@ -172,7 +183,7 @@ class LiquidMenuMorphMotion {
         destinationRadius = radius
         isExpandedSettled = false
         if (expanded) configureExpansionGeometry() else configureCollapse()
-        publish()
+        frame = calculateFrame()
         return true
     }
 
@@ -205,6 +216,11 @@ class LiquidMenuMorphMotion {
     /** Retarget every live channel. Values and velocities are never reset on interruption. */
     fun retarget(expanded: Boolean) {
         if (!initialized) return
+        if (this.expanded != expanded) {
+            val pace = if (expanded) RecoilPlaybackRate else 1f / RecoilPlaybackRate
+            recoilY.scaleVelocity(pace)
+            sourcePositionMerge.scaleVelocity(pace)
+        }
         this.expanded = expanded
         isExpandedSettled = false
         portalZoomReferenceHeight = destination.height
@@ -219,13 +235,17 @@ class LiquidMenuMorphMotion {
         lens.target(1f, LensOnSpring)
         if (expanded) {
             configureExpansionGeometry()
+            sourcePositionMerge.target(0f, EjectSpring)
             incomingScale.target(1f, EjectSpring)
             sourceKick.target(0f, KickSpring)
             sourceContent.target(0f, EjectSpring)
             content.target(1f, EjectSpring)
             smoothing.target(20f * density, CollapseSpring)
-        } else configureCollapse()
-        publish()
+        } else {
+            sourcePositionMerge.target(1f, GlassExpansionSpring)
+            configureCollapse()
+        }
+        frame = calculateFrame()
     }
 
     private fun configureExpansionGeometry() {
@@ -238,6 +258,7 @@ class LiquidMenuMorphMotion {
         sourceScale.target(0.25f, EjectSpring)
         x.target(destination.center.x, EjectSpring)
         y.target(destination.center.y, EjectSpring)
+        recoilY.target(destination.center.y, EjectSpring)
         width.target(destination.width, EjectSpring)
         height.target(destination.height, EjectSpring)
         // A late resize must retain the correction action that has already occurred.
@@ -267,20 +288,26 @@ class LiquidMenuMorphMotion {
                 applyTimelineActions()
                 continue
             }
-            channels.forEach { it.advance(step) }
-            elapsed += step
+            val nextElapsed = elapsed + step
+            val recoilStep = if (expanded) step else step * RecoilPlaybackRate
+            channels.forEach { spring ->
+                val seconds = if (spring === recoilY || spring === sourcePositionMerge) recoilStep else step
+                spring.advance(seconds, snapWhenSettled = expanded)
+            }
+            elapsed = nextElapsed
             remaining -= step
         }
         applyTimelineActions()
-        publish()
-        if (!expanded && visuallyCollapsed()) {
-            // Hidden channels may still move entirely inside the restored capsule. Do not
-            // hold a blank trigger on screen while those invisible tails settle.
+        val nextFrame = calculateFrame()
+        val timelineFinished = smoothingReleased && (expanded || sourceKickReleased)
+        val settled = timelineFinished && (channels.all { it.isSettled } || (!expanded && visuallyCollapsed(nextFrame)))
+        if (!expanded && settled) {
+            // Publish the exact resting pose once, with every closing channel completed.
             channels.forEach { it.finish() }
-            publish()
-            return true
+            frame = calculateFrame()
+        } else {
+            frame = nextFrame
         }
-        val settled = (!expanded || smoothingReleased) && channels.all { it.isSettled }
         isExpandedSettled = expanded && settled
         return settled
     }
@@ -326,8 +353,9 @@ class LiquidMenuMorphMotion {
         val diameter = initialIncomingDiameter()
         // V2 installs the complete source layer as the synthetic item's override position
         // tracker. Geometry tracking resolves that layer's bounds center instead of through.
-        x.target(source.center.x, AbsorbSpring)
-        y.target(source.center.y, AbsorbSpring)
+        x.target(source.center.x, CollapseSpring)
+        y.target(source.center.y, GlassExpansionSpring)
+        recoilY.target(source.center.y, GlassExpansionSpring)
         width.target(destination.width, AbsorbSpring)
         height.target(destination.width, AbsorbSpring)
         incomingScale.target(diameter / destination.width, AbsorbSpring)
@@ -335,9 +363,9 @@ class LiquidMenuMorphMotion {
         // Keep those radii separate from its scale, including during a reversal.
         radiusX.target(destination.width / 2f, AbsorbSpring)
         radiusY.target(destination.width / 2f, AbsorbSpring)
-        // The native Source action overrides every geometry channel with mainAbsorbSpring.
-        // Reusing the opening collapse spring makes the capsule outrun the returning ball.
-        sourceX.target(source.center.x, AbsorbSpring)
+        // Width and height still use the main absorb spring. Horizontal position
+        // settles without overshoot so the visible recoil reads along the opening axis.
+        sourceX.target(source.center.x, CollapseSpring)
         sourceY.target(source.center.y, AbsorbSpring)
         sourceWidth.target(source.width, AbsorbSpring)
         sourceHeight.target(source.height, AbsorbSpring)
@@ -350,9 +378,12 @@ class LiquidMenuMorphMotion {
             if (smoothingReleased) SmoothingReleaseSpring else AbsorbSmoothingSpring)
     }
 
-    private fun visuallyCollapsed(): Boolean {
+    private fun visuallyCollapsed(frame: LiquidMenuMorphFrame): Boolean {
+        if (!x.isSettled || !sourceScale.isSettled || !sourceWidth.isSettled || !sourceHeight.isSettled) return false
+        // After the first turn, a subpixel landing can end before a second oscillation.
+        if (!recoilY.isSettled && (sourcePositionMerge.velocity >= 0f || abs(recoilY.velocity) > 30f)) return false
         val shell = frame.sourceLobe ?: return false
-        val epsilon = density * 0.5f
+        val epsilon = 0.25f
         if (abs(shell.left - source.left) > epsilon || abs(shell.top - source.top) > epsilon ||
             abs(shell.right - source.right) > epsilon || abs(shell.bottom - source.bottom) > epsilon
         ) return false
@@ -408,7 +439,7 @@ class LiquidMenuMorphMotion {
         return points * density * heightFactor * (2f * anchorY - 1f)
     }
 
-    private fun publish() {
+    private fun calculateFrame(): LiquidMenuMorphFrame {
         val scaleIn = incomingScale.value.coerceAtLeast(0.001f)
         val size = Size((width.value * scaleIn).coerceAtLeast(1f), (height.value * scaleIn).coerceAtLeast(1f))
         val incoming = Rect(
@@ -421,10 +452,21 @@ class LiquidMenuMorphMotion {
             (sourceWidth.value * scale).coerceAtLeast(1f),
             (sourceHeight.value * scale).coerceAtLeast(1f),
         )
+        // Transfer position as the lobes merge on approach. The incoming spring then
+        // carries the visible contour through the crossing and recoil as one motion.
+        val merge = sourcePositionMerge.value.coerceIn(0f, 1f)
+        val capsuleCenter = Offset(sourceX.value, sourceY.value + sourceKick.value * scale)
+        val openingDirection = if (opensAbove) -1f else 1f
+        val traveledY = (destination.center.y - source.center.y) * openingDirection
+        val minimumTravel = 60f * density
+        // A viewport clamp can move the menu closer to or even past the anchor's center.
+        // Keep the late vertical recoil tied to the edge chosen by the popup provider.
+        val verticalCorrection = (minimumTravel - traveledY).coerceAtLeast(0f) * openingDirection *
+            (1f - sourcePositionMerge.value)
+        val returningCenter = Offset(incoming.center.x, recoilY.value + kick.value * scaleIn + verticalCorrection)
+        val sourceCenter = capsuleCenter + (returningCenter - capsuleCenter) * (merge * merge * merge)
         val sourceBounds = Rect(
-            // Each native MagicMorphAnimation owns its own scaled kick transformer.
-            Offset(sourceX.value - sourceSize.width / 2f,
-                sourceY.value + sourceKick.value * scale - sourceSize.height / 2f),
+            Offset(sourceCenter.x - sourceSize.width / 2f, sourceCenter.y - sourceSize.height / 2f),
             sourceSize,
         )
         val sourceRadius = sourceSize.minDimension / 2f
@@ -432,7 +474,7 @@ class LiquidMenuMorphMotion {
         val lensFactor = lens.value.coerceIn(0f, 1f) *
             (lensDimension / (250f * density)).coerceAtMost(1f)
         val lensHeight = 75f * density * lensFactor
-        frame = LiquidMenuMorphFrame(
+        return LiquidMenuMorphFrame(
             bounds = incoming,
             radiusX = (radiusX.value * scaleIn).coerceAtLeast(0f),
             radiusY = (radiusY.value * scaleIn).coerceAtLeast(0f),
@@ -483,8 +525,13 @@ class LiquidMenuMorphMotion {
         val AbsorbSpring = LiquidMenuSpringSpec(0.8f, 0.7f * GeometrySpeed)
         val AbsorbSmoothingSpring = LiquidMenuSpringSpec(1f, 0.1f * GeometrySpeed)
         val SmoothingReleaseSpring = LiquidMenuSpringSpec(1f, 0.6f * GeometrySpeed)
+        // Retiming the full recoil keeps its approach, peak, and return in phase.
+        val RecoilPlaybackRate = PI.toFloat() / (GlassExpansionSpring.frequency * 0.250f)
     }
 }
+
+@androidx.annotation.RestrictTo(androidx.annotation.RestrictTo.Scope.LIBRARY_GROUP)
+val GlassExpansionSpring = LiquidMenuSpringSpec(0.7f, 0.5f)
 
 data class LiquidMenuSpringSpec(val dampingRatio: Float, val response: Float) {
     val omega = (2.0 * PI / response).toFloat()
@@ -527,7 +574,13 @@ class LiquidMenuSpring(
         velocity = 0f
     }
 
-    fun advance(seconds: Float) {
+    internal fun scaleVelocity(pace: Float) {
+        velocity *= pace
+    }
+
+    fun advance(seconds: Float) = advance(seconds, snapWhenSettled = true)
+
+    internal fun advance(seconds: Float, snapWhenSettled: Boolean) {
         val omega = spec.omega
         val displacement = value - destination
         val alpha = spec.alpha
@@ -549,10 +602,7 @@ class LiquidMenuSpring(
                 )
             value = destination + nextDisplacement
         }
-        if (isSettled) {
-            value = destination
-            velocity = 0f
-        }
+        if (snapWhenSettled && isSettled) finish()
     }
 }
 
